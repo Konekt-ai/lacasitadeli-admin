@@ -1,0 +1,18 @@
+{
+  "name": "lacasita-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'Usa iniciar.sh o iniciar.bat'"
+  },
+  "workspaces": [
+    "apps/*"
+  ],
+  "dependencies": {
+    "@playwright/test": "^1.58.2",
+    "dotenv": "^17.3.1",
+    "pg": "^8.20.0",
+    "playwright": "^1.58.2",
+    "uuid": "^13.0.0"
+  }
+}

@@ -1,0 +1,75 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: [
+    './app/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  darkMode: "class",
+  theme: {
+    extend: {
+      "colors": {
+              "on-surface-variant": "#414844",
+              "on-primary-fixed": "#002114",
+              "on-secondary-fixed-variant": "#604101",
+              "secondary-fixed-dim": "#eebf76",
+              "on-error-container": "#93000a",
+              "surface-container": "#f0ede8",
+              "surface-container-lowest": "#ffffff",
+              "on-primary": "#ffffff",
+              "on-primary-fixed-variant": "#274e3d",
+              "primary-fixed-dim": "#a5d0b9",
+              "background": "#fcf9f4",
+              "surface-tint": "#3f6653",
+              "on-tertiary-fixed-variant": "#3c4a3f",
+              "on-error": "#ffffff",
+              "inverse-on-surface": "#f3f0eb",
+              "primary-container": "#1b4332",
+              "secondary-fixed": "#ffdeae",
+              "error": "#ba1a1a",
+              "on-primary-container": "#86af99",
+              "on-background": "#1c1c19",
+              "primary-fixed": "#c1ecd4",
+              "tertiary": "#1b291f",
+              "on-secondary-fixed": "#281900",
+              "outline-variant": "#c1c8c2",
+              "primary": "#012d1d",
+              "outline": "#717973",
+              "surface-variant": "#e5e2dd",
+              "on-tertiary-fixed": "#111f15",
+              "error-container": "#ffdad6",
+              "on-secondary-container": "#785516",
+              "surface-container-low": "#f6f3ee",
+              "secondary": "#7b5819",
+              "inverse-surface": "#31302d",
+              "secondary-container": "#fdcd83",
+              "surface-dim": "#dcdad5",
+              "tertiary-fixed": "#d6e7d7",
+              "surface-container-high": "#ebe8e3",
+              "surface": "#fcf9f4",
+              "on-tertiary": "#ffffff",
+              "tertiary-fixed-dim": "#bacbbc",
+              "on-secondary": "#ffffff",
+              "surface-container-highest": "#e5e2dd",
+              "on-tertiary-container": "#9aaa9c",
+              "surface-bright": "#fcf9f4",
+              "on-surface": "#1c1c19",
+              "tertiary-container": "#313f34",
+              "inverse-primary": "#a5d0b9"
+      },
+      "borderRadius": {
+              "DEFAULT": "0.25rem",
+              "lg": "0.5rem",
+              "xl": "0.75rem",
+              "full": "9999px"
+      },
+      "fontFamily": {
+              "headline": ["Newsreader"],
+              "body": ["Plus Jakarta Sans"],
+              "label": ["Inter"]
+      }
+    },
+  },
+  plugins: [
+    require('@tailwindcss/forms'),
+    require('@tailwindcss/container-queries'),
+  ],
+}

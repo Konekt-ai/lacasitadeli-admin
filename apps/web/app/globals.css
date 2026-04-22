@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+  }
+}
+
+.font-serif {
+  font-family: 'Newsreader', serif;
+}
+
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: normal;
+  word-wrap: normal;
+  white-space: nowrap;
+  direction: ltr;
+}
+
+/* Custom scrollbar for Editorial Artisanship */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c8c2;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #717973;
+}
+
+/* Glassmorphism utility */
+.glass {
+  background: rgba(252, 249, 244, 0.8);
+  backdrop-filter: blur(20px);
+}
+
+/* Editorial layout utilities */
+.editorial-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 2rem;
+}
+
+/* Tonal layering utilities */
+.tonal-card {
+  background: theme('colors.surface-container-lowest');
+  border: 1px solid rgba(113, 121, 115, 0.15);
+}
+
+.tonal-bg-low {
+  background: theme('colors.surface-container-low');
+}
+
+.tonal-bg-high {
+  background: theme('colors.surface-container-high');
+}
