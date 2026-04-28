@@ -1,62 +1,78 @@
 @echo off
-title La Casita - Servidor Unificado
+title La Casita Admin - Control del Sistema
 color 0A
 cd /d "%~dp0"
 
 echo.
-echo ============================================================
-echo    INICIANDO LA CASITA (MODO admin local)
-echo ============================================================
+echo ================================================================
+echo   LA CASITA ADMIN - CONTROL DEL SISTEMA
+echo ================================================================
 echo.
-echo Los servidores se iniciaran en segundo plano 
-echo 
+echo   [1] Iniciar servicios
+echo   [2] Detener servicios
+echo   [3] Reiniciar servicios
+echo   [4] Ver estado
+echo   [5] Ver logs en tiempo real
+echo   [6] Abrir panel en navegador
+echo   [0] Salir
 echo.
+set /p opcion="  Elige una opcion: "
 
-:: 1. Limpiar puertos anteriores (por si acaso)
-echo  Limpiando puertos antiguos...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3001') do taskkill /F /PID %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002') do taskkill /F /PID %%a >nul 2>&1
+if "%opcion%"=="1" goto iniciar
+if "%opcion%"=="2" goto detener
+if "%opcion%"=="3" goto reiniciar
+if "%opcion%"=="4" goto estado
+if "%opcion%"=="5" goto logs
+if "%opcion%"=="6" goto navegador
+if "%opcion%"=="0" exit /b 0
+goto menu
 
-:: 2. Crear un script VBS temporal para ejecutar la API en modo oculto
-echo  Iniciando API (Puerto 3002)...
-echo Set WshShell = CreateObject("WScript.Shell") > _launch_api.vbs
-echo WshShell.Run "cmd /c ""cd /d ""%~dp0apps\api"" && set PORT=3002 && node src/index.js > ""%~dp0api.log"" 2>&1""", 0, False >> _launch_api.vbs
-cscript //nologo _launch_api.vbs
-del _launch_api.vbs
+:iniciar
+echo.
+echo  Iniciando servicios...
+pm2 start ecosystem.config.js
+pm2 save
+echo.
+echo  Panel disponible en: http://localhost:3000
+echo.
+timeout /t 3 >nul
+start http://localhost:3000
+goto fin
 
-:: 3. Crear un script VBS temporal para ejecutar la Web en modo oculto
-echo  Iniciando Web (Puerto 3001)...
-echo Set WshShell = CreateObject("WScript.Shell") > _launch_web.vbs
-echo WshShell.Run "cmd /c ""cd /d ""%~dp0apps\web"" && npm run dev -- -p 3001 > ""%~dp0web.log"" 2>&1""", 0, False >> _launch_web.vbs
-cscript //nologo _launch_web.vbs
-del _launch_web.vbs
+:detener
+echo.
+echo  Deteniendo servicios...
+pm2 stop all
+echo  Servicios detenidos.
+echo.
+goto fin
 
-:: 4. Esperar y abrir navegador
+:reiniciar
 echo.
-echo  Esperando a que arranque el sistema...
-timeout /t 6 /nobreak >nul
-start http://localhost:3001
+echo  Reiniciando servicios...
+pm2 restart all
+echo.
+echo  Panel disponible en: http://localhost:3000
+echo.
+goto fin
 
-echo ============================================================
-echo    SISTEMA ACTIVO
-echo ============================================================
+:estado
 echo.
-echo El servidor esta corriendo en segundo plano.
+pm2 status
 echo.
-echo IMPORTANTE: Como los servidores estan ocultos, 
-echo para APAGAR el sistema debes presionar una tecla aqui abajo
-echo o simplemente cerrar esta ventana.
-echo.
-echo (Revisa api.log y web.log si hay errores).
-echo.
+goto fin
 
-:: 5. Mantener la ventana abierta hasta que el usuario quiera salir
+:logs
+echo.
+echo  Mostrando logs (Ctrl+C para salir)...
+echo.
+pm2 logs
+goto fin
+
+:navegador
+start http://localhost:3000
+goto fin
+
+:fin
+echo.
 pause
-
-:: 6. Limpieza final al salir (Matar procesos)
-echo.
-echo Deteniendo servidores...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3001') do taskkill /F /PID %%a >nul 2>&1
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3002') do taskkill /F /PID %%a >nul 2>&1
-echo Listo. Hasta luego!
-timeout /t 2 >nul

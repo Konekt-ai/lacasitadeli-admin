@@ -1,10 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   async rewrites() {
+    const apiUrl = process.env.API_URL || 'http://localhost:3002';
     return [
       {
         source: '/api/:path*',
-       destination: 'https://lacasita-api-production.up.railway.app/api/:path*',
+        destination: `${apiUrl}/api/:path*`,
       },
     ];
   },

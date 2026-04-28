@@ -1,34 +1,37 @@
 version: '3.8'
 
+# Uso: docker-compose up -d
+# Requiere que apps/web haya sido buildeado: cd apps/web && npm run build
+
 services:
-  # POS System (Python/Flask + SQLite)
-  pos:
-    image: python:3.11-slim
-    container_name: lacasita-pos
-    restart: always
-    working_dir: /app/apps/api/src
-    volumes:
-      - .:/app
-    ports:
-      - "3001:3001"
-    command: >
-      bash -c "pip install flask -q && python3 server.py"
-    environment:
-      - PORT=3001
 
-  # n8n para automatizaciones futuras
-  n8n:
-    image: n8nio/n8n:latest
-    container_name: lacasita-n8n
+  api:
+    build:
+      context: ../apps/api
+    container_name: lacasita-api
     restart: always
     ports:
-      - "5678:5678"
+      - "3002:3002"
+    env_file:
+      - ../apps/api/.env
     environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=lacasita2025
-    volumes:
-      - n8n_data:/home/node/.n8n
+      - PORT=3002
+      - NODE_ENV=production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
-volumes:
-  n8n_data:
+  web:
+    build:
+      context: ../apps/web
+    container_name: lacasita-web
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - API_URL=http://api:3002
+    depends_on:
+      - api
+
+volumes: {}

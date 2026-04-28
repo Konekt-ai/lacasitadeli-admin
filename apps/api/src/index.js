@@ -13,13 +13,19 @@ app.use(express.json());
 app.use('/api',          require('./modules/auth'));
 app.use('/api/products', require('./modules/products'));
 app.use('/api/sales',    require('./modules/sales'));
+app.use('/api/novacaja', require('./modules/novacaja'));
 
 // ── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', async (req, res) => {
   const db = require('./db');
   try {
-    await db.query('SELECT 1');
-    res.json({ status: 'ok', db: 'connected', time: new Date().toISOString() });
+    await db.query('SELECT 1 AS ok');
+    res.json({
+      status:   'ok',
+      db:       'SQL Server conectado',
+      database: process.env.MSSQL_DATABASE || 'lacasita_admin',
+      time:     new Date().toISOString(),
+    });
   } catch (err) {
     res.status(503).json({ status: 'error', db: err.message });
   }
@@ -27,36 +33,36 @@ app.get('/api/health', async (req, res) => {
 
 // ── Dashboard stats ──────────────────────────────────────────────────────────
 app.get('/api/dashboard', async (req, res) => {
-  const db = require('./db');
-  const today = new Date().toISOString().split('T')[0];
+  const db  = require('./db');
+  const hoy = new Date().toISOString().split('T')[0];
 
   try {
     const [ventasHoy, productos, stockBajo] = await Promise.all([
       db.query(`
         SELECT
-          COUNT(*)::int                        AS total_ventas,
-          COALESCE(SUM(total), 0)::float       AS total_ingresos,
-          COALESCE(AVG(total), 0)::float       AS ticket_promedio
+          COUNT(*)                      AS total_ventas,
+          COALESCE(SUM(total), 0)       AS total_ingresos,
+          COALESCE(AVG(total), 0)       AS ticket_promedio
         FROM ventas
         WHERE estado = 'completada'
-          AND DATE(created_at) = $1
-      `, [today]),
+          AND CAST(created_at AS DATE) = $1
+      `, [hoy]),
 
       db.query(`
-        SELECT COUNT(*)::int AS total FROM productos WHERE activo = TRUE
+        SELECT COUNT(*) AS total FROM productos WHERE activo = 1
       `),
 
       db.query(`
-        SELECT COUNT(*)::int AS total
+        SELECT COUNT(*) AS total
         FROM productos
-        WHERE activo = TRUE AND stock_actual <= stock_minimo
+        WHERE activo = 1 AND stock_actual <= stock_minimo
       `),
     ]);
 
     res.json({
-      ventas_hoy:    ventasHoy.rows[0],
+      ventas_hoy:      ventasHoy.rows[0],
       total_productos: productos.rows[0].total,
-      stock_bajo:    stockBajo.rows[0].total,
+      stock_bajo:      stockBajo.rows[0].total,
     });
   } catch (err) {
     console.error('Error en dashboard:', err.message);
@@ -71,7 +77,7 @@ app.get('/api/inventory/movements', async (req, res) => {
   try {
     let sql = `
       SELECT m.id, m.tipo, m.cantidad, m.stock_antes, m.stock_despues,
-             m.motivo, m.created_at AS "createdAt",
+             m.motivo, m.created_at AS createdAt,
              p.nombre AS product, u.nombre AS usuario
       FROM movimientos_inventario m
       LEFT JOIN productos p ON p.id = m.producto_id
@@ -93,6 +99,6 @@ app.get('/api/inventory/movements', async (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`🏪 La Casita POS — API corriendo en http://localhost:${PORT}`);
-  console.log(`🗄️  Base de datos: Neon PostgreSQL`);
+  console.log(`🏪 La Casita Admin — API corriendo en http://localhost:${PORT}`);
+  console.log(`🗄️  Base de datos: SQL Server ${process.env.MSSQL_SERVER} / ${process.env.MSSQL_DATABASE || 'lacasita_admin'}`);
 });

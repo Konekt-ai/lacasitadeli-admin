@@ -59,3 +59,6 @@ data/
 
 # Docker volumes
 volumes/
+
+# Cloudflare tunnel binary
+cloudflared.exe
