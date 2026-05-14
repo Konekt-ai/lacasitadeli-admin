@@ -18,7 +18,7 @@ module.exports = {
       name: 'lacasita-web',
       cwd: './apps/web',
       script: 'node_modules/.bin/next',
-      args: 'start',
+      args: 'start -H 0.0.0.0',
       interpreter: 'none',
       instances: 1,
       autorestart: true,
