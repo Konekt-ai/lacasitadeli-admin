@@ -1,25 +1,38 @@
-/**
- * Mapeo de tablas y columnas de novacaja22 al panel admin.
- *
- * COMO CONFIGURAR:
- * 1. Inicia la API y llama: GET http://localhost:3002/api/novacaja/tables
- *    para ver todas las tablas disponibles en novacaja22.
- * 2. Luego llama: GET http://localhost:3002/api/novacaja/tables/NombreTabla/columns
- *    para ver las columnas de la tabla de productos.
- * 3. Actualiza los valores abajo según los nombres reales.
- */
+// Mapeo real de novacaja22 — descubierto explorando el schema el 2026-05-19
+// Tablas: Articulos + ListaPreciosArt (LP_Codigo=1) + ArticulosAlmacen
 
-module.exports = {
-  products: {
-    table:    process.env.NOVACAJA_TABLE_PRODUCTOS  || 'Articulos',
-    id:       process.env.NOVACAJA_COL_ID           || 'Clave',
-    barcode:  process.env.NOVACAJA_COL_BARCODE      || 'CodigoBarras',
-    name:     process.env.NOVACAJA_COL_NAME         || 'Descripcion',
-    salePrice: process.env.NOVACAJA_COL_PRICE       || 'Precio1',
-    costPrice: process.env.NOVACAJA_COL_COST        || 'PrecioCosto',
-    stock:    process.env.NOVACAJA_COL_STOCK        || 'Existencia',
-    minStock: process.env.NOVACAJA_COL_MIN_STOCK    || null,
-    category: process.env.NOVACAJA_COL_CATEGORY     || 'Departamento',
-    active:   process.env.NOVACAJA_COL_ACTIVE       || null, // null = sin filtro activo
-  },
-};
+function buildProductsQuery({ search = '', limit = 500, lowStock = false } = {}) {
+  const whereSearch = search
+    ? `AND (a.Art_Descripcion LIKE '%${search.replace(/'/g, "''")}%'
+           OR a.Art_GTIN      LIKE '%${search.replace(/'/g, "''")}%'
+           OR a.Art_PLU       LIKE '%${search.replace(/'/g, "''")}%')`
+    : '';
+
+  const havingLowStock = lowStock
+    ? `HAVING SUM(aa.AA_ExistenciaActualU) <= 5`
+    : '';
+
+  return `
+    SELECT TOP ${limit}
+      a.Art_Codigo                  AS id,
+      ISNULL(a.Art_GTIN, a.Art_PLU) AS barcode,
+      a.Art_Descripcion             AS name,
+      a.Art_UltimoCosto             AS costPrice,
+      p.LPA_PrecioVentaImp          AS salePrice,
+      SUM(aa.AA_ExistenciaActualU)  AS stock
+    FROM Articulos a
+    LEFT JOIN ListaPreciosArt  p  ON p.Art_Codigo = a.Art_Codigo AND p.LP_Codigo = 1
+    LEFT JOIN ArticulosAlmacen aa ON aa.Art_Codigo = a.Art_Codigo
+    WHERE a.Art_Bloqueado = 0
+      AND a.Art_Descripcion <> ''
+      ${whereSearch}
+    GROUP BY
+      a.Art_Codigo, a.Art_GTIN, a.Art_PLU,
+      a.Art_Descripcion, a.Art_UltimoCosto,
+      p.LPA_PrecioVentaImp
+    ${havingLowStock}
+    ORDER BY a.Art_Descripcion
+  `;
+}
+
+module.exports = { buildProductsQuery };

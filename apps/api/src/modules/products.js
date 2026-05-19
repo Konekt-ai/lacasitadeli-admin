@@ -52,37 +52,35 @@ router.put('/categories/:id', async (req, res) => {
   }
 });
 
-// GET /api/products
+// GET /api/products — lee directo de novacaja22 (fuente de verdad del POS)
 router.get('/', async (req, res) => {
-  const { q, categoryId, lowStock } = req.query;
-  let sql = `
-    SELECT p.id, p.codigo_barras AS barcode, p.nombre AS name, p.descripcion AS description,
-           p.precio_compra AS "costPrice", p.precio_venta AS "salePrice",
-           p.stock_actual AS stock, p.stock_minimo AS "minStock",
-           p.imagen_url AS image, p.activo AS active, p.visible_web AS "visibleWeb",
-           p.created_at AS "createdAt", p.updated_at AS "updatedAt",
-           c.nombre AS category, c.id AS "categoryId"
-    FROM productos p
-    LEFT JOIN categorias c ON c.id = p.categoria_id
-    WHERE p.activo = TRUE
-  `;
-  const params = [];
-  if (q) {
-    params.push(`%${q}%`);
-    sql += ` AND (p.nombre ILIKE $${params.length} OR p.codigo_barras ILIKE $${params.length})`;
-  }
-  if (categoryId) {
-    params.push(Number(categoryId));
-    sql += ` AND p.categoria_id = $${params.length}`;
-  }
-  if (lowStock === 'true') sql += ` AND p.stock_actual <= p.stock_minimo`;
-  sql += ` ORDER BY p.nombre ASC`;
-
+  const { q, lowStock } = req.query;
+  const mssql = require('../db/mssql');
+  const { buildProductsQuery } = require('../config/novacaja-mapping');
   try {
-    const result = await db.query(sql, params);
-    res.json(result.rows);
+    const sql    = buildProductsQuery({ search: q || '', limit: 500, lowStock: lowStock === 'true' });
+    const result = await mssql.query(sql);
+    const rows   = result.recordset.map((r, i) => ({
+      id:          i + 1,
+      barcode:     r.barcode ? String(r.barcode).trim() : null,
+      name:        String(r.name || '').trim(),
+      description: null,
+      costPrice:   parseFloat(r.costPrice) || 0,
+      salePrice:   parseFloat(r.salePrice) || 0,
+      stock:       parseFloat(r.stock)     || 0,
+      minStock:    5,
+      image:       null,
+      active:      true,
+      visibleWeb:  true,
+      category:    null,
+      categoryId:  null,
+      createdAt:   new Date().toISOString(),
+      _novacajaId: String(r.id),
+    }));
+    res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: 'Error al obtener productos' });
+    console.error('Error al obtener productos de novacaja:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 

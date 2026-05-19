@@ -3,17 +3,17 @@ const sql = require('mssql');
 require('dotenv').config();
 
 const config = {
-  server:   process.env.NOVACAJA_SERVER   || process.env.MSSQL_SERVER   || '192.168.1.68',
-  database: process.env.NOVACAJA_DATABASE || 'novacaja22',
-  user:     process.env.NOVACAJA_USER     || process.env.MSSQL_USER     || 'sa',
-  password: process.env.NOVACAJA_PASSWORD || process.env.MSSQL_PASSWORD || '',
-  port:     parseInt(process.env.NOVACAJA_PORT || process.env.MSSQL_PORT || '1433'),
+  server:   process.env.MSSQL_SERVER   || 'localhost',
+  database: process.env.MSSQL_DATABASE || 'novacaja22',
+  user:     process.env.MSSQL_USER     || 'sa',
+  password: process.env.MSSQL_PASSWORD || '',
+  port:     parseInt(process.env.MSSQL_PORT || '1433'),
   options: {
     encrypt:                false,
     trustServerCertificate: true,
     enableArithAbort:       true,
   },
-  connectionTimeout: 10000,
+  connectionTimeout: 15000,
   requestTimeout:    15000,
 };
 
