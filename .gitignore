@@ -3,6 +3,10 @@ node_modules/
 package-lock.json
 yarn.lock
 
+#aguas con subir los datos de la empresa
+.sql
+pks_postgres.sql
+pks.sql
 # Build & Distribution
 dist/
 build/
