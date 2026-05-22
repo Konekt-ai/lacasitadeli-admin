@@ -1,19 +1,44 @@
-const { Pool } = require('pg');
-require('dotenv').config();
+const Database = require('better-sqlite3');
+const path     = require('path');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: false,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-});
+const DB_PATH = path.join(__dirname, '..', '..', 'lacasita.db');
 
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-});
+let _db;
+function getDb() {
+  if (_db) return _db;
+  _db = new Database(DB_PATH);
+  _db.pragma('journal_mode = WAL');
+  _db.pragma('foreign_keys = ON');
+  _db.exec(`
+    CREATE TABLE IF NOT EXISTS categorias (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      nombre      TEXT NOT NULL UNIQUE,
+      descripcion TEXT,
+      activo      INTEGER DEFAULT 1,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS ventas (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      folio       TEXT NOT NULL UNIQUE,
+      canal       TEXT DEFAULT 'caja',
+      cajero      TEXT DEFAULT 'Sistema',
+      metodo_pago TEXT DEFAULT 'efectivo',
+      total       REAL DEFAULT 0,
+      estado      TEXT DEFAULT 'completada',
+      notas       TEXT,
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS detalle_venta (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      venta_id        INTEGER NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
+      novacaja_id     TEXT,
+      nombre_producto TEXT,
+      cantidad        REAL NOT NULL,
+      precio_unitario REAL NOT NULL,
+      subtotal        REAL NOT NULL
+    );
+  `);
+  return _db;
+}
 
-module.exports = {
-  query:   (text, params) => pool.query(text, params),
-  getPool: () => pool,
-};
+module.exports = { getDb };
