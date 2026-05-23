@@ -1,82 +1,144 @@
 const express  = require('express');
 const mssql    = require('../db/mssql');
-const adminDb  = require('../db');
-const { buildProductsQuery } = require('../config/novacaja-mapping');
-const router   = express.Router();
+const {
+  buildProductsQuery,
+  buildProductsCountQuery,
+  buildSalesQuery,
+  buildSalesByDayQuery,
+  buildSalesBySupplierQuery,
+  buildDashboardKPIsQuery,
+  buildTopProductsQuery,
+} = require('../config/novacaja-mapping');
+const router = express.Router();
 
-// GET /api/novacaja/status
+// ── GET /api/novacaja/status ──────────────────────────────────────────────────
 router.get('/status', async (req, res) => {
   try {
     await mssql.getPool();
-    res.json({ status: 'ok', server: process.env.MSSQL_SERVER || 'localhost', database: process.env.MSSQL_DATABASE || 'novacaja22' });
+    res.json({
+      status:   'ok',
+      server:   process.env.MSSQL_SERVER   || 'localhost',
+      database: process.env.MSSQL_DATABASE || 'compucaja',
+    });
   } catch (err) {
     res.status(503).json({ status: 'error', message: err.message });
   }
 });
 
-// GET /api/novacaja/products — lista artículos con precio y existencia
+// ── GET /api/novacaja/products ────────────────────────────────────────────────
+// Paginación: ?q=busqueda&page=1&pageSize=200
+// Sin búsqueda devuelve página a página todos los 57k productos
 router.get('/products', async (req, res) => {
-  const { q, limit } = req.query;
+  const { q = '', page = 1, pageSize = 200 } = req.query;
+  const offset   = (parseInt(page) - 1) * parseInt(pageSize);
+
   try {
-    const sql    = buildProductsQuery({ search: q || '', limit: parseInt(limit) || 500 });
-    const result = await mssql.query(sql);
+    const [dataRes, countRes] = await Promise.all([
+      mssql.query(buildProductsQuery({ search: q, offset, pageSize: parseInt(pageSize) })),
+      mssql.query(buildProductsCountQuery({ search: q })),
+    ]);
+
+    res.json({
+      data:      dataRes.recordset,
+      total:     countRes.recordset[0]?.total || 0,
+      page:      parseInt(page),
+      pageSize:  parseInt(pageSize),
+      pages:     Math.ceil((countRes.recordset[0]?.total || 0) / parseInt(pageSize)),
+    });
+  } catch (err) {
+    console.error('Error productos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/sales ───────────────────────────────────────────────────
+// ?period=day|week|month
+router.get('/sales', async (req, res) => {
+  const { period = 'day', limit } = req.query;
+  try {
+    const result = await mssql.query(buildSalesQuery({ period, limit: parseInt(limit) || 5000 }));
     res.json(result.recordset);
   } catch (err) {
-    console.error('Error al obtener productos de novacaja:', err.message);
+    console.error('Error ventas:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/novacaja/sync — sincroniza artículos de novacaja22 → PostgreSQL admin
-router.post('/sync', async (req, res) => {
+// ── GET /api/novacaja/sales/by-day ───────────────────────────────────────────
+// ?days=30
+router.get('/sales/by-day', async (req, res) => {
+  const { days = 30 } = req.query;
   try {
-    const result = await mssql.query(buildProductsQuery({ limit: 99999 }));
-    const rows   = result.recordset;
-
-    let inserted = 0, updated = 0, errors = 0;
-
-    for (const row of rows) {
-      const barcode   = row.barcode ? String(row.barcode).trim() : null;
-      const name      = String(row.name || '').trim();
-      const salePrice = parseFloat(row.salePrice) || 0;
-      const costPrice = parseFloat(row.costPrice) || 0;
-      const stock     = parseFloat(row.stock)     || 0;
-
-      if (!name) continue;
-
-      try {
-        const existing = barcode
-          ? await adminDb.query('SELECT id FROM productos WHERE codigo_barras = $1', [barcode])
-          : await adminDb.query('SELECT id FROM productos WHERE nombre = $1',        [name]);
-
-        if (existing.rows.length) {
-          await adminDb.query(
-            `UPDATE productos SET precio_venta=$1, precio_costo=$2, stock_actual=$3 WHERE id=$4`,
-            [salePrice, costPrice, stock, existing.rows[0].id]
-          );
-          updated++;
-        } else {
-          await adminDb.query(
-            `INSERT INTO productos (codigo_barras, nombre, precio_venta, precio_costo, stock_actual)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [barcode, name, salePrice, costPrice, stock]
-          );
-          inserted++;
-        }
-      } catch (rowErr) {
-        console.error('Error en fila:', name, rowErr.message);
-        errors++;
-      }
-    }
-
-    res.json({ message: 'Sincronización completada', total: rows.length, inserted, updated, errors });
+    const result = await mssql.query(buildSalesByDayQuery({ days: parseInt(days) }));
+    res.json(result.recordset);
   } catch (err) {
-    console.error('Error en sincronización:', err.message);
+    console.error('Error ventas por día:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET /api/novacaja/tables — exploración del schema (debug)
+// ── GET /api/novacaja/sales/by-supplier ──────────────────────────────────────
+// ?period=day|week|month
+router.get('/sales/by-supplier', async (req, res) => {
+  const { period = 'month' } = req.query;
+  try {
+    const result = await mssql.query(buildSalesBySupplierQuery({ period }));
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error ventas por proveedor:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/dashboard ───────────────────────────────────────────────
+// ?period=day|week|month
+router.get('/dashboard', async (req, res) => {
+  const { period = 'day' } = req.query;
+  const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
+
+  try {
+    const [kpiRes, topRes, byDayRes, bySupplierRes] = await Promise.all([
+      mssql.query(buildDashboardKPIsQuery({ period })),
+      mssql.query(buildTopProductsQuery({ period, limit: 10 })),
+      mssql.query(buildSalesByDayQuery({ days })),
+      mssql.query(buildSalesBySupplierQuery({ period })),
+    ]);
+
+    res.json({
+      kpis:       kpiRes.recordset[0]     || {},
+      topProducts: topRes.recordset       || [],
+      byDay:       byDayRes.recordset     || [],
+      bySupplier:  bySupplierRes.recordset || [],
+    });
+  } catch (err) {
+    console.error('Error dashboard:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/suppliers ───────────────────────────────────────────────
+router.get('/suppliers', async (req, res) => {
+  try {
+    const result = await mssql.query(`
+      SELECT
+        Pro_Codigo              AS id,
+        Pro_Nombre              AS nombre,
+        Pro_ComprasAcumuladas   AS comprasAcumuladas,
+        Pro_ServAcumuladas      AS serviciosAcumulados
+      FROM [compucaja].[dbo].[Proveedores]
+      WHERE Pro_Bloqueado = 0
+        AND Pro_Nombre IS NOT NULL
+        AND Pro_Nombre <> ''
+      ORDER BY Pro_Nombre
+    `);
+    res.json(result.recordset);
+  } catch (err) {
+    console.error('Error proveedores:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Debug endpoints ───────────────────────────────────────────────────────────
 router.get('/tables', async (req, res) => {
   try {
     const result = await mssql.query(`
@@ -91,10 +153,9 @@ router.get('/tables', async (req, res) => {
   }
 });
 
-// GET /api/novacaja/tables/:table/columns — columnas de una tabla (debug)
 router.get('/tables/:table/columns', async (req, res) => {
   const { table } = req.params;
-  if (!/^[A-Za-z0-9_]+$/.test(table)) return res.status(400).json({ error: 'Nombre de tabla inválido' });
+  if (!/^[A-Za-z0-9_]+$/.test(table)) return res.status(400).json({ error: 'Nombre inválido' });
   try {
     const result = await mssql.query(`
       SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE
@@ -108,10 +169,9 @@ router.get('/tables/:table/columns', async (req, res) => {
   }
 });
 
-// GET /api/novacaja/tables/:table/preview — primeras 20 filas (debug)
 router.get('/tables/:table/preview', async (req, res) => {
   const { table } = req.params;
-  if (!/^[A-Za-z0-9_]+$/.test(table)) return res.status(400).json({ error: 'Nombre de tabla inválido' });
+  if (!/^[A-Za-z0-9_]+$/.test(table)) return res.status(400).json({ error: 'Nombre inválido' });
   try {
     const result = await mssql.query(`SELECT TOP 20 * FROM [${table}]`);
     res.json(result.recordset);
