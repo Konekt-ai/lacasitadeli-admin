@@ -23,6 +23,7 @@ app.get('/api/health', async (req, res) => {
   res.status(ok ? 200 : 503).json({ ...status, db: status.sqlserver });
 });
 
-app.listen(PORT, () => {
-  console.log(`La Casita Admin — API en http://localhost:${PORT}`);
+// Implementación para aceptar conexiones externas a través de Tailscale
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);
 });
