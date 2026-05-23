@@ -18,6 +18,18 @@ const {
 
 const router = express.Router();
 
+// Helper para obtener la fecha máxima una sola vez súper rápido
+async function getMaxDateString() {
+  try {
+    const res = await mssql.query('SELECT MAX(Fecha) as mDate FROM [compucaja].[dbo].[VBasePolizaVentas]');
+    const date = res.recordset[0]?.mDate || new Date();
+    // Lo convertimos a formato YYYY-MM-DD HH:mm:ss seguro para SQL
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+  } catch (err) {
+    return new Date().toISOString().slice(0, 19).replace('T', ' ');
+  }
+}
+
 // ── GET /api/novacaja/status ──────────────────────────────────────────────────
 router.get('/status', async (req, res) => {
   try {
@@ -60,7 +72,8 @@ router.get('/products', async (req, res) => {
 router.get('/sales', async (req, res) => {
   const { period = 'day', limit } = req.query;
   try {
-    const result = await mssql.query(buildSalesQuery({ period, limit: parseInt(limit) || 5000 }));
+    const maxDate = await getMaxDateString();
+    const result = await mssql.query(buildSalesQuery({ period, limit: parseInt(limit) || 5000, maxDate }));
     res.json(result.recordset);
   } catch (err) {
     console.error('Error ventas:', err.message);
@@ -72,7 +85,8 @@ router.get('/sales', async (req, res) => {
 router.get('/sales/by-day', async (req, res) => {
   const { days = 30 } = req.query;
   try {
-    const result = await mssql.query(buildSalesByDayQuery({ days: parseInt(days) }));
+    const maxDate = await getMaxDateString();
+    const result = await mssql.query(buildSalesByDayQuery({ days: parseInt(days), maxDate }));
     res.json(result.recordset);
   } catch (err) {
     console.error('Error ventas por día:', err.message);
@@ -84,7 +98,8 @@ router.get('/sales/by-day', async (req, res) => {
 router.get('/sales/by-supplier', async (req, res) => {
   const { period = 'month' } = req.query;
   try {
-    const result = await mssql.query(buildSalesBySupplierQuery({ period }));
+    const maxDate = await getMaxDateString();
+    const result = await mssql.query(buildSalesBySupplierQuery({ period, maxDate }));
     res.json(result.recordset);
   } catch (err) {
     console.error('Error ventas por proveedor:', err.message);
@@ -93,18 +108,17 @@ router.get('/sales/by-supplier', async (req, res) => {
 });
 
 // ── GET /api/novacaja/analytics ───────────────────────────────────────────────
-// Datos históricos: volumen por hora, por mes, top productos en ambas dimensiones
 router.get('/analytics', async (req, res) => {
   const { months = 3 } = req.query;
-  const m = parseInt(months);
+  const m = Math.min(parseInt(months) || 3, 12);
 
   try {
-    const [byHour, byMonth, productsByHour, productsByMonth] = await Promise.all([
-      mssql.query(buildSalesByHourQuery({ months: m })),
-      mssql.query(buildSalesByMonthQuery({ months: Math.max(m, 12) })),
-      mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10 })),
-      mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8 })),
-    ]);
+    const maxDate = await getMaxDateString();
+
+    const byHour = await mssql.query(buildSalesByHourQuery({ months: m, maxDate }));
+    const byMonth = await mssql.query(buildSalesByMonthQuery({ months: m, maxDate }));
+    const productsByHour = await mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10, maxDate }));
+    const productsByMonth = await mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8, maxDate }));
 
     res.json({
       byHour:          byHour.recordset          || [],
@@ -124,11 +138,13 @@ router.get('/dashboard', async (req, res) => {
   const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
 
   try {
+    const maxDate = await getMaxDateString();
+
     const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
-      mssql.query(buildDashboardKPIsQuery({ period })),
-      mssql.query(buildTopProductsQuery({ period, limit: 10 })),
-      mssql.query(buildSalesByDayQuery({ days })),
-      mssql.query(buildSalesBySupplierQuery({ period })),
+      mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
+      mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
+      mssql.query(buildSalesByDayQuery({ days, maxDate })),
+      mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery())
     ]);

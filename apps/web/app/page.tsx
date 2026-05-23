@@ -418,8 +418,9 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+                {/* Fix for ResponsiveContainer warning */}
                 <div className="h-80 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-                  <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
+                  <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
                     <BarChart data={topProducts.slice(0, 7)}>
                       <Bar dataKey="ingresos" fill="#012d1d" radius={[4, 4, 0, 0]} />
                       <XAxis dataKey="name" hide />
@@ -705,8 +706,9 @@ export default function Dashboard() {
                       ))}
                     </div>
                   </div>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
+                  {/* Fix for ResponsiveContainer warning */}
+                  <div className="h-64 w-full" style={{ minWidth: 0, minHeight: 0 }}>
+                    <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
                       <AreaChart data={hourLineData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="gradUnidades" x1="0" y1="0" x2="0" y2="1">
@@ -836,8 +838,9 @@ export default function Dashboard() {
                       </button>
                     </div>
                   </div>
-                  <div className="h-72">
-                    <ResponsiveContainer width="100%" height="100%">
+                  {/* Fix for ResponsiveContainer warning */}
+                  <div className="h-72 w-full" style={{ minWidth: 0, minHeight: 0 }}>
+                    <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
                       <BarChart data={monthChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
                         <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} />
@@ -872,8 +875,9 @@ export default function Dashboard() {
                         {analyticsMetric === 'unidadesVendidas' ? 'Unidades vendidas' : 'Ingresos'} — productos seleccionados
                       </p>
                     </div>
-                    <div className="h-72">
-                      <ResponsiveContainer width="100%" height="100%">
+                    {/* Fix for ResponsiveContainer warning */}
+                    <div className="h-72 w-full" style={{ minWidth: 0, minHeight: 0 }}>
+                      <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
                         <BarChart data={productMonthData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
                           <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} />

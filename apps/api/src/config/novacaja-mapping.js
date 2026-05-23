@@ -1,6 +1,5 @@
 // ── Mapeo real de compucaja — vistas y tablas confirmadas
 
-// ── INVENTARIO ────────────────────────────────────────────────────────────────
 function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
   const whereSearch = search
     ? `AND (
@@ -87,9 +86,16 @@ function buildDashboardLowStockCountQuery() {
   `;
 }
 
+function _dateFilter(period, col, maxDate) {
+  if (!maxDate) return '1=1'; // Fallback
+  if (period === 'day')   return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
+  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  '${maxDate}')`;
+  if (period === 'month') return `${col} >= DATEADD(DAY, -30, '${maxDate}')`;
+  return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
+}
+
 // ── VENTAS por periodo ────────────────────────────────────────────────────────
-function buildSalesQuery({ period = 'day', limit = 5000 } = {}) {
-  const dateFilter = _dateFilter(period, 'v.Fecha');
+function buildSalesQuery({ period = 'day', limit = 5000, maxDate } = {}) {
   return `
     SELECT TOP ${limit}
       v.ticket          AS folio,
@@ -102,13 +108,12 @@ function buildSalesQuery({ period = 'day', limit = 5000 } = {}) {
       v.Costo           AS costo,
       v.FolTda_Codigo   AS tiendaCodigo
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
-    WHERE ${dateFilter}
+    WHERE ${_dateFilter(period, 'v.Fecha', maxDate)}
     ORDER BY v.Fecha DESC
   `;
 }
 
-function buildSalesByDayQuery({ days = 30 } = {}) {
-  const maxDate = `(SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas])`;
+function buildSalesByDayQuery({ days = 30, maxDate } = {}) {
   return `
     SELECT
       CAST(v.Fecha AS DATE)        AS fecha,
@@ -117,14 +122,13 @@ function buildSalesByDayQuery({ days = 30 } = {}) {
       SUM(v.importe)               AS totalVentas,
       SUM(v.Costo)                 AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
-    WHERE v.Fecha >= DATEADD(DAY, -${days}, ${maxDate})
+    WHERE v.Fecha >= DATEADD(DAY, -${days}, '${maxDate}')
     GROUP BY CAST(v.Fecha AS DATE)
     ORDER BY CAST(v.Fecha AS DATE) ASC
   `;
 }
 
-function buildSalesBySupplierQuery({ period = 'month' } = {}) {
-  const dateFilter = _dateFilter(period, 'v.Fecha');
+function buildSalesBySupplierQuery({ period = 'month', maxDate } = {}) {
   return `
     SELECT TOP 20
       ISNULL(p.Pro_Nombre, 'Sin Proveedor')  AS proveedor,
@@ -137,14 +141,14 @@ function buildSalesBySupplierQuery({ period = 'month' } = {}) {
       ON a.Art_Codigo = v.producto
     LEFT JOIN [compucaja].[dbo].[Proveedores] p
       ON p.Pro_Codigo = a.Art_CodProv
-    WHERE ${dateFilter}
+    WHERE ${_dateFilter(period, 'v.Fecha', maxDate)}
     GROUP BY p.Pro_Nombre
     ORDER BY SUM(v.importe) DESC
   `;
 }
 
-function buildDashboardKPIsQuery({ period = 'day' } = {}) {
-  const dateFilter = _dateFilter(period, 'v.Fecha');
+function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
+  const filter = _dateFilter(period, 'v.Fecha', maxDate);
   return `
     SELECT
       COUNT(DISTINCT v.ticket)           AS totalTickets,
@@ -157,15 +161,14 @@ function buildDashboardKPIsQuery({ period = 'day' } = {}) {
     JOIN (
       SELECT ticket, SUM(importe) AS ticketTotal
       FROM [compucaja].[dbo].[VBasePolizaVentas]
-      WHERE ${dateFilter}
+      WHERE ${filter}
       GROUP BY ticket
     ) sub ON sub.ticket = v.ticket
-    WHERE ${dateFilter}
+    WHERE ${filter}
   `;
 }
 
-function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
-  const dateFilter = _dateFilter(period, 'v.Fecha');
+function buildTopProductsQuery({ period = 'day', limit = 10, maxDate } = {}) {
   return `
     SELECT TOP ${limit}
       v.producto                             AS productCode,
@@ -178,7 +181,7 @@ function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a
       ON a.Art_Codigo = v.producto
-    WHERE ${dateFilter}
+    WHERE ${_dateFilter(period, 'v.Fecha', maxDate)}
     GROUP BY v.producto, a.Art_Descripcion, a.Mar_Nombre, a.Org_Descripcion
     ORDER BY SUM(v.cantidad) DESC
   `;
@@ -186,8 +189,7 @@ function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
 
 // ── ANALYTICS — VOLUMEN POR HORA Y MES ───────────────────────────────────────
 
-// Volumen total por hora del día (histórico)
-function buildSalesByHourQuery({ months = 3 } = {}) {
+function buildSalesByHourQuery({ months = 3, maxDate } = {}) {
   return `
     SELECT
       DATEPART(HOUR, v.Fecha)      AS hora,
@@ -196,14 +198,13 @@ function buildSalesByHourQuery({ months = 3 } = {}) {
       SUM(v.importe)               AS totalVentas,
       SUM(v.Costo)                 AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
-    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
     GROUP BY DATEPART(HOUR, v.Fecha)
     ORDER BY DATEPART(HOUR, v.Fecha) ASC
   `;
 }
 
-// Top N productos con unidades por hora (para heatmap)
-function buildTopProductsByHourQuery({ months = 3, limit = 10 } = {}) {
+function buildTopProductsByHourQuery({ months = 3, limit = 10, maxDate } = {}) {
   return `
     SELECT
       ISNULL(a.Art_Descripcion, v.producto) AS nombre,
@@ -212,15 +213,14 @@ function buildTopProductsByHourQuery({ months = 3, limit = 10 } = {}) {
       SUM(v.importe)                         AS ingresos
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a ON a.Art_Codigo = v.producto
-    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
       AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
     GROUP BY v.producto, a.Art_Descripcion, DATEPART(HOUR, v.Fecha)
     ORDER BY SUM(v.cantidad) DESC
   `;
 }
 
-// Ventas agrupadas por mes
-function buildSalesByMonthQuery({ months = 12 } = {}) {
+function buildSalesByMonthQuery({ months = 12, maxDate } = {}) {
   return `
     SELECT
       YEAR(v.Fecha)                AS anio,
@@ -230,14 +230,13 @@ function buildSalesByMonthQuery({ months = 12 } = {}) {
       SUM(v.importe)               AS totalVentas,
       SUM(v.Costo)                 AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
-    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
     GROUP BY YEAR(v.Fecha), MONTH(v.Fecha)
     ORDER BY YEAR(v.Fecha) ASC, MONTH(v.Fecha) ASC
   `;
 }
 
-// Top N productos con unidades por mes
-function buildTopProductsByMonthQuery({ months = 6, limit = 8 } = {}) {
+function buildTopProductsByMonthQuery({ months = 6, limit = 8, maxDate } = {}) {
   return `
     SELECT
       ISNULL(a.Art_Descripcion, v.producto)  AS nombre,
@@ -247,19 +246,11 @@ function buildTopProductsByMonthQuery({ months = 6, limit = 8 } = {}) {
       SUM(v.importe)                          AS ingresos
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a ON a.Art_Codigo = v.producto
-    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
       AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
     GROUP BY v.producto, a.Art_Descripcion, YEAR(v.Fecha), MONTH(v.Fecha)
     ORDER BY SUM(v.cantidad) DESC
   `;
-}
-
-function _dateFilter(period, col) {
-  const maxDate = `(SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas])`;
-  if (period === 'day')   return `CAST(${col} AS DATE) = CAST(${maxDate} AS DATE)`;
-  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  ${maxDate})`;
-  if (period === 'month') return `${col} >= DATEADD(DAY, -30, ${maxDate})`;
-  return `CAST(${col} AS DATE) = CAST(${maxDate} AS DATE)`;
 }
 
 module.exports = {

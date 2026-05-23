@@ -13,8 +13,8 @@ const config = {
     trustServerCertificate: true,
     enableArithAbort:       true,
   },
-  connectionTimeout: 15000,
-  requestTimeout:    15000,
+  connectionTimeout: 60000, // Aumentado a 60 segundos
+  requestTimeout:    60000, // Aumentado a 60 segundos
 };
 
 let pool = null;
