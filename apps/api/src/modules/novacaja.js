@@ -200,6 +200,134 @@ router.get('/suppliers', async (req, res) => {
   }
 });
 
+// ── GET /api/novacaja/poliza-ventas ───────────────────────────────────────────
+// Params: period=day|week|month  (default: day)
+//         date=YYYY-MM-DD        (override manual — ignora period)
+// Limits: day→2000  week→5000  month→7000
+router.get('/poliza-ventas', async (req, res) => {
+  const { date, period = 'day' } = req.query;
+
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'Formato de fecha inválido (esperado YYYY-MM-DD)' });
+  }
+
+  try {
+    const maxDate = await getMaxDateString();
+
+    let whereClause, topLimit;
+
+    if (date) {
+      whereClause = `WHERE CAST(Fecha AS DATE) = '${date}'`;
+      topLimit    = 2000;
+    } else {
+      switch (period) {
+        case 'week':
+          whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`;
+          topLimit    = 5000;
+          break;
+        case 'month':
+          whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`;
+          topLimit    = 7000;
+          break;
+        default: // day
+          whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+          topLimit    = 2000;
+      }
+    }
+
+    const [dataRes, countRes] = await Promise.all([
+      mssql.query(`
+        SELECT TOP ${topLimit}
+          ticket,
+          MAX(Fecha)               AS fecha,
+          MAX(factura)             AS factura,
+          SUM(importe)             AS totalImporte,
+          SUM(CostoImp)            AS totalCosto,
+          SUM(importe) - SUM(CostoImp) AS ganancia,
+          COUNT(*)                 AS numProductos
+        FROM [compucaja].[dbo].[VBasePolizaVentas]
+        ${whereClause}
+        GROUP BY ticket
+        ORDER BY MAX(Fecha) DESC
+      `),
+      mssql.query(`
+        SELECT COUNT(DISTINCT ticket) AS totalTickets
+        FROM [compucaja].[dbo].[VBasePolizaVentas]
+        ${whereClause}
+      `),
+    ]);
+
+    const rows         = dataRes.recordset || [];
+    const totalTickets = countRes.recordset[0]?.totalTickets || 0;
+
+    const summary = {
+      totalImporte:  rows.reduce((s, r) => s + (Number(r.totalImporte) || 0), 0),
+      totalCosto:    rows.reduce((s, r) => s + (Number(r.totalCosto)   || 0), 0),
+      totalGanancia: rows.reduce((s, r) => s + (Number(r.ganancia)     || 0), 0),
+      numTickets:    rows.length,
+    };
+
+    res.json({ tickets: rows, summary, totalTickets, limit: topLimit });
+  } catch (err) {
+    console.error('Error poliza ventas:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/poliza-ventas/export ────────────────────────────────────
+// Sin límite TOP — para descarga completa del periodo
+// Params: period=day|week|month  |  startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+router.get('/poliza-ventas/export', async (req, res) => {
+  const { period = 'day', startDate, endDate } = req.query;
+
+  const dateRx = /^\d{4}-\d{2}-\d{2}$/;
+  if (startDate && !dateRx.test(startDate)) return res.status(400).json({ error: 'startDate inválido' });
+  if (endDate   && !dateRx.test(endDate))   return res.status(400).json({ error: 'endDate inválido' });
+
+  try {
+    const maxDate = await getMaxDateString();
+
+    let whereClause;
+    if (startDate && endDate) {
+      whereClause = `WHERE CAST(Fecha AS DATE) BETWEEN '${startDate}' AND '${endDate}'`;
+    } else if (startDate) {
+      whereClause = `WHERE CAST(Fecha AS DATE) >= '${startDate}'`;
+    } else {
+      switch (period) {
+        case 'week':
+          whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`;
+          break;
+        case 'month':
+          whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`;
+          break;
+        default:
+          whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+      }
+    }
+
+    const result = await mssql.query(`
+      SELECT TOP 50000
+        ticket,
+        CONVERT(varchar(19), MAX(Fecha), 120) AS fecha,
+        MAX(factura)                           AS factura,
+        SUM(cantidad)                          AS totalArticulos,
+        SUM(importe)                           AS totalImporte,
+        SUM(CostoImp)                          AS totalCosto,
+        SUM(importe) - SUM(CostoImp)           AS ganancia,
+        COUNT(*)                               AS numLineas
+      FROM [compucaja].[dbo].[VBasePolizaVentas]
+      ${whereClause}
+      GROUP BY ticket
+      ORDER BY MAX(Fecha) DESC
+    `);
+
+    res.json({ tickets: result.recordset || [], count: result.recordset?.length || 0 });
+  } catch (err) {
+    console.error('Error export poliza:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Debug endpoints ───────────────────────────────────────────────────────────
 router.get('/tables', async (req, res) => {
   try {

@@ -148,7 +148,8 @@ function buildSalesBySupplierQuery({ period = 'month', maxDate } = {}) {
 }
 
 function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
-  const filter = _dateFilter(period, 'v.Fecha', maxDate);
+  const outerFilter = _dateFilter(period, 'v.Fecha', maxDate);
+  const innerFilter = _dateFilter(period, 'Fecha', maxDate);
   return `
     SELECT
       COUNT(DISTINCT v.ticket)           AS totalTickets,
@@ -161,10 +162,10 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
     JOIN (
       SELECT ticket, SUM(importe) AS ticketTotal
       FROM [compucaja].[dbo].[VBasePolizaVentas]
-      WHERE ${filter}
+      WHERE ${innerFilter}
       GROUP BY ticket
     ) sub ON sub.ticket = v.ticket
-    WHERE ${filter}
+    WHERE ${outerFilter}
   `;
 }
 
