@@ -10,6 +10,10 @@ const {
   buildSalesBySupplierQuery,
   buildDashboardKPIsQuery,
   buildTopProductsQuery,
+  buildSalesByHourQuery,
+  buildTopProductsByHourQuery,
+  buildSalesByMonthQuery,
+  buildTopProductsByMonthQuery,
 } = require('../config/novacaja-mapping');
 
 const router = express.Router();
@@ -88,6 +92,32 @@ router.get('/sales/by-supplier', async (req, res) => {
   }
 });
 
+// ── GET /api/novacaja/analytics ───────────────────────────────────────────────
+// Datos históricos: volumen por hora, por mes, top productos en ambas dimensiones
+router.get('/analytics', async (req, res) => {
+  const { months = 3 } = req.query;
+  const m = parseInt(months);
+
+  try {
+    const [byHour, byMonth, productsByHour, productsByMonth] = await Promise.all([
+      mssql.query(buildSalesByHourQuery({ months: m })),
+      mssql.query(buildSalesByMonthQuery({ months: Math.max(m, 12) })),
+      mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10 })),
+      mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8 })),
+    ]);
+
+    res.json({
+      byHour:          byHour.recordset          || [],
+      byMonth:         byMonth.recordset         || [],
+      productsByHour:  productsByHour.recordset  || [],
+      productsByMonth: productsByMonth.recordset || [],
+    });
+  } catch (err) {
+    console.error('Error analytics:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/novacaja/dashboard ───────────────────────────────────────────────
 router.get('/dashboard', async (req, res) => {
   const { period = 'day' } = req.query;
@@ -103,10 +133,9 @@ router.get('/dashboard', async (req, res) => {
       mssql.query(buildDashboardLowStockCountQuery())
     ]);
 
-    const totalProducts = prodCountRes.recordset[0]?.totalProducts || 0;
+    const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts || 0;
 
-    // Se construye el objeto KPI inyectando los datos de inventario calculados
     const kpisFull = {
       ...(kpiRes.recordset[0] || {}),
       totalProducts,

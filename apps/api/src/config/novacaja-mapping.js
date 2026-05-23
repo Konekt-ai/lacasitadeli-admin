@@ -1,6 +1,4 @@
 // ── Mapeo real de compucaja — vistas y tablas confirmadas
-// Precio: ListaPreciosArt.LPA_PrecioVentaImp (LP_Codigo=1)
-// Stock:  ArticulosAlmacen.AA_ExistenciaActualU (SUM por almacén)
 
 // ── INVENTARIO ────────────────────────────────────────────────────────────────
 function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
@@ -67,7 +65,6 @@ function buildProductsCountQuery({ search = '' } = {}) {
   `;
 }
 
-// Conteo global de productos para las métricas del Dashboard
 function buildDashboardProductsCountQuery() {
   return `
     SELECT COUNT(*) AS totalProducts 
@@ -76,7 +73,6 @@ function buildDashboardProductsCountQuery() {
   `;
 }
 
-// Conteo de alertas de stock (Artículos con existencia total <= 5)
 function buildDashboardLowStockCountQuery() {
   return `
     SELECT COUNT(*) AS lowStockAlerts
@@ -165,7 +161,7 @@ function buildDashboardKPIsQuery({ period = 'day' } = {}) {
       GROUP BY ticket
     ) sub ON sub.ticket = v.ticket
     WHERE ${dateFilter}
-  ```;
+  `;
 }
 
 function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
@@ -188,6 +184,76 @@ function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
   `;
 }
 
+// ── ANALYTICS — VOLUMEN POR HORA Y MES ───────────────────────────────────────
+
+// Volumen total por hora del día (histórico)
+function buildSalesByHourQuery({ months = 3 } = {}) {
+  return `
+    SELECT
+      DATEPART(HOUR, v.Fecha)      AS hora,
+      COUNT(DISTINCT v.ticket)     AS numTickets,
+      SUM(v.cantidad)              AS unidadesVendidas,
+      SUM(v.importe)               AS totalVentas,
+      SUM(v.Costo)                 AS totalCosto
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    GROUP BY DATEPART(HOUR, v.Fecha)
+    ORDER BY DATEPART(HOUR, v.Fecha) ASC
+  `;
+}
+
+// Top N productos con unidades por hora (para heatmap)
+function buildTopProductsByHourQuery({ months = 3, limit = 10 } = {}) {
+  return `
+    SELECT
+      ISNULL(a.Art_Descripcion, v.producto) AS nombre,
+      DATEPART(HOUR, v.Fecha)               AS hora,
+      SUM(v.cantidad)                        AS unidades,
+      SUM(v.importe)                         AS ingresos
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a ON a.Art_Codigo = v.producto
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+      AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
+    GROUP BY v.producto, a.Art_Descripcion, DATEPART(HOUR, v.Fecha)
+    ORDER BY SUM(v.cantidad) DESC
+  `;
+}
+
+// Ventas agrupadas por mes
+function buildSalesByMonthQuery({ months = 12 } = {}) {
+  return `
+    SELECT
+      YEAR(v.Fecha)                AS anio,
+      MONTH(v.Fecha)               AS mes,
+      COUNT(DISTINCT v.ticket)     AS numTickets,
+      SUM(v.cantidad)              AS unidadesVendidas,
+      SUM(v.importe)               AS totalVentas,
+      SUM(v.Costo)                 AS totalCosto
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    GROUP BY YEAR(v.Fecha), MONTH(v.Fecha)
+    ORDER BY YEAR(v.Fecha) ASC, MONTH(v.Fecha) ASC
+  `;
+}
+
+// Top N productos con unidades por mes
+function buildTopProductsByMonthQuery({ months = 6, limit = 8 } = {}) {
+  return `
+    SELECT
+      ISNULL(a.Art_Descripcion, v.producto)  AS nombre,
+      YEAR(v.Fecha)                           AS anio,
+      MONTH(v.Fecha)                          AS mes,
+      SUM(v.cantidad)                         AS unidades,
+      SUM(v.importe)                          AS ingresos
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a ON a.Art_Codigo = v.producto
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+      AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
+    GROUP BY v.producto, a.Art_Descripcion, YEAR(v.Fecha), MONTH(v.Fecha)
+    ORDER BY SUM(v.cantidad) DESC
+  `;
+}
+
 function _dateFilter(period, col) {
   const maxDate = `(SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas])`;
   if (period === 'day')   return `CAST(${col} AS DATE) = CAST(${maxDate} AS DATE)`;
@@ -206,4 +272,8 @@ module.exports = {
   buildSalesBySupplierQuery,
   buildDashboardKPIsQuery,
   buildTopProductsQuery,
+  buildSalesByHourQuery,
+  buildTopProductsByHourQuery,
+  buildSalesByMonthQuery,
+  buildTopProductsByMonthQuery,
 };
