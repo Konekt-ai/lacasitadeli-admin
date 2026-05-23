@@ -134,7 +134,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
   }));
 
   return (
-    <section className="p-8 max-w-7xl mx-auto w-full">
+    <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
       {/* DB error banner */}
       {dbStatus === 'error' && (
         <div className="bg-error-container border border-error/20 rounded-xl p-4 flex items-center gap-3 mb-8">
@@ -147,13 +147,13 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
 
       {/* ── KPI Cards ─────────────────────────────────────────────────────────── */}
       {loading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-10">
           {[0,1,2,3].map(i => (
             <div key={i} className="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/15 h-28 animate-pulse bg-stone-100" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-10">
           {kpiCards.map((card, i) => (
             <div key={i} className={cn(
               'bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between shadow-[0px_12px_32px_rgba(28,28,25,0.04)]',
@@ -180,10 +180,10 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
       )}
 
       {/* ── Top Productos + Barra de Ganancia ────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8 mb-6 lg:mb-10">
 
         {/* Gráfica de barras */}
-        <div className="lg:col-span-2 bg-surface p-8 rounded-xl border border-outline-variant/10">
+        <div className="lg:col-span-2 bg-surface p-4 sm:p-6 lg:p-8 rounded-xl border border-outline-variant/10">
           <div className="flex justify-between items-baseline mb-2">
             <h3 className="text-2xl font-serif italic text-primary">Top Productos</h3>
             <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">{PERIOD_LABEL[period]}</span>
@@ -240,7 +240,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
         </div>
 
         {/* Lista Top Productos */}
-        <div className="bg-surface-container-low p-8 rounded-xl border border-outline-variant/10">
+        <div className="bg-surface-container-low p-4 sm:p-6 lg:p-8 rounded-xl border border-outline-variant/10">
           <h3 className="text-xl font-serif text-primary mb-1">Top 10 Productos</h3>
           <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest mb-6">{PERIOD_LABEL[period]}</p>
           <div className="space-y-4">

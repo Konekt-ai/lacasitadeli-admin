@@ -5,7 +5,7 @@ export interface Product {
   category: string | null; categoryId: number | null; createdAt: string;
 }
 
-export interface Category { id: number; name: string; description: string | null; }
+export interface Category { id: string | number; name: string; description?: string | null; }
 
 export interface SalesSummary {
   totalVentas: number; totalIngresos: number; ticketPromedio: number;

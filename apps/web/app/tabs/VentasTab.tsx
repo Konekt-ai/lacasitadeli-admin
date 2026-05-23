@@ -108,7 +108,7 @@ export default function VentasTab() {
   }, [heatmapData, selectedProducts]);
 
   return (
-    <section className="p-8 max-w-7xl mx-auto w-full space-y-8">
+    <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6 lg:space-y-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>

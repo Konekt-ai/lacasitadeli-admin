@@ -10,6 +10,12 @@ function getDb() {
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
   _db.exec(`
+    CREATE TABLE IF NOT EXISTS product_overrides (
+      art_codigo   TEXT PRIMARY KEY,
+      image_url    TEXT,
+      min_stock    INTEGER,
+      updated_at   TEXT DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS categorias (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       nombre      TEXT NOT NULL UNIQUE,

@@ -18,15 +18,26 @@ const {
 
 const router = express.Router();
 
-// Helper para obtener la fecha máxima una sola vez súper rápido
+// ── In-memory TTL cache ───────────────────────────────────────────────────────
+const _cache = new Map();
+const _get = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
+const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
+
+// ── getMaxDateString — cached 10 min (data is historical, never changes) ─────
+let _maxDate = null;
+let _maxDateExp = 0;
 async function getMaxDateString() {
+  if (_maxDate && Date.now() < _maxDateExp) return _maxDate;
   try {
-    const res = await mssql.query('SELECT MAX(Fecha) as mDate FROM [compucaja].[dbo].[VBasePolizaVentas]');
+    const res = await mssql.query(
+      'SELECT MAX(Fecha) as mDate FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)'
+    );
     const date = res.recordset[0]?.mDate || new Date();
-    // Lo convertimos a formato YYYY-MM-DD HH:mm:ss seguro para SQL
-    return date.toISOString().slice(0, 19).replace('T', ' ');
-  } catch (err) {
-    return new Date().toISOString().slice(0, 19).replace('T', ' ');
+    _maxDate    = date.toISOString().slice(0, 19).replace('T', ' ');
+    _maxDateExp = Date.now() + 600_000; // 10 min
+    return _maxDate;
+  } catch {
+    return _maxDate || new Date().toISOString().slice(0, 19).replace('T', ' ');
   }
 }
 
@@ -107,34 +118,46 @@ router.get('/sales/by-supplier', async (req, res) => {
   }
 });
 
-// ── GET /api/novacaja/analytics ───────────────────────────────────────────────
+// ── GET /api/novacaja/analytics — cached 5 min ────────────────────────────────
 router.get('/analytics', async (req, res) => {
   const { months = 3 } = req.query;
-  const m = Math.min(parseInt(months) || 3, 12);
+  const m        = Math.min(parseInt(months) || 3, 12);
+  const cacheKey = `analytics:${m}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
 
   try {
     const maxDate = await getMaxDateString();
 
-    const byHour = await mssql.query(buildSalesByHourQuery({ months: m, maxDate }));
-    const byMonth = await mssql.query(buildSalesByMonthQuery({ months: m, maxDate }));
-    const productsByHour = await mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10, maxDate }));
-    const productsByMonth = await mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8, maxDate }));
+    const [byHour, byMonth, productsByHour, productsByMonth] = await Promise.all([
+      mssql.query(buildSalesByHourQuery({ months: m, maxDate })),
+      mssql.query(buildSalesByMonthQuery({ months: m, maxDate })),
+      mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10, maxDate })),
+      mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8, maxDate })),
+    ]);
 
-    res.json({
+    const result = {
       byHour:          byHour.recordset          || [],
       byMonth:         byMonth.recordset         || [],
       productsByHour:  productsByHour.recordset  || [],
       productsByMonth: productsByMonth.recordset || [],
-    });
+    };
+
+    _set(cacheKey, result, 300_000); // 5 min
+    res.json(result);
   } catch (err) {
     console.error('Error analytics:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/novacaja/dashboard ───────────────────────────────────────────────
+// ── GET /api/novacaja/dashboard — cached 45 s per period ─────────────────────
 router.get('/dashboard', async (req, res) => {
   const { period = 'day' } = req.query;
+  const cacheKey = `dashboard:${period}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
+
   const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
 
   try {
@@ -146,22 +169,22 @@ router.get('/dashboard', async (req, res) => {
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
-      mssql.query(buildDashboardLowStockCountQuery())
+      mssql.query(buildDashboardLowStockCountQuery()),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
-    const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts || 0;
+    const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
 
     const kpisFull = {
       ...(kpiRes.recordset[0] || {}),
       totalProducts,
       lowStockAlerts,
-      alerts: lowStockAlerts,
+      alerts:    lowStockAlerts,
       productos: totalProducts,
-      alertas: lowStockAlerts
+      alertas:   lowStockAlerts,
     };
 
-    res.json({
+    const result = {
       kpis:         kpisFull,
       totalProducts,
       lowStockAlerts,
@@ -171,7 +194,10 @@ router.get('/dashboard', async (req, res) => {
       topProducts:  topRes.recordset        || [],
       byDay:        byDayRes.recordset      || [],
       bySupplier:   bySupplierRes.recordset || [],
-    });
+    };
+
+    _set(cacheKey, result, 45_000); // 45 s
+    res.json(result);
   } catch (err) {
     console.error('Error dashboard:', err.message);
     res.status(500).json({ error: err.message });
@@ -180,19 +206,21 @@ router.get('/dashboard', async (req, res) => {
 
 // ── GET /api/novacaja/suppliers ───────────────────────────────────────────────
 router.get('/suppliers', async (req, res) => {
+  const cached = _get('suppliers');
+  if (cached) return res.json(cached);
   try {
     const result = await mssql.query(`
       SELECT
-        Pro_Codigo              AS id,
-        Pro_Nombre              AS nombre,
-        Pro_ComprasAcumuladas   AS comprasAcumuladas,
-        Pro_ServAcumuladas      AS serviciosAcumulados
-      FROM [compucaja].[dbo].[Proveedores]
+        Pro_Codigo                                    AS id,
+        ISNULL(CAST(Pro_Nombre AS NVARCHAR(500)), '') AS nombre,
+        Pro_ComprasAcumuladas                         AS comprasAcumuladas
+      FROM [compucaja].[dbo].[Proveedores] WITH (NOLOCK)
       WHERE Pro_Bloqueado = 0
         AND Pro_Nombre IS NOT NULL
-        AND Pro_Nombre <> ''
-      ORDER BY Pro_Nombre
+        AND LEN(CAST(Pro_Nombre AS NVARCHAR(500))) > 0
+      ORDER BY CAST(Pro_Nombre AS NVARCHAR(500))
     `);
+    _set('suppliers', result.recordset, 300_000); // 5 min
     res.json(result.recordset);
   } catch (err) {
     console.error('Error proveedores:', err.message);
@@ -200,16 +228,188 @@ router.get('/suppliers', async (req, res) => {
   }
 });
 
-// ── GET /api/novacaja/poliza-ventas ───────────────────────────────────────────
-// Params: period=day|week|month  (default: day)
-//         date=YYYY-MM-DD        (override manual — ignora period)
-// Limits: day→2000  week→5000  month→7000
+// ── GET /api/novacaja/proveedores — cached 60 s per period+limit ──────────────
+router.get('/proveedores', async (req, res) => {
+  const { period = 'day', limit = 50 } = req.query;
+  const topLimit = Math.min(Math.max(parseInt(limit) || 50, 1), 202);
+  const cacheKey = `proveedores:${period}:${topLimit}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const maxDate = await getMaxDateString();
+
+    let joinFilter;
+    if (period === 'week')       joinFilter = `v.Fecha >= DATEADD(DAY, -7,  '${maxDate}')`;
+    else if (period === 'month') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
+    else                         joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+
+    const [suppRes, totalRes] = await Promise.all([
+      mssql.query(`
+        SELECT TOP ${topLimit}
+          p.Pro_Codigo                                               AS id,
+          ISNULL(CAST(p.Pro_Nombre          AS NVARCHAR(500)), '')  AS nombre,
+          ISNULL(CAST(p.Pro_ApellidoPaterno AS NVARCHAR(500)), '')  AS apellidoPaterno,
+          ISNULL(CAST(p.Pro_ApellidoMaterno AS NVARCHAR(500)), '')  AS apellidoMaterno,
+          ISNULL(CAST(p.Pro_RegistroTributario AS NVARCHAR(100)), '') AS rfc,
+          ISNULL(CAST(p.Pro_SiglasRT        AS NVARCHAR(50)),  '')  AS siglasRT,
+          ISNULL(CAST(p.Pro_Telefono1       AS NVARCHAR(50)),  '')  AS telefono1,
+          ISNULL(CAST(p.Pro_Url             AS NVARCHAR(500)), '')  AS url,
+          ISNULL(CAST(p.Pro_Domicilio       AS NVARCHAR(500)), '')  AS domicilio,
+          ISNULL(CAST(p.Pro_Estado          AS NVARCHAR(100)), '')  AS estado,
+          ISNULL(CAST(p.Pro_Municipio       AS NVARCHAR(100)), '')  AS municipio,
+          ISNULL(CAST(p.Pro_Pais            AS NVARCHAR(50)),  '')  AS pais,
+          ISNULL(CAST(p.Pro_CP              AS NVARCHAR(20)),  '')  AS cp,
+          ISNULL(p.Pro_ComprasAcumuladas, 0)                        AS comprasAcumuladas,
+          p.Pro_FechaUltimaCompra                                   AS fechaUltimaCompra,
+          COUNT(DISTINCT pa.Art_Codigo)                             AS totalProductos,
+          ISNULL(SUM(v.importe), 0)                                 AS totalVentas,
+          ISNULL(SUM(v.Costo), 0)                                   AS totalCosto,
+          ISNULL(SUM(v.importe) - SUM(v.Costo), 0)                  AS ganancia,
+          ISNULL(COUNT(DISTINCT v.ticket), 0)                       AS totalTickets,
+          ISNULL(SUM(v.cantidad), 0)                                AS unidadesVendidas
+        FROM [compucaja].[dbo].[Proveedores] p WITH (NOLOCK)
+        LEFT JOIN [compucaja].[dbo].[ProveedoresArticulo] pa WITH (NOLOCK)
+          ON pa.Pro_Codigo = p.Pro_Codigo
+        LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+          ON v.producto = pa.Art_Codigo
+          AND ${joinFilter}
+        WHERE p.Pro_Bloqueado = 0
+          AND p.Pro_Nombre IS NOT NULL
+          AND LEN(CAST(p.Pro_Nombre AS NVARCHAR(500))) > 0
+        GROUP BY
+          p.Pro_Codigo,
+          CAST(p.Pro_Nombre          AS NVARCHAR(500)),
+          CAST(p.Pro_ApellidoPaterno AS NVARCHAR(500)),
+          CAST(p.Pro_ApellidoMaterno AS NVARCHAR(500)),
+          CAST(p.Pro_RegistroTributario AS NVARCHAR(100)),
+          CAST(p.Pro_SiglasRT        AS NVARCHAR(50)),
+          CAST(p.Pro_Telefono1       AS NVARCHAR(50)),
+          CAST(p.Pro_Url             AS NVARCHAR(500)),
+          CAST(p.Pro_Domicilio       AS NVARCHAR(500)),
+          CAST(p.Pro_Estado          AS NVARCHAR(100)),
+          CAST(p.Pro_Municipio       AS NVARCHAR(100)),
+          CAST(p.Pro_Pais            AS NVARCHAR(50)),
+          CAST(p.Pro_CP              AS NVARCHAR(20)),
+          p.Pro_ComprasAcumuladas,
+          p.Pro_FechaUltimaCompra
+        ORDER BY ISNULL(SUM(v.importe), 0) DESC
+      `),
+      mssql.query(`
+        SELECT COUNT(*) AS total
+        FROM [compucaja].[dbo].[Proveedores] WITH (NOLOCK)
+        WHERE Pro_Bloqueado = 0
+          AND Pro_Nombre IS NOT NULL
+          AND LEN(CAST(Pro_Nombre AS NVARCHAR(500))) > 0
+      `),
+    ]);
+
+    const result = {
+      suppliers: suppRes.recordset || [],
+      total:     totalRes.recordset[0]?.total || 0,
+      period,
+    };
+
+    _set(cacheKey, result, 60_000); // 60 s
+    res.json(result);
+  } catch (err) {
+    console.error('Error proveedores:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/proveedores/:id/products ────────────────────────────────
+router.get('/proveedores/:id/products', async (req, res) => {
+  const id     = String(req.params.id).replace(/'/g, "''");
+  const { period = 'day' } = req.query;
+  const cacheKey = `proveedor_prods:${id}:${period}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const maxDate = await getMaxDateString();
+
+    let joinFilter;
+    if (period === 'week')       joinFilter = `v.Fecha >= DATEADD(DAY, -7,  '${maxDate}')`;
+    else if (period === 'month') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
+    else                         joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+
+    const result = await mssql.query(`
+      SELECT TOP 10
+        pa.Art_Codigo                                  AS productCode,
+        ISNULL(a.Art_Descripcion, pa.Art_Codigo)       AS name,
+        ISNULL(SUM(v.cantidad), 0)                     AS unidadesVendidas,
+        ISNULL(SUM(v.importe), 0)                      AS ingresos,
+        ISNULL(SUM(v.Costo), 0)                        AS costo
+      FROM [compucaja].[dbo].[ProveedoresArticulo] pa WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        ON a.Art_Codigo = pa.Art_Codigo
+      LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+        ON v.producto = pa.Art_Codigo AND ${joinFilter}
+      WHERE pa.Pro_Codigo = '${id}'
+      GROUP BY pa.Art_Codigo, a.Art_Descripcion
+      ORDER BY ISNULL(SUM(v.importe), 0) DESC
+    `);
+
+    const data = result.recordset || [];
+    _set(cacheKey, data, 60_000); // 60 s
+    res.json(data);
+  } catch (err) {
+    console.error('Error productos proveedor:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/novacaja/proveedores ────────────────────────────────────────────
+router.post('/proveedores', async (req, res) => {
+  const { nombre, rfc, telefono1, url, domicilio, estado, municipio, pais, cp } = req.body;
+  if (!nombre || !nombre.trim()) return res.status(400).json({ error: 'El nombre es requerido' });
+
+  const esc = s => s ? String(s).replace(/'/g, "''").trim() : '';
+
+  try {
+    const maxRes = await mssql.query(`
+      SELECT ISNULL(MAX(TRY_CAST(Pro_Codigo AS BIGINT)), 1000) + 1 AS nextId
+      FROM [compucaja].[dbo].[Proveedores]
+    `);
+    const nextId = maxRes.recordset[0]?.nextId || 9001;
+
+    await mssql.query(`
+      INSERT INTO [compucaja].[dbo].[Proveedores]
+        (Pro_Codigo, Pro_Nombre, Pro_RegistroTributario, Pro_SiglasRT,
+         Pro_Telefono1, Pro_Url, Pro_Domicilio, Pro_Estado,
+         Pro_Municipio, Pro_CP, Pro_Pais, Pro_Bloqueado,
+         Pro_FechaAlta, Pro_FechaActualizacion)
+      VALUES
+        ('${nextId}', '${esc(nombre)}', '${esc(rfc)}', 'RFC',
+         '${esc(telefono1)}', '${esc(url)}', '${esc(domicilio)}', '${esc(estado)}',
+         '${esc(municipio)}', '${esc(cp)}', '${esc(pais) || 'MEX'}', 0,
+         GETDATE(), GETDATE())
+    `);
+
+    // Invalidate supplier caches
+    for (const k of _cache.keys()) {
+      if (k.startsWith('proveedores:') || k === 'suppliers') _cache.delete(k);
+    }
+
+    res.status(201).json({ id: String(nextId), message: 'Proveedor agregado correctamente' });
+  } catch (err) {
+    console.error('Error creando proveedor:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/poliza-ventas — cached 30 s per period ──────────────────
 router.get('/poliza-ventas', async (req, res) => {
   const { date, period = 'day' } = req.query;
 
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return res.status(400).json({ error: 'Formato de fecha inválido (esperado YYYY-MM-DD)' });
   }
+
+  const cacheKey = date ? `poliza:date:${date}` : `poliza:${period}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
 
   try {
     const maxDate = await getMaxDateString();
@@ -229,7 +429,7 @@ router.get('/poliza-ventas', async (req, res) => {
           whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`;
           topLimit    = 7000;
           break;
-        default: // day
+        default:
           whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
           topLimit    = 2000;
       }
@@ -239,20 +439,20 @@ router.get('/poliza-ventas', async (req, res) => {
       mssql.query(`
         SELECT TOP ${topLimit}
           ticket,
-          MAX(Fecha)               AS fecha,
-          MAX(factura)             AS factura,
-          SUM(importe)             AS totalImporte,
-          SUM(CostoImp)            AS totalCosto,
-          SUM(importe) - SUM(CostoImp) AS ganancia,
-          COUNT(*)                 AS numProductos
-        FROM [compucaja].[dbo].[VBasePolizaVentas]
+          MAX(Fecha)                    AS fecha,
+          MAX(factura)                  AS factura,
+          SUM(importe)                  AS totalImporte,
+          SUM(CostoImp)                 AS totalCosto,
+          SUM(importe) - SUM(CostoImp)  AS ganancia,
+          COUNT(*)                      AS numProductos
+        FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
         ${whereClause}
         GROUP BY ticket
         ORDER BY MAX(Fecha) DESC
       `),
       mssql.query(`
         SELECT COUNT(DISTINCT ticket) AS totalTickets
-        FROM [compucaja].[dbo].[VBasePolizaVentas]
+        FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
         ${whereClause}
       `),
     ]);
@@ -267,7 +467,9 @@ router.get('/poliza-ventas', async (req, res) => {
       numTickets:    rows.length,
     };
 
-    res.json({ tickets: rows, summary, totalTickets, limit: topLimit });
+    const result = { tickets: rows, summary, totalTickets, limit: topLimit };
+    _set(cacheKey, result, 30_000); // 30 s
+    res.json(result);
   } catch (err) {
     console.error('Error poliza ventas:', err.message);
     res.status(500).json({ error: err.message });
@@ -275,8 +477,6 @@ router.get('/poliza-ventas', async (req, res) => {
 });
 
 // ── GET /api/novacaja/poliza-ventas/export ────────────────────────────────────
-// Sin límite TOP — para descarga completa del periodo
-// Params: period=day|week|month  |  startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 router.get('/poliza-ventas/export', async (req, res) => {
   const { period = 'day', startDate, endDate } = req.query;
 
@@ -294,28 +494,23 @@ router.get('/poliza-ventas/export', async (req, res) => {
       whereClause = `WHERE CAST(Fecha AS DATE) >= '${startDate}'`;
     } else {
       switch (period) {
-        case 'week':
-          whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`;
-          break;
-        case 'month':
-          whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`;
-          break;
-        default:
-          whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+        case 'week':  whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`; break;
+        case 'month': whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`; break;
+        default:      whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
       }
     }
 
     const result = await mssql.query(`
       SELECT TOP 50000
         ticket,
-        CONVERT(varchar(19), MAX(Fecha), 120) AS fecha,
-        MAX(factura)                           AS factura,
-        SUM(cantidad)                          AS totalArticulos,
-        SUM(importe)                           AS totalImporte,
-        SUM(CostoImp)                          AS totalCosto,
-        SUM(importe) - SUM(CostoImp)           AS ganancia,
-        COUNT(*)                               AS numLineas
-      FROM [compucaja].[dbo].[VBasePolizaVentas]
+        CONVERT(varchar(19), MAX(Fecha), 120)  AS fecha,
+        MAX(factura)                            AS factura,
+        SUM(cantidad)                           AS totalArticulos,
+        SUM(importe)                            AS totalImporte,
+        SUM(CostoImp)                           AS totalCosto,
+        SUM(importe) - SUM(CostoImp)            AS ganancia,
+        COUNT(*)                                AS numLineas
+      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
       ${whereClause}
       GROUP BY ticket
       ORDER BY MAX(Fecha) DESC

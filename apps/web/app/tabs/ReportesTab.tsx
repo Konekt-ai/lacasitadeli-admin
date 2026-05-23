@@ -46,20 +46,20 @@ export default function ReportesTab({ timeFilter }: Props) {
   const limitReached = tickets.length >= config.limit && totalTickets > config.limit;
 
   return (
-    <section className="p-8 max-w-7xl mx-auto w-full">
+    <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}
 
       {/* Header */}
-      <div className="flex justify-between items-end mb-8">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-6 lg:mb-8">
         <div>
-          <h2 className="text-3xl font-serif italic text-primary">Reporte de Ventas</h2>
+          <h2 className="text-2xl lg:text-3xl font-serif italic text-primary">Reporte de Ventas</h2>
           <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
-            Ganancias {config.label} · mostrando hasta {config.limit.toLocaleString('es-MX')} tickets
+            Ganancias {config.label} · hasta {config.limit.toLocaleString('es-MX')} tickets
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {/* Indicador del periodo activo */}
-          <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-lg px-4 py-2">
+          <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-lg px-3 py-2">
             <Icon name={timeFilter === 'Hoy' ? 'today' : timeFilter === 'Esta semana' ? 'date_range' : 'calendar_month'} className="text-primary text-base" />
             <span className="text-xs font-label font-bold text-primary uppercase tracking-widest">{timeFilter}</span>
           </div>
@@ -68,15 +68,16 @@ export default function ReportesTab({ timeFilter }: Props) {
             className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', loading && 'animate-spin')}>
             <Icon name="refresh" />
           </button>
-          <button onClick={() => setShowExport(true)} className="px-5 py-2 bg-primary text-on-primary rounded-lg text-sm font-label font-bold flex items-center gap-2 hover:bg-primary-container transition-all shadow-md">
-            <Icon name="download" className="text-base" /> Exportar
+          <button onClick={() => setShowExport(true)} className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold flex items-center gap-2 hover:bg-primary-container transition-all shadow-md">
+            <Icon name="download" className="text-base" />
+            <span className="hidden sm:inline">Exportar</span>
           </button>
         </div>
       </div>
 
       {/* Summary cards */}
       {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4 mb-6">
           {[
             {
               label: 'Tickets',

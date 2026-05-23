@@ -1,4 +1,3 @@
-// Conexión de solo lectura a la base novacaja22 (POS del cliente)
 const sql = require('mssql');
 require('dotenv').config();
 
@@ -13,14 +12,20 @@ const config = {
     trustServerCertificate: true,
     enableArithAbort:       true,
   },
-  connectionTimeout: 60000, // Aumentado a 60 segundos
-  requestTimeout:    60000, // Aumentado a 60 segundos
+  pool: {
+    max:                  10,
+    min:                  2,
+    idleTimeoutMillis:    30_000,
+    acquireTimeoutMillis: 15_000,
+  },
+  connectionTimeout: 30_000,
+  requestTimeout:    60_000,
 };
 
 let pool = null;
 
 async function getPool() {
-  if (pool && pool.connected) return pool;
+  if (pool && pool.connected && !pool._destroyed) return pool;
   pool = await sql.connect(config);
   return pool;
 }
@@ -33,5 +38,8 @@ async function query(queryStr, params = {}) {
   }
   return req.query(queryStr);
 }
+
+// Pre-warm the connection when the module loads so the first request is fast
+getPool().catch(() => {});
 
 module.exports = { getPool, query, sql };
