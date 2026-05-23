@@ -3,12 +3,15 @@ const mssql    = require('../db/mssql');
 const {
   buildProductsQuery,
   buildProductsCountQuery,
+  buildDashboardProductsCountQuery,
+  buildDashboardLowStockCountQuery,
   buildSalesQuery,
   buildSalesByDayQuery,
   buildSalesBySupplierQuery,
   buildDashboardKPIsQuery,
   buildTopProductsQuery,
 } = require('../config/novacaja-mapping');
+
 const router = express.Router();
 
 // ── GET /api/novacaja/status ──────────────────────────────────────────────────
@@ -26,8 +29,6 @@ router.get('/status', async (req, res) => {
 });
 
 // ── GET /api/novacaja/products ────────────────────────────────────────────────
-// Paginación: ?q=busqueda&page=1&pageSize=200
-// Sin búsqueda devuelve página a página todos los 57k productos
 router.get('/products', async (req, res) => {
   const { q = '', page = 1, pageSize = 200 } = req.query;
   const offset   = (parseInt(page) - 1) * parseInt(pageSize);
@@ -52,7 +53,6 @@ router.get('/products', async (req, res) => {
 });
 
 // ── GET /api/novacaja/sales ───────────────────────────────────────────────────
-// ?period=day|week|month
 router.get('/sales', async (req, res) => {
   const { period = 'day', limit } = req.query;
   try {
@@ -65,7 +65,6 @@ router.get('/sales', async (req, res) => {
 });
 
 // ── GET /api/novacaja/sales/by-day ───────────────────────────────────────────
-// ?days=30
 router.get('/sales/by-day', async (req, res) => {
   const { days = 30 } = req.query;
   try {
@@ -78,7 +77,6 @@ router.get('/sales/by-day', async (req, res) => {
 });
 
 // ── GET /api/novacaja/sales/by-supplier ──────────────────────────────────────
-// ?period=day|week|month
 router.get('/sales/by-supplier', async (req, res) => {
   const { period = 'month' } = req.query;
   try {
@@ -91,24 +89,43 @@ router.get('/sales/by-supplier', async (req, res) => {
 });
 
 // ── GET /api/novacaja/dashboard ───────────────────────────────────────────────
-// ?period=day|week|month
 router.get('/dashboard', async (req, res) => {
   const { period = 'day' } = req.query;
   const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
 
   try {
-    const [kpiRes, topRes, byDayRes, bySupplierRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period })),
       mssql.query(buildTopProductsQuery({ period, limit: 10 })),
       mssql.query(buildSalesByDayQuery({ days })),
       mssql.query(buildSalesBySupplierQuery({ period })),
+      mssql.query(buildDashboardProductsCountQuery()),
+      mssql.query(buildDashboardLowStockCountQuery())
     ]);
 
+    const totalProducts = prodCountRes.recordset[0]?.totalProducts || 0;
+    const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts || 0;
+
+    // Se construye el objeto KPI inyectando los datos de inventario calculados
+    const kpisFull = {
+      ...(kpiRes.recordset[0] || {}),
+      totalProducts,
+      lowStockAlerts,
+      alerts: lowStockAlerts,
+      productos: totalProducts,
+      alertas: lowStockAlerts
+    };
+
     res.json({
-      kpis:       kpiRes.recordset[0]     || {},
-      topProducts: topRes.recordset       || [],
-      byDay:       byDayRes.recordset     || [],
-      bySupplier:  bySupplierRes.recordset || [],
+      kpis:         kpisFull,
+      totalProducts,
+      lowStockAlerts,
+      alerts:       lowStockAlerts,
+      productos:    totalProducts,
+      alertas:      lowStockAlerts,
+      topProducts:  topRes.recordset        || [],
+      byDay:        byDayRes.recordset      || [],
+      bySupplier:   bySupplierRes.recordset || [],
     });
   } catch (err) {
     console.error('Error dashboard:', err.message);

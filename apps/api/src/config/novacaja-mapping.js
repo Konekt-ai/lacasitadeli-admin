@@ -1,10 +1,8 @@
-// ── Mapeo real de compucaja — vistas y tablas confirmadas 2026-05-22
+// ── Mapeo real de compucaja — vistas y tablas confirmadas
 // Precio: ListaPreciosArt.LPA_PrecioVentaImp (LP_Codigo=1)
 // Stock:  ArticulosAlmacen.AA_ExistenciaActualU (SUM por almacén)
 
 // ── INVENTARIO ────────────────────────────────────────────────────────────────
-// Sin TOP — trae los 57,908 productos completos.
-// Paginación opcional con ?page=N&pageSize=N en el endpoint.
 function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
   const whereSearch = search
     ? `AND (
@@ -16,11 +14,10 @@ function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
       )`
     : '';
 
-  // OFFSET/FETCH para paginación eficiente en SQL Server 2012+
   return `
     SELECT
       a.Art_Codigo                                      AS id,
-      ISNULL(a.Art_GTIN, a.CodAlt_Codigo)              AS barcode,
+      ISNULL(a.Art_GTIN, a.CodAlt_Codigo)               AS barcode,
       a.Art_Descripcion                                 AS name,
       a.Art_Alias                                       AS alias,
       ISNULL(a.Art_UltimoCosto, 0)                      AS costPrice,
@@ -52,7 +49,6 @@ function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
   `;
 }
 
-// Conteo total (para paginación en el frontend)
 function buildProductsCountQuery({ search = '' } = {}) {
   const whereSearch = search
     ? `AND (
@@ -68,6 +64,30 @@ function buildProductsCountQuery({ search = '' } = {}) {
     WHERE a.Art_Descripcion <> ''
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
+  `;
+}
+
+// Conteo global de productos para las métricas del Dashboard
+function buildDashboardProductsCountQuery() {
+  return `
+    SELECT COUNT(*) AS totalProducts 
+    FROM [compucaja].[dbo].[VArticulosUnificados] a
+    WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+  `;
+}
+
+// Conteo de alertas de stock (Artículos con existencia total <= 5)
+function buildDashboardLowStockCountQuery() {
+  return `
+    SELECT COUNT(*) AS lowStockAlerts
+    FROM (
+      SELECT a.Art_Codigo
+      FROM [compucaja].[dbo].[VArticulosUnificados] a
+      LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa ON aa.Art_Codigo = a.Art_Codigo
+      WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+      GROUP BY a.Art_Codigo
+      HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= 5
+    ) AS sub
   `;
 }
 
@@ -91,8 +111,8 @@ function buildSalesQuery({ period = 'day', limit = 5000 } = {}) {
   `;
 }
 
-// ── Ventas agrupadas por día ──────────────────────────────────────────────────
 function buildSalesByDayQuery({ days = 30 } = {}) {
+  const maxDate = `(SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas])`;
   return `
     SELECT
       CAST(v.Fecha AS DATE)        AS fecha,
@@ -101,13 +121,12 @@ function buildSalesByDayQuery({ days = 30 } = {}) {
       SUM(v.importe)               AS totalVentas,
       SUM(v.Costo)                 AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v
-    WHERE v.Fecha >= DATEADD(DAY, -${days}, GETDATE())
+    WHERE v.Fecha >= DATEADD(DAY, -${days}, ${maxDate})
     GROUP BY CAST(v.Fecha AS DATE)
     ORDER BY CAST(v.Fecha AS DATE) ASC
   `;
 }
 
-// ── Ventas por proveedor ──────────────────────────────────────────────────────
 function buildSalesBySupplierQuery({ period = 'month' } = {}) {
   const dateFilter = _dateFilter(period, 'v.Fecha');
   return `
@@ -128,7 +147,6 @@ function buildSalesBySupplierQuery({ period = 'month' } = {}) {
   `;
 }
 
-// ── KPIs Dashboard ────────────────────────────────────────────────────────────
 function buildDashboardKPIsQuery({ period = 'day' } = {}) {
   const dateFilter = _dateFilter(period, 'v.Fecha');
   return `
@@ -147,10 +165,9 @@ function buildDashboardKPIsQuery({ period = 'day' } = {}) {
       GROUP BY ticket
     ) sub ON sub.ticket = v.ticket
     WHERE ${dateFilter}
-  `;
+  ```;
 }
 
-// ── Top productos más vendidos ────────────────────────────────────────────────
 function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
   const dateFilter = _dateFilter(period, 'v.Fecha');
   return `
@@ -171,17 +188,19 @@ function buildTopProductsQuery({ period = 'day', limit = 10 } = {}) {
   `;
 }
 
-// ── Helper interno ────────────────────────────────────────────────────────────
 function _dateFilter(period, col) {
-  if (period === 'day')   return `CAST(${col} AS DATE) = CAST(GETDATE() AS DATE)`;
-  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  GETDATE())`;
-  if (period === 'month') return `${col} >= DATEADD(DAY, -30, GETDATE())`;
-  return `CAST(${col} AS DATE) = CAST(GETDATE() AS DATE)`;
+  const maxDate = `(SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas])`;
+  if (period === 'day')   return `CAST(${col} AS DATE) = CAST(${maxDate} AS DATE)`;
+  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  ${maxDate})`;
+  if (period === 'month') return `${col} >= DATEADD(DAY, -30, ${maxDate})`;
+  return `CAST(${col} AS DATE) = CAST(${maxDate} AS DATE)`;
 }
 
 module.exports = {
   buildProductsQuery,
   buildProductsCountQuery,
+  buildDashboardProductsCountQuery,
+  buildDashboardLowStockCountQuery,
   buildSalesQuery,
   buildSalesByDayQuery,
   buildSalesBySupplierQuery,

@@ -122,17 +122,23 @@ export default function Dashboard() {
       }
 
       const [prodRes, catRes, salesRes, healthRes] = await Promise.all([
-        fetch('/api/products').then(r => r.json()),
+        // AQUÍ ESTÁ EL CAMBIO: Le pedimos a la API que traiga hasta 100,000 productos
+        fetch('/api/products?pageSize=100000').then(r => r.json()),
         fetch('/api/products/categories').then(r => r.json()),
-        fetch(`/api/sales/report?date=${dateParam}`).then(r => r.json()),
+        fetch(`/api/sales/report?date=${dateParam}`).then(r => r.json()).catch(() => null),
         fetch('/api/health').then(r => r.json()).catch(() => ({ status: 'error' })),
       ]);
 
       if (Array.isArray(prodRes)) setProducts(prodRes);
+      else if (prodRes && Array.isArray(prodRes.data)) setProducts(prodRes.data);
+
       if (Array.isArray(catRes))  setCategories(catRes);
+      else if (catRes && Array.isArray(catRes.data)) setCategories(catRes.data);
+
       if (salesRes?.summary)      setSalesSummary(salesRes.summary);
       if (salesRes?.ventas)       setRecentSales(salesRes.ventas);
       if (salesRes?.topProducts)  setTopProducts(salesRes.topProducts);
+      
       setDbStatus(healthRes?.db === 'connected' ? 'ok' : 'error');
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -436,9 +442,10 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
-                {/* Simulated Bar Chart Placeholder or actual BarChart */}
-                <div className="h-64">
-                   <ResponsiveContainer width="100%" height="100%">
+                
+                {/* Gráfica de ingresos */}
+                <div className="h-80 w-full min-h-[300px]" style={{ minWidth: 0, minHeight: 0 }}>
+                   <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1}>
                     <BarChart data={topProducts.slice(0, 7)}>
                       <Bar dataKey="ingresos" fill="#012d1d" radius={[4, 4, 0, 0]} />
                       <XAxis dataKey="name" hide />

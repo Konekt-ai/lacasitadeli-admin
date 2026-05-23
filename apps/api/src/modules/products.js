@@ -2,7 +2,8 @@ const express  = require('express');
 const { getDb } = require('../db');
 const mssql    = require('../db/mssql');
 const { buildProductsQuery, buildProductsCountQuery } = require('../config/novacaja-mapping');
-const router   = express.Router();
+
+const router = express.Router();
 
 // ── GET /api/products/categories ─────────────────────────────────────────────
 router.get('/categories', (req, res) => {
