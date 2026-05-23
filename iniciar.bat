@@ -4,31 +4,56 @@ color 0A
 cd /d "%~dp0"
 
 echo.
-echo  Iniciando La Casita Admin...
+echo  ====================================================
+echo    LA CASITA DELI  -  Panel Administrativo
+echo  ====================================================
 echo.
 
-:: Verificar que el .env exista
+:: ── Verificar .env ───────────────────────────────────────────────────────────
 if not exist "apps\api\.env" (
-  color 0C
-  echo  ERROR: No existe apps\api\.env
-  echo  Ejecuta instalar.bat primero.
-  pause & exit /b 1
+  color 0E
+  echo  No existe configuracion de base de datos.
+  echo  Abriendo configurar-env.bat...
+  echo.
+  call "%~dp0configurar-env.bat"
+  if errorlevel 1 exit /b 1
+  cls
+  color 0A
+  echo.
+  echo  ====================================================
+  echo    LA CASITA DELI  -  Panel Administrativo
+  echo  ====================================================
+  echo.
 )
 
-:: Iniciar API en una ventana separada
-start "La Casita - API" cmd /k "title La Casita API && cd /d "%~dp0apps\api" && npm run dev"
+:: ── Crear carpeta de logs ────────────────────────────────────────────────────
+if not exist "logs" mkdir logs
 
-:: Esperar 2 segundos y luego iniciar el frontend
+:: ── Detener proceso previo en el puerto 3002 (API) ───────────────────────────
+for /f "tokens=5" %%p in ('netstat -aon 2^>nul ^| findstr ":3002 " ^| findstr "LISTENING"') do (
+  taskkill /F /PID %%p >nul 2>&1
+)
+
+:: ── Iniciar API en fondo (sin ventana extra) ─────────────────────────────────
+echo  [1/2] Iniciando API...
+start /B cmd /c "cd /d "%~dp0apps\api" && node src\index.js >> "%~dp0logs\api.log" 2>&1"
 timeout /t 2 /nobreak >nul
-start "La Casita - Web" cmd /k "title La Casita WEB && cd /d "%~dp0apps\web" && npm run dev"
+echo         API lista en  http://localhost:3002
+echo         Log en        logs\api.log
+echo.
 
-:: Esperar que Next.js compile y abrir el navegador
-timeout /t 6 /nobreak >nul
-start http://localhost:3001
+:: ── Abrir navegador automaticamente despues de que Next.js este listo ────────
+start /B cmd /c "timeout /t 18 /nobreak >nul && start http://localhost:3001"
 
+:: ── Iniciar Next.js en esta misma ventana ───────────────────────────────────
+echo  [2/2] Iniciando panel web — espera ~20 seg...
+echo         Se abrira en   http://localhost:3001
 echo.
-echo  Panel abierto en http://localhost:3001
-echo  API corriendo en http://localhost:3002
+echo  --------------------------------------------------------
+echo   Deja esta ventana abierta mientras uses el panel.
+echo   Cierra la ventana para detener todo.
+echo  --------------------------------------------------------
 echo.
-echo  Cierra las ventanas de CMD para detener los servidores.
-echo.
+
+cd /d "%~dp0apps\web"
+call npm run dev
