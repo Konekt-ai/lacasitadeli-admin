@@ -14,6 +14,7 @@ const VentasTab     = dynamic(() => import('./tabs/VentasTab'),     { ssr: false
 const ReportesTab   = dynamic(() => import('./tabs/ReportesTab'),   { ssr: false });
 const AlertasTab      = dynamic(() => import('./tabs/AlertasTab'),      { ssr: false });
 const ProveedoresTab  = dynamic(() => import('./tabs/ProveedoresTab'),  { ssr: false });
+const BodegaTab       = dynamic(() => import('./tabs/BodegaTab'),       { ssr: false });
 
 const TABS = [
   { id: 'Dashboard',  label: 'Dashboard',  icon: 'dashboard' },
@@ -22,6 +23,7 @@ const TABS = [
   { id: 'Reportes',   label: 'Reportes',   icon: 'receipt_long' },
   { id: 'Alertas',     label: 'Alertas',     icon: 'notifications' },
   { id: 'Proveedores', label: 'Proveedores', icon: 'local_shipping' },
+  { id: 'Bodega',      label: 'Bodega',      icon: 'warehouse' },
 ] as const;
 
 const TabSpinner = () => (
@@ -102,6 +104,7 @@ export default function Dashboard() {
         {activeTab === 'Reportes'   && <ReportesTab timeFilter={timeFilter} />}
         {activeTab === 'Alertas'     && <AlertasTab     lowStockProducts={lowStockProducts} onRefresh={fetchData} />}
         {activeTab === 'Proveedores' && <ProveedoresTab timeFilter={timeFilter} />}
+        {activeTab === 'Bodega'      && <BodegaTab />}
       </Suspense>
     );
   };
@@ -138,21 +141,6 @@ export default function Dashboard() {
           ))}
         </nav>
 
-        <div className="px-4 mt-auto">
-          <div className="flex items-center px-2 py-4 border-t border-stone-200/50">
-            <div className="w-10 h-10 rounded-full bg-surface-container-highest overflow-hidden mr-3 border-2 border-primary/10">
-              <img alt="Staff" className="w-full h-full object-cover"
-                src="https://media.istockphoto.com/id/1300845620/es/vector/icono-de-usuario-plano-aislado-sobre-fondo-blanco-s%C3%ADmbolo-de-usuario-ilustraci%C3%B3n-vectorial.jpg?s=2048x2048&w=is&k=20&c=j5BJ73etsLPYk0gCN6_bdDcWevL934SiU6eSOwVceYM=" />
-            </div>
-            <div>
-              <p className="text-xs font-bold text-on-surface font-body">Admin Staff</p>
-              <p className="text-[10px] text-stone-400 font-label uppercase tracking-widest">Shift Manager</p>
-            </div>
-            <button className="ml-auto text-stone-300 hover:text-error transition-colors">
-              <Icon name="logout" className="text-lg" />
-            </button>
-          </div>
-        </div>
       </aside>
 
       {/* ── Main ──────────────────────────────────────────────────────────────── */}

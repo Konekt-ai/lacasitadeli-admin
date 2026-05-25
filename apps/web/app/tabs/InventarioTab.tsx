@@ -1,8 +1,16 @@
 'use client';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
-import type { Product, Category } from '../lib/types';
+import type { Product, Category, Area } from '../lib/types';
+
+const AREA_LABELS: Record<Area, string> = {
+  bodega: 'Bodega', cocina: 'Cocina', tienda: 'Tienda', refrigerador: 'Refri', otro: 'Otro',
+};
+const AREA_COLORS: Record<Area, string> = {
+  bodega: 'bg-blue-50 text-blue-700', cocina: 'bg-amber-50 text-amber-700',
+  tienda: 'bg-green-50 text-green-700', refrigerador: 'bg-cyan-50 text-cyan-700', otro: 'bg-stone-100 text-stone-600',
+};
 
 interface Props {
   products:         Product[];
@@ -21,7 +29,18 @@ interface PanelState {
 export default function InventarioTab({ products, lowStockProducts, categories, onRefresh, loading = false }: Props) {
   const [searchQuery,    setSearchQuery]    = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [areaFilter,     setAreaFilter]     = useState('');
   const [inventoryView,  setInventoryView]  = useState<'list' | 'grid'>('list');
+  const [locationMap,    setLocationMap]    = useState<Map<string, Area>>(new Map());
+
+  useEffect(() => {
+    fetch('/api/bodega/products-by-area')
+      .then(r => r.json())
+      .then((data: { art_codigo: string; area: Area }[]) => {
+        if (Array.isArray(data)) setLocationMap(new Map(data.map(r => [r.art_codigo, r.area])));
+      })
+      .catch(() => {/* silent */});
+  }, [products]);
 
   // Edit side-panel
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -40,13 +59,13 @@ export default function InventarioTab({ products, lowStockProducts, categories, 
     setTimeout(() => setNotif(null), 3000);
   };
 
-  // Category filter matches on the string field p.category (Org_Descripcion from MSSQL)
   const filtered = products.filter(p => {
     const matchSearch = !searchQuery ||
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (p.barcode || '').includes(searchQuery);
-    const matchCat = !categoryFilter || p.category === categoryFilter;
-    return matchSearch && matchCat;
+    const matchCat  = !categoryFilter || p.category === categoryFilter;
+    const matchArea = !areaFilter || (locationMap.get(String(p.id)) || 'bodega') === areaFilter;
+    return matchSearch && matchCat && matchArea;
   });
 
   // ── Edit panel ──────────────────────────────────────────────────────────────
@@ -269,11 +288,22 @@ export default function InventarioTab({ products, lowStockProducts, categories, 
             <select
               value={categoryFilter}
               onChange={e => setCategoryFilter(e.target.value)}
-              className="px-4 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer max-w-[220px]">
+              className="px-4 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer max-w-[180px]">
               <option value="">Todas las categorías</option>
               {categories.map((c, i) => (
                 <option key={`${c.id}-${i}`} value={String(c.name)}>{c.name}</option>
               ))}
+            </select>
+            <select
+              value={areaFilter}
+              onChange={e => setAreaFilter(e.target.value)}
+              className="px-4 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer max-w-[150px]">
+              <option value="">Todas las áreas</option>
+              <option value="bodega">Bodega</option>
+              <option value="cocina">Cocina</option>
+              <option value="tienda">Tienda</option>
+              <option value="refrigerador">Refrigerador</option>
+              <option value="otro">Otro</option>
             </select>
           </div>
           <div className="flex bg-background p-1 rounded-lg border border-outline-variant/10">
@@ -317,9 +347,20 @@ export default function InventarioTab({ products, lowStockProducts, categories, 
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-on-surface font-body text-sm truncate max-w-[280px]">{p.name}</p>
-                          <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase mt-0.5">
-                            {p.category || 'Sin categoría'}
-                          </p>
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase">
+                              {p.category || 'Sin categoría'}
+                            </p>
+                            {(() => {
+                              const area = locationMap.get(String(p.id));
+                              if (area && area !== 'bodega') return (
+                                <span className={cn('text-[8px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider', AREA_COLORS[area])}>
+                                  {AREA_LABELS[area]}
+                                </span>
+                              );
+                              return null;
+                            })()}
+                          </div>
                         </div>
                       </div>
                     </td>

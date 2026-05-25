@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
+import * as XLSX from 'xlsx';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
 
@@ -125,8 +126,55 @@ export default function ProveedoresTab({ timeFilter }: Props) {
   };
 
   const fmt = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
-  const maxVentas = Math.max(...suppliers.map(s => s.totalVentas), 1);
+  const maxVentas   = Math.max(...suppliers.map(s => s.totalVentas), 1);
   const totalPeriod = suppliers.reduce((sum, s) => sum + s.totalVentas, 0);
+
+  const exportToExcel = () => {
+    const headers = ['#', 'Proveedor', 'RFC', 'Productos', 'Ventas ($)', 'Costo ($)', 'Ganancia ($)', 'Margen (%)', 'Tickets', 'Últ. Compra'];
+    const rows = suppliers.map((s, i) => {
+      const margen = s.totalVentas > 0 ? parseFloat(((s.ganancia / s.totalVentas) * 100).toFixed(2)) : 0;
+      return [
+        i + 1,
+        displayName(s),
+        s.rfc || '',
+        s.totalProductos,
+        Number(s.totalVentas),
+        Number(s.totalCosto),
+        Number(s.ganancia),
+        margen,
+        s.totalTickets,
+        s.fechaUltimaCompra ? new Date(s.fechaUltimaCompra).toLocaleDateString('es-MX') : '',
+      ];
+    });
+
+    // Totals row
+    const totVentas   = suppliers.reduce((s, p) => s + p.totalVentas, 0);
+    const totCosto    = suppliers.reduce((s, p) => s + p.totalCosto, 0);
+    const totGanancia = suppliers.reduce((s, p) => s + p.ganancia, 0);
+    const totMargen   = totVentas > 0 ? parseFloat(((totGanancia / totVentas) * 100).toFixed(2)) : 0;
+    rows.push([]);
+    rows.push(['TOTAL', '', '', suppliers.reduce((s, p) => s + p.totalProductos, 0), totVentas, totCosto, totGanancia, totMargen, suppliers.reduce((s, p) => s + p.totalTickets, 0), ''] as unknown as (string | number)[]);
+
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+    ws['!cols'] = [
+      { wch: 5 }, { wch: 35 }, { wch: 16 }, { wch: 10 },
+      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
+      { wch: 10 }, { wch: 14 },
+    ];
+    const currFmt = '"$"#,##0.00';
+    const pctFmt  = '0.00"%"';
+    const dataStart = 1;
+    rows.forEach((_, i) => {
+      const r = dataStart + i;
+      (['E', 'F', 'G'] as const).forEach(col => { const c = ws[`${col}${r + 1}`]; if (c) c.z = currFmt; });
+      const hc = ws[`H${r + 1}`]; if (hc) hc.z = pctFmt;
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Proveedores');
+    const date = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `proveedores-${PERIOD_LABEL[period] || 'reporte'}-${date}.xlsx`);
+  };
 
   const displayName = (s: Supplier) =>
     [s.nombre, s.apellidoPaterno, s.apellidoMaterno].filter(Boolean).join(' ');
@@ -436,6 +484,13 @@ export default function ProveedoresTab({ timeFilter }: Props) {
               </button>
             ))}
           </div>
+          {suppliers.length > 0 && (
+            <button onClick={exportToExcel}
+              className="px-4 py-2 bg-surface-container-low text-stone-600 border border-outline-variant/20 rounded-lg text-xs font-label font-bold flex items-center gap-2 hover:bg-primary/10 hover:text-primary hover:border-primary/30 transition-all">
+              <Icon name="download" className="text-base" />
+              <span className="hidden sm:inline">Excel</span>
+            </button>
+          )}
           <button onClick={() => setShowAdd(true)}
             className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold flex items-center gap-2 shadow-md hover:bg-primary-container transition-all">
             <Icon name="person_add" className="text-base" />

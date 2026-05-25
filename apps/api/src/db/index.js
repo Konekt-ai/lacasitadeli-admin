@@ -43,6 +43,45 @@ function getDb() {
       precio_unitario REAL NOT NULL,
       subtotal        REAL NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS product_locations (
+      art_codigo   TEXT PRIMARY KEY,
+      area         TEXT NOT NULL DEFAULT 'bodega',
+      notas        TEXT,
+      updated_at   TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS product_expiry (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo      TEXT NOT NULL,
+      nombre          TEXT,
+      fecha_caducidad TEXT NOT NULL,
+      cantidad        REAL DEFAULT 0,
+      area            TEXT DEFAULT 'bodega',
+      notas           TEXT,
+      alerta_enviada  INTEGER DEFAULT 0,
+      created_at      TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS surtido_transfers (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo   TEXT NOT NULL,
+      nombre       TEXT,
+      de_area      TEXT NOT NULL DEFAULT 'bodega',
+      a_area       TEXT NOT NULL,
+      cantidad     REAL NOT NULL,
+      autorizado   INTEGER DEFAULT 0,
+      semana       TEXT,
+      notas        TEXT,
+      created_at   TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS recuentos (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo     TEXT NOT NULL,
+      nombre         TEXT,
+      stock_sistema  REAL DEFAULT 0,
+      stock_conteo   REAL DEFAULT 0,
+      area           TEXT DEFAULT 'bodega',
+      notas          TEXT,
+      created_at     TEXT DEFAULT (datetime('now'))
+    );
   `);
   return _db;
 }

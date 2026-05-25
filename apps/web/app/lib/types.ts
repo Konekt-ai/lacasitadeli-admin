@@ -47,3 +47,46 @@ export interface AnalyticsData {
   productsByHour:  ProdHour[];
   productsByMonth: ProdMonth[];
 }
+
+// ── Bodega / Control Interno ──────────────────────────────────────────────────
+export type Area = 'bodega' | 'cocina' | 'tienda' | 'refrigerador' | 'otro';
+
+export interface AreaCount  { area: Area; total: number; }
+
+export interface AreaProduct {
+  id: string; name: string; stock: number; category: string | null; notas?: string | null;
+}
+
+export interface ExpiryRecord {
+  id: number; art_codigo: string; nombre: string | null;
+  fecha_caducidad: string; cantidad: number; area: string;
+  notas: string | null; alerta_enviada: number; created_at: string;
+}
+
+export interface SurtidoTransfer {
+  id: number; art_codigo: string; nombre: string | null;
+  de_area: string; a_area: string; cantidad: number;
+  autorizado: number; semana: string | null; notas: string | null; created_at: string;
+}
+
+export interface Recuento {
+  id: number; art_codigo: string; nombre: string | null;
+  stock_sistema: number; stock_conteo: number; area: string;
+  notas: string | null; created_at: string;
+}
+
+export interface StagnantProduct {
+  id: string; name: string; stock: number; category: string | null; ultima_venta: string | null;
+}
+
+export interface AlertTotals {
+  expirySoon: number; expired: number; stagnant: number; noSales: number;
+}
+
+export interface BodegaAlerts {
+  expirySoon: ExpiryRecord[];
+  expired:    ExpiryRecord[];
+  stagnant:   StagnantProduct[];
+  noSales:    StagnantProduct[];
+  totals:     AlertTotals;
+}
