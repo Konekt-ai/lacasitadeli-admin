@@ -8,14 +8,15 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'areas' | 'merma' | 'surtido' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'areas' | 'merma' | 'surtido' | 'discrepancias' | 'conteo' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'areas',         label: 'Áreas',          icon: 'warehouse' },
   { id: 'merma',         label: 'Merma / Caducidad', icon: 'event_busy' },
   { id: 'surtido',       label: 'Surtido',         icon: 'swap_horiz' },
   { id: 'discrepancias', label: 'Discrepancias',   icon: 'difference' },
+  { id: 'conteo',        label: 'Conteo Ventas',   icon: 'calculate' },
   { id: 'facturas',      label: 'Facturas PDF',    icon: 'receipt_long', dev: true },
-  { id: 'zebra',         label: 'Zebra TC52',      icon: 'qr_code_scanner', dev: true },
+  { id: 'zebra',         label: 'Zebra TC52',      icon: 'qr_code_scanner' },
 ];
 
 const AREA_META: Record<Area, { label: string; icon: string; color: string; bg: string }> = {
@@ -931,6 +932,537 @@ function DiscrepanciasView() {
   );
 }
 
+// ── Conteo sub-view ────────────────────────────────────────────────────────────
+interface ConteoItem {
+  art_codigo:    string;
+  nombre:        string | null;
+  total_vendido: number;
+  stock_actual:  number;
+  num_tickets:   number;
+}
+interface SyncSession {
+  id:                     number;
+  periodo_inicio:         string;
+  periodo_fin:            string;
+  productos_actualizados: number;
+  total_unidades:         number;
+  estado:                 string;
+  notas:                  string | null;
+  created_at:             string;
+}
+
+function ConteoView() {
+  const today   = new Date().toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(today);
+  const [endDate,   setEndDate]   = useState(today);
+  const [preview,   setPreview]   = useState<ConteoItem[]>([]);
+  const [historial, setHistorial] = useState<SyncSession[]>([]);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [syncing,        setSyncing]        = useState(false);
+  const [confirming,     setConfirming]     = useState(false);
+  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type }); setTimeout(() => setNotif(null), 4000);
+  };
+
+  const setPreset = (days: number) => {
+    const end   = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - days);
+    setStartDate(start.toISOString().slice(0, 10));
+    setEndDate(end.toISOString().slice(0, 10));
+    setPreview([]);
+  };
+
+  const fetchPreview = useCallback(async () => {
+    setLoadingPreview(true);
+    setPreview([]);
+    try {
+      const res  = await fetch(`/api/bodega/conteo/preview?startDate=${startDate}&endDate=${endDate}`);
+      const data = await res.json();
+      if (res.ok) setPreview(Array.isArray(data) ? data : []);
+      else notify(data.error || 'Error al cargar vista previa', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setLoadingPreview(false); }
+  }, [startDate, endDate]);
+
+  const fetchHistorial = useCallback(async () => {
+    try {
+      const data = await fetch('/api/bodega/conteo/historial').then(r => r.json());
+      if (Array.isArray(data)) setHistorial(data);
+    } catch { /* silent */ }
+  }, []);
+
+  useEffect(() => { fetchHistorial(); }, [fetchHistorial]);
+
+  const runSync = async () => {
+    setSyncing(true);
+    setConfirming(false);
+    try {
+      const res  = await fetch('/api/bodega/conteo/sync', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ startDate, endDate }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(data.message || 'Sincronización completada');
+        setPreview([]);
+        fetchHistorial();
+      } else {
+        notify(data.error || 'Error al sincronizar', 'error');
+      }
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setSyncing(false); }
+  };
+
+  const totalUnidades  = preview.reduce((s, p) => s + (Number(p.total_vendido) || 0), 0);
+  const negativeCount  = preview.filter(p => p.stock_actual - p.total_vendido < 0).length;
+
+  return (
+    <div>
+      {notif && (
+        <div className={cn(
+          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
+        )}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      {/* Date selector */}
+      <div className="flex flex-wrap items-end gap-3 mb-5">
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Desde</label>
+          <input type="date" value={startDate}
+            onChange={e => { setStartDate(e.target.value); setPreview([]); }}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Hasta</label>
+          <input type="date" value={endDate}
+            onChange={e => { setEndDate(e.target.value); setPreview([]); }}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div className="flex gap-1.5">
+          {[{ label: 'Hoy', days: 0 }, { label: '7 días', days: 7 }, { label: '30 días', days: 30 }].map(p => (
+            <button key={p.label} onClick={() => setPreset(p.days)}
+              className="px-3 py-2 bg-surface-container-low text-stone-500 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest hover:bg-primary/10 hover:text-primary transition-all border border-outline-variant/20">
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={fetchPreview} disabled={loadingPreview}
+          className={cn(
+            'px-5 py-2 rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 transition-all',
+            loadingPreview ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary-container shadow-md'
+          )}>
+          {loadingPreview
+            ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+            : <Icon name="search" className="text-base" />}
+          Vista Previa
+        </button>
+      </div>
+
+      {/* Warning */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 mb-5 text-sm font-body text-amber-800">
+        <Icon name="warning" className="text-amber-500 text-xl flex-shrink-0 mt-0.5" />
+        <div>
+          <strong>Advertencia:</strong> Esta operación lee <code>TicketsPS</code> y descuenta las cantidades vendidas del inventario en NovaCaja.
+          <strong> No apliques el mismo periodo dos veces</strong> — causaría doble deducción.
+        </div>
+      </div>
+
+      {/* Loading state */}
+      {loadingPreview && (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Preview results */}
+      {!loadingPreview && preview.length > 0 && (
+        <div>
+          {/* Summary bar */}
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-primary/10 rounded-lg px-4 py-2 text-center">
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-500">Productos</p>
+                <p className="text-2xl font-serif text-primary">{preview.length.toLocaleString('es-MX')}</p>
+              </div>
+              <div className="bg-secondary/10 rounded-lg px-4 py-2 text-center">
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-500">Unidades</p>
+                <p className="text-2xl font-serif text-secondary">{totalUnidades.toLocaleString('es-MX')}</p>
+              </div>
+              {negativeCount > 0 && (
+                <div className="bg-error/10 rounded-lg px-4 py-2 text-center">
+                  <p className="text-[10px] font-label uppercase tracking-widest text-error">Stock negativo</p>
+                  <p className="text-2xl font-serif text-error">{negativeCount}</p>
+                </div>
+              )}
+            </div>
+            <button onClick={() => setConfirming(true)} disabled={syncing}
+              className={cn(
+                'px-5 py-2.5 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 transition-all shadow-md',
+                syncing ? 'bg-stone-200 text-stone-400' : 'bg-error text-on-error hover:bg-error/90'
+              )}>
+              {syncing
+                ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+                : <Icon name="remove_shopping_cart" className="text-base" />}
+              Aplicar Descuento
+            </button>
+          </div>
+
+          {/* Table */}
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden mb-6">
+            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+              <table className="w-full text-left">
+                <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                  <tr>
+                    <th className="px-4 py-3">Código</th>
+                    <th className="px-4 py-3">Producto</th>
+                    <th className="px-4 py-3 text-center">Tickets</th>
+                    <th className="px-4 py-3 text-center">Vendido</th>
+                    <th className="px-4 py-3 text-center">Stock actual</th>
+                    <th className="px-4 py-3 text-center">Stock resultante</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-container">
+                  {preview.map(item => {
+                    const resultante = item.stock_actual - item.total_vendido;
+                    return (
+                      <tr key={item.art_codigo} className="hover:bg-background transition-colors">
+                        <td className="px-4 py-2.5">
+                          <span className="text-[10px] font-label text-stone-400">{item.art_codigo}</span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <p className="text-sm font-body text-on-surface truncate max-w-[220px]">{item.nombre || item.art_codigo}</p>
+                        </td>
+                        <td className="px-4 py-2.5 text-center text-xs font-body text-stone-400">{item.num_tickets}</td>
+                        <td className="px-4 py-2.5 text-center">
+                          <span className="font-serif font-bold text-secondary">{item.total_vendido}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-center text-sm font-body text-stone-500">{item.stock_actual}</td>
+                        <td className="px-4 py-2.5 text-center">
+                          <span className={cn('font-serif font-bold', resultante < 0 ? 'text-error' : 'text-primary')}>
+                            {resultante}
+                          </span>
+                          {resultante < 0 && <Icon name="warning" className="text-error text-xs ml-1" />}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loadingPreview && preview.length === 0 && (
+        <div className="py-14 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl mb-6">
+          <Icon name="calculate" className="text-5xl opacity-20 mb-3" />
+          <p className="text-sm font-label uppercase tracking-widest">Selecciona un periodo y haz clic en Vista Previa</p>
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {confirming && (
+        <div className="fixed inset-0 bg-black/50 z-[400] flex items-center justify-center p-4">
+          <div className="bg-surface rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 rounded-full bg-error/10 flex items-center justify-center flex-shrink-0">
+                <Icon name="warning" className="text-2xl text-error" />
+              </div>
+              <div>
+                <h3 className="font-serif text-xl text-on-surface">¿Confirmar descuento?</h3>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400">Operación irreversible</p>
+              </div>
+            </div>
+            <p className="text-sm font-body text-stone-600 mb-2">
+              Se descontarán <strong className="text-primary">{totalUnidades.toLocaleString('es-MX')} unidades</strong> de{' '}
+              <strong className="text-primary">{preview.length} productos</strong> del inventario de NovaCaja.
+            </p>
+            <p className="text-sm font-body text-stone-500 mb-4">
+              Periodo: <strong>{startDate}</strong> al <strong>{endDate}</strong>
+            </p>
+            {negativeCount > 0 && (
+              <div className="bg-error/10 border border-error/20 rounded-lg p-3 mb-4 text-xs font-body text-error">
+                <strong>{negativeCount} productos</strong> quedarán con stock negativo. Verifica antes de continuar.
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={runSync}
+                className="flex-1 py-3 bg-error text-on-error rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-error/90 transition-all">
+                Sí, aplicar
+              </button>
+              <button onClick={() => setConfirming(false)}
+                className="flex-1 py-3 bg-surface-container text-stone-600 rounded-xl text-xs font-label uppercase tracking-widest hover:bg-stone-200 transition-all">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Historial */}
+      {historial.length > 0 && (
+        <div>
+          <h4 className="font-serif text-base text-primary mb-3">Historial de Sincronizaciones</h4>
+          <div className="space-y-2">
+            {historial.map(s => (
+              <div key={s.id} className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 flex items-center gap-4">
+                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+                  <Icon name="sync" className="text-primary text-base" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-body text-on-surface">
+                    {s.periodo_inicio}{s.periodo_fin !== s.periodo_inicio ? ` al ${s.periodo_fin}` : ''}
+                  </p>
+                  <p className="text-[10px] font-label text-stone-400">
+                    {new Date(s.created_at).toLocaleString('es-MX')} · {s.productos_actualizados} productos
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-sm font-serif text-primary font-bold">{Number(s.total_unidades).toLocaleString('es-MX')} uds</p>
+                  <span className="text-[9px] font-label uppercase tracking-widest bg-primary-fixed/30 text-primary px-2 py-0.5 rounded-full">
+                    {s.estado}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Zebra TC52 movimientos sub-view ───────────────────────────────────────────
+interface AlmacenMovimiento {
+  id:           number;
+  codigo:       string;
+  nombre:       string | null;
+  tipo:         'entrada' | 'salida';
+  cantidad:     number;
+  stock_antes:  number;
+  stock_despues: number;
+  usuario:      string;
+  fecha:        string;
+}
+
+function ZebraView() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [movimientos,  setMovimientos]  = useState<AlmacenMovimiento[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [fecha,        setFecha]        = useState(today);
+  const [tipo,         setTipo]         = useState<'todos' | 'entrada' | 'salida'>('todos');
+  const [lastRefresh,  setLastRefresh]  = useState<Date | null>(null);
+  const [notif,        setNotif]        = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type }); setTimeout(() => setNotif(null), 3000);
+  };
+
+  const fetchMovimientos = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ fecha });
+      if (tipo !== 'todos') params.set('tipo', tipo);
+      const data = await fetch(`/api/almacen/movimientos/historial?${params}`).then(r => r.json());
+      if (Array.isArray(data)) { setMovimientos(data); setLastRefresh(new Date()); }
+      else notify(data.error || 'Error al cargar movimientos', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setLoading(false); }
+  }, [fecha, tipo]);
+
+  useEffect(() => { fetchMovimientos(); }, [fetchMovimientos]);
+
+  const entradas       = movimientos.filter(m => m.tipo === 'entrada');
+  const salidas        = movimientos.filter(m => m.tipo === 'salida');
+  const totalEntradas  = entradas.reduce((s, m) => s + Number(m.cantidad), 0);
+  const totalSalidas   = salidas.reduce((s, m) => s + Number(m.cantidad), 0);
+
+  const setPresetFecha = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    setFecha(d.toISOString().slice(0, 10));
+  };
+
+  return (
+    <div>
+      {notif && (
+        <div className={cn(
+          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
+        )}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-end gap-3 mb-5">
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha</label>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div className="flex gap-1.5">
+          {[{ label: 'Hoy', days: 0 }, { label: 'Ayer', days: 1 }, { label: '7 días', days: 7 }].map(p => (
+            <button key={p.label} onClick={() => setPresetFecha(p.days)}
+              className="px-3 py-2 bg-surface-container-low text-stone-500 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest hover:bg-primary/10 hover:text-primary transition-all border border-outline-variant/20">
+              {p.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1.5">
+          {(['todos', 'entrada', 'salida'] as const).map(t => (
+            <button key={t} onClick={() => setTipo(t)}
+              className={cn(
+                'px-3 py-2 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest border transition-all',
+                tipo === t
+                  ? t === 'entrada' ? 'bg-emerald-600 text-white border-emerald-600'
+                    : t === 'salida' ? 'bg-error text-on-error border-error'
+                    : 'bg-primary text-on-primary border-primary'
+                  : 'bg-surface-container-low text-stone-500 border-outline-variant/20 hover:bg-primary/5'
+              )}>
+              {t === 'todos' ? 'Todos' : t === 'entrada' ? '↓ Entradas' : '↑ Salidas'}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          {lastRefresh && (
+            <span className="text-[10px] font-label text-stone-400">
+              {lastRefresh.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            </span>
+          )}
+          <button onClick={fetchMovimientos} disabled={loading}
+            className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', loading && 'animate-spin')}>
+            <Icon name="refresh" />
+          </button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+          <p className="text-[10px] font-label uppercase tracking-widest text-emerald-600 mb-1">Entradas</p>
+          <p className="text-2xl font-serif text-emerald-700">{entradas.length}</p>
+          <p className="text-[10px] font-label text-emerald-600 mt-1">+{totalEntradas.toLocaleString('es-MX')} uds</p>
+        </div>
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+          <p className="text-[10px] font-label uppercase tracking-widest text-red-600 mb-1">Salidas</p>
+          <p className="text-2xl font-serif text-red-700">{salidas.length}</p>
+          <p className="text-[10px] font-label text-red-600 mt-1">−{totalSalidas.toLocaleString('es-MX')} uds</p>
+        </div>
+        <div className="bg-surface-container-low border border-outline-variant/10 rounded-xl p-4 text-center">
+          <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1">Total</p>
+          <p className="text-2xl font-serif text-on-surface">{movimientos.length}</p>
+          <p className="text-[10px] font-label text-stone-400 mt-1">movimientos</p>
+        </div>
+      </div>
+
+      {/* TC52 info banner */}
+      <div className="bg-primary/5 border border-primary/15 rounded-xl p-4 flex items-center gap-3 mb-5">
+        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
+          <Icon name="qr_code_scanner" className="text-primary text-xl" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-body text-on-surface font-medium">Zebra TC52 — Movimientos en tiempo real</p>
+          <p className="text-[10px] font-label text-stone-400">
+            Entradas y salidas registradas desde el escáner se reflejan aquí y en NovaCaja al instante
+          </p>
+        </div>
+        <div className="flex-shrink-0 flex flex-col items-end gap-1">
+          <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 text-[9px] font-label font-bold uppercase tracking-widest rounded-full border border-emerald-200">
+            Puerto 3003
+          </span>
+          <span className="px-2.5 py-1 bg-primary/10 text-primary text-[9px] font-label font-bold uppercase tracking-widest rounded-full">
+            API :3002
+          </span>
+        </div>
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div className="flex justify-center py-14">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : movimientos.length === 0 ? (
+        <div className="py-16 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl">
+          <Icon name="qr_code_scanner" className="text-5xl opacity-20 mb-3" />
+          <p className="text-sm font-label uppercase tracking-widest">Sin movimientos para esta fecha</p>
+          <p className="text-[10px] font-label text-stone-400 mt-2">
+            Los movimientos del Zebra TC52 aparecerán aquí
+          </p>
+        </div>
+      ) : (
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+          <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                <tr>
+                  <th className="px-4 py-3">Tipo</th>
+                  <th className="px-4 py-3">Producto</th>
+                  <th className="px-4 py-3 text-center">Cantidad</th>
+                  <th className="px-4 py-3 text-center">Antes</th>
+                  <th className="px-4 py-3 text-center">Después</th>
+                  <th className="px-4 py-3">Hora</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {movimientos.map(m => (
+                  <tr key={m.id} className="hover:bg-background transition-colors">
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        'px-2.5 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest whitespace-nowrap',
+                        m.tipo === 'entrada'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-red-50 text-red-700 border border-red-200'
+                      )}>
+                        {m.tipo === 'entrada' ? '↓ Entrada' : '↑ Salida'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <p className="text-sm font-body text-on-surface">{m.nombre || m.codigo}</p>
+                      <p className="text-[9px] font-label text-stone-400">{m.codigo}</p>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={cn('font-serif font-bold text-lg', m.tipo === 'entrada' ? 'text-emerald-600' : 'text-red-600')}>
+                        {m.tipo === 'entrada' ? '+' : '−'}{Number(m.cantidad).toLocaleString('es-MX')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm font-body text-stone-400">
+                      {Number(m.stock_antes).toLocaleString('es-MX')}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="font-serif font-bold text-on-surface">
+                        {Number(m.stock_despues).toLocaleString('es-MX')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-xs font-body text-stone-400 whitespace-nowrap">
+                      {new Date(m.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30">
+            <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+              {movimientos.length} movimientos · {fecha}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
   const [view, setView] = useState<SubView>('areas');
@@ -974,8 +1506,9 @@ export default function BodegaTab() {
         {view === 'merma'         && <MermaView />}
         {view === 'surtido'       && <SurtidoView />}
         {view === 'discrepancias' && <DiscrepanciasView />}
+        {view === 'conteo'        && <ConteoView />}
         {view === 'facturas'      && <DevPlaceholder label="Automatización de Facturas PDF" icon="receipt_long" />}
-        {view === 'zebra'         && <DevPlaceholder label="Mejora Operativa Zebra TC52" icon="qr_code_scanner" />}
+        {view === 'zebra'         && <ZebraView />}
       </div>
     </section>
   );

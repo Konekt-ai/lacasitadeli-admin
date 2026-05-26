@@ -7,6 +7,14 @@ import type { PolizaTicket, PolizaSummary } from '../lib/types';
 
 const ExportModal = dynamic(() => import('../components/ExportModal'), { ssr: false });
 
+interface LiveTicket {
+  folio:        number;
+  fecha:        string;
+  cajero:       string | null;
+  vendedor:     string | null;
+  importeTotal: number;
+}
+
 type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
 
 const PERIOD_CONFIG: Record<TimeFilter, { period: string; limit: number; label: string }> = {
@@ -20,28 +28,60 @@ interface Props {
 }
 
 export default function ReportesTab({ timeFilter }: Props) {
-  const [tickets,       setTickets]       = useState<PolizaTicket[]>([]);
-  const [summary,       setSummary]       = useState<PolizaSummary | null>(null);
-  const [totalTickets,  setTotalTickets]  = useState(0);
-  const [loading,       setLoading]       = useState(false);
-  const [showExport,    setShowExport]    = useState(false);
+  const [tickets,          setTickets]          = useState<PolizaTicket[]>([]);
+  const [summary,          setSummary]          = useState<PolizaSummary | null>(null);
+  const [totalTickets,     setTotalTickets]      = useState(0);
+  const [loading,          setLoading]           = useState(false);
+  const [showExport,       setShowExport]        = useState(false);
+  const [liveTickets,      setLiveTickets]       = useState<LiveTicket[]>([]);
+  const [liveLoading,      setLiveLoading]       = useState(false);
+  const [lastLiveRefresh,  setLastLiveRefresh]   = useState<Date | null>(null);
+  const [showCostTable,    setShowCostTable]     = useState(false);
 
   const config = PERIOD_CONFIG[timeFilter as TimeFilter] ?? PERIOD_CONFIG['Hoy'];
 
   const fetchData = useCallback(async (period: string) => {
     setLoading(true);
     try {
-      const res  = await fetch(`/api/novacaja/poliza-ventas?period=${period}`);
-      const data = await res.json();
-      if (data.error) { console.error(data.error); return; }
-      setTickets(data.tickets      || []);
-      setSummary(data.summary      || null);
-      setTotalTickets(data.totalTickets ?? 0);
-    } catch (e) { console.error('Error cargando poliza', e); }
+      const [polizaRes, tkpis] = await Promise.all([
+        fetch(`/api/novacaja/poliza-ventas?period=${period}`).then(r => r.json()),
+        fetch(`/api/novacaja/tickets/kpis?period=${period}`).then(r => r.json()).catch(() => null),
+      ]);
+      if (polizaRes.error) { console.error(polizaRes.error); return; }
+      setTickets(polizaRes.tickets      || []);
+      setTotalTickets(polizaRes.totalTickets ?? 0);
+      const base = polizaRes.summary as PolizaSummary | null;
+      if (base && tkpis && !tkpis.error) {
+        setSummary({
+          totalImporte:  tkpis.totalVentas  ?? base.totalImporte,
+          numTickets:    tkpis.totalTickets ?? base.numTickets,
+          totalCosto:    base.totalCosto,
+          totalGanancia: (tkpis.totalVentas ?? base.totalImporte) - base.totalCosto,
+        });
+      } else {
+        setSummary(base);
+      }
+    } catch (e) { console.error('Error cargando reporte', e); }
     finally { setLoading(false); }
   }, []);
 
+  const fetchLiveTickets = useCallback(async () => {
+    setLiveLoading(true);
+    try {
+      const res  = await fetch('/api/novacaja/tickets/recent?limit=50');
+      const data = await res.json();
+      if (Array.isArray(data)) { setLiveTickets(data); setLastLiveRefresh(new Date()); }
+    } catch (e) { console.error('Error live tickets', e); }
+    finally { setLiveLoading(false); }
+  }, []);
+
   useEffect(() => { fetchData(config.period); }, [config.period, fetchData]);
+
+  useEffect(() => {
+    fetchLiveTickets();
+    const id = setInterval(fetchLiveTickets, 30_000);
+    return () => clearInterval(id);
+  }, [fetchLiveTickets]);
 
   const limitReached = tickets.length >= config.limit && totalTickets > config.limit;
 
@@ -122,113 +162,168 @@ export default function ReportesTab({ timeFilter }: Props) {
         </div>
       )}
 
-      {/* Profit bar */}
-      {summary && summary.totalImporte > 0 && (
-        <div className="mb-6 bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-5 shadow-[0px_4px_12px_rgba(28,28,25,0.04)]">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">Margen de ganancia</span>
-            <span className="text-sm font-serif text-primary font-bold">
-              {((summary.totalGanancia / summary.totalImporte) * 100).toFixed(1)}%
-            </span>
+      {/* Live tickets feed */}
+      <div className="mb-6 bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden shadow-[0px_4px_12px_rgba(28,28,25,0.04)]">
+        <div className="px-5 py-4 border-b border-surface-container flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-sm font-serif text-primary">Últimas 50 Ventas</span>
+            <span className="text-[9px] font-label uppercase tracking-widest bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-full border border-emerald-200">En vivo</span>
           </div>
-          <div className="h-3 bg-surface-container rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary rounded-full transition-all duration-700"
-              style={{ width: `${Math.max(0, Math.min((summary.totalGanancia / summary.totalImporte) * 100, 100))}%` }}
-            />
-          </div>
-          <div className="flex justify-between mt-1.5">
-            <span className="text-[9px] font-label text-stone-400 uppercase">
-              Costo ${summary.totalCosto.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-            </span>
-            <span className="text-[9px] font-label text-primary uppercase">
-              Ganancia ${summary.totalGanancia.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-            </span>
+          <div className="flex items-center gap-2">
+            {lastLiveRefresh && (
+              <span className="text-[9px] font-label text-stone-400 hidden sm:inline">
+                {lastLiveRefresh.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+            <button onClick={fetchLiveTickets}
+              className={cn('p-1.5 rounded-full hover:bg-stone-100 text-stone-400 hover:text-primary transition-all', liveLoading && 'animate-spin')}>
+              <Icon name="refresh" className="text-sm" />
+            </button>
           </div>
         </div>
-      )}
-
-      {/* Tickets table */}
-      <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-[0px_12px_32px_rgba(28,28,25,0.04)] overflow-hidden">
-        {loading ? (
-          <div className="py-24 flex flex-col items-center text-stone-400">
-            <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
-            <p className="text-sm font-label uppercase tracking-widest">Cargando tickets {config.label}...</p>
+        {liveLoading && liveTickets.length === 0 ? (
+          <div className="py-10 flex items-center justify-center">
+            <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
           </div>
         ) : (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left">
-                <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
+          <div className="overflow-x-auto max-h-64 overflow-y-auto">
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                <tr>
+                  <th className="px-4 py-3">Ticket</th>
+                  <th className="px-4 py-3">Fecha y hora</th>
+                  <th className="px-4 py-3">Cajero</th>
+                  <th className="px-4 py-3 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {liveTickets.length === 0 ? (
                   <tr>
-                    <th className="px-5 py-4">Ticket</th>
-                    <th className="px-5 py-4">Fecha y hora</th>
-                    <th className="px-5 py-4">Factura</th>
-                    <th className="px-5 py-4 text-center">Items</th>
-                    <th className="px-5 py-4 text-right">Importe</th>
-                    <th className="px-5 py-4 text-right">Costo</th>
-                    <th className="px-5 py-4 text-right">Ganancia</th>
+                    <td colSpan={4} className="px-4 py-10 text-center text-stone-300 text-xs font-label uppercase tracking-widest">
+                      Sin ventas recientes
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-surface-container">
-                  {tickets.map((t, i) => {
-                    const margen = t.totalImporte > 0 ? (t.ganancia / t.totalImporte) * 100 : 0;
-                    return (
-                      <tr key={i} className="hover:bg-background transition-colors">
-                        <td className="px-5 py-3">
-                          <span className="font-label font-bold text-primary text-[10px] tracking-widest bg-primary-fixed/30 px-2 py-1 rounded">
-                            #{t.ticket}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 text-xs text-stone-500 font-body whitespace-nowrap">
-                          {new Date(t.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
-                        </td>
-                        <td className="px-5 py-3 text-xs text-stone-400 font-body">{t.factura || '—'}</td>
-                        <td className="px-5 py-3 text-center text-xs text-stone-500 font-body">{t.numProductos}</td>
-                        <td className="px-5 py-3 text-right font-body text-sm text-on-surface">
-                          ${Number(t.totalImporte).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="px-5 py-3 text-right font-body text-sm text-stone-400">
-                          ${Number(t.totalCosto).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                        </td>
-                        <td className="px-5 py-3 text-right">
-                          <span className={cn('font-serif text-sm font-bold', t.ganancia >= 0 ? 'text-primary' : 'text-error')}>
-                            ${Number(t.ganancia).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-                          </span>
-                          <span className="block text-[9px] font-label text-stone-400 text-right">{margen.toFixed(1)}%</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                ) : liveTickets.map((t, i) => (
+                  <tr key={t.folio} className={cn('hover:bg-background transition-colors', i === 0 && 'bg-emerald-50/30')}>
+                    <td className="px-4 py-2.5">
+                      <span className="font-label font-bold text-[10px] text-primary bg-primary-fixed/30 px-2 py-0.5 rounded">#{t.folio}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-stone-500 font-body whitespace-nowrap">
+                      {new Date(t.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-stone-400 font-body">{t.cajero || '—'}</td>
+                    <td className="px-4 py-2.5 text-right font-serif font-bold text-on-surface">
+                      ${Number(t.importeTotal).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-            {tickets.length === 0 && (
-              <div className="py-20 flex flex-col items-center text-stone-300">
-                <Icon name="receipt_long" className="text-6xl opacity-20 mb-4" />
-                <p className="text-sm font-label uppercase tracking-widest">Sin ventas {config.label}</p>
-              </div>
-            )}
-
+      {/* Collapsible cost breakdown */}
+      <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-[0px_4px_12px_rgba(28,28,25,0.02)] overflow-hidden">
+        <button
+          onClick={() => setShowCostTable(v => !v)}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-surface-container-low/50 transition-colors text-left">
+          <div className="flex items-center gap-3">
+            <Icon name="table_view" className="text-stone-400 text-base" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">
+              Desglose de costos por ticket
+            </span>
             {tickets.length > 0 && (
-              <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
-                <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-                  Mostrando {tickets.length.toLocaleString('es-MX')} tickets
+              <span className="text-[9px] font-label bg-surface-container text-stone-400 px-2 py-0.5 rounded uppercase tracking-widest">
+                {tickets.length.toLocaleString('es-MX')} registros
+              </span>
+            )}
+          </div>
+          <Icon name={showCostTable ? 'expand_less' : 'expand_more'} className="text-stone-400 text-xl flex-shrink-0" />
+        </button>
+
+        {showCostTable && (
+          loading ? (
+            <div className="py-16 flex flex-col items-center text-stone-400 border-t border-surface-container">
+              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3" />
+              <p className="text-xs font-label uppercase tracking-widest">Cargando {config.label}...</p>
+            </div>
+          ) : (
+            <>
+              <div className="overflow-x-auto border-t border-surface-container">
+                <table className="w-full text-left">
+                  <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
+                    <tr>
+                      <th className="px-5 py-4">Ticket</th>
+                      <th className="px-5 py-4">Fecha y hora</th>
+                      <th className="px-5 py-4">Factura</th>
+                      <th className="px-5 py-4 text-center">Items</th>
+                      <th className="px-5 py-4 text-right">Importe</th>
+                      <th className="px-5 py-4 text-right">Costo</th>
+                      <th className="px-5 py-4 text-right">Ganancia</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-container">
+                    {tickets.map((t, i) => {
+                      const margen = t.totalImporte > 0 ? (t.ganancia / t.totalImporte) * 100 : 0;
+                      return (
+                        <tr key={i} className="hover:bg-background transition-colors">
+                          <td className="px-5 py-3">
+                            <span className="font-label font-bold text-primary text-[10px] tracking-widest bg-primary-fixed/30 px-2 py-1 rounded">
+                              #{t.ticket}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-xs text-stone-500 font-body whitespace-nowrap">
+                            {new Date(t.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                          </td>
+                          <td className="px-5 py-3 text-xs text-stone-400 font-body">{t.factura || '—'}</td>
+                          <td className="px-5 py-3 text-center text-xs text-stone-500 font-body">{t.numProductos}</td>
+                          <td className="px-5 py-3 text-right font-body text-sm text-on-surface">
+                            ${Number(t.totalImporte).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-5 py-3 text-right font-body text-sm text-stone-400">
+                            ${Number(t.totalCosto).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-5 py-3 text-right">
+                            <span className={cn('font-serif text-sm font-bold', t.ganancia >= 0 ? 'text-primary' : 'text-error')}>
+                              ${Number(t.ganancia).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                            </span>
+                            <span className="block text-[9px] font-label text-stone-400 text-right">{margen.toFixed(1)}%</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {tickets.length === 0 && (
+                <div className="py-16 flex flex-col items-center text-stone-300 border-t border-surface-container">
+                  <Icon name="receipt_long" className="text-5xl opacity-20 mb-3" />
+                  <p className="text-sm font-label uppercase tracking-widest">Sin datos {config.label}</p>
+                </div>
+              )}
+
+              {tickets.length > 0 && (
+                <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
+                  <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+                    {tickets.length.toLocaleString('es-MX')} tickets
+                    {limitReached && (
+                      <span className="ml-1 text-primary font-bold">
+                        · {totalTickets.toLocaleString('es-MX')} en total
+                      </span>
+                    )}
+                  </p>
                   {limitReached && (
-                    <span className="ml-1 text-primary font-bold">
-                      · existen {totalTickets.toLocaleString('es-MX')} en total {config.label}
+                    <span className="text-[9px] font-label bg-primary/10 text-primary px-2 py-0.5 rounded uppercase tracking-widest">
+                      Límite alcanzado
                     </span>
                   )}
-                </p>
-                {limitReached && (
-                  <span className="text-[9px] font-label bg-primary/10 text-primary px-2 py-0.5 rounded uppercase tracking-widest">
-                    Límite {config.limit.toLocaleString('es-MX')} alcanzado
-                  </span>
-                )}
-              </div>
-            )}
-          </>
+                </div>
+              )}
+            </>
+          )
         )}
       </div>
     </section>

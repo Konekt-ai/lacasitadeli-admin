@@ -14,6 +14,8 @@ const {
   buildTopProductsByHourQuery,
   buildSalesByMonthQuery,
   buildTopProductsByMonthQuery,
+  buildRecentTicketsQuery,
+  buildTicketKPIsQuery,
 } = require('../config/novacaja-mapping');
 
 const router = express.Router();
@@ -163,20 +165,28 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes, ticketKpiRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery()),
+      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
+    const polizaKPIs     = kpiRes.recordset[0]      || {};
+    const ticketKPIs     = ticketKpiRes.recordset[0] || {};
 
     const kpisFull = {
-      ...(kpiRes.recordset[0] || {}),
+      totalTickets:     ticketKPIs.totalTickets     || polizaKPIs.totalTickets     || 0,
+      totalVentas:      ticketKPIs.totalVentas      || polizaKPIs.totalVentas      || 0,
+      ticketPromedio:   ticketKPIs.ticketPromedio   || polizaKPIs.ticketPromedio   || 0,
+      totalCosto:       polizaKPIs.totalCosto       || 0,
+      unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
+      ganancia:         (ticketKPIs.totalVentas || 0) - (polizaKPIs.totalCosto || 0),
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
@@ -519,6 +529,37 @@ router.get('/poliza-ventas/export', async (req, res) => {
     res.json({ tickets: result.recordset || [], count: result.recordset?.length || 0 });
   } catch (err) {
     console.error('Error export poliza:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/tickets/recent — no cache, real-time ───────────────────
+router.get('/tickets/recent', async (req, res) => {
+  const { limit = 50 } = req.query;
+  try {
+    const result = await mssql.query(
+      buildRecentTicketsQuery({ limit: Math.min(parseInt(limit) || 50, 100) })
+    );
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('Error tickets recientes:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/tickets/kpis — cached 30 s per period ──────────────────
+router.get('/tickets/kpis', async (req, res) => {
+  const { period = 'day' } = req.query;
+  const cacheKey = `ticket_kpis:${period}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
+  try {
+    const result = await mssql.query(buildTicketKPIsQuery({ period }));
+    const data   = result.recordset[0] || { totalTickets: 0, totalVentas: 0, ticketPromedio: 0 };
+    _set(cacheKey, data, 30_000);
+    res.json(data);
+  } catch (err) {
+    console.error('Error ticket KPIs:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

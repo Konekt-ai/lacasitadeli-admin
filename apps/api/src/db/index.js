@@ -82,6 +82,38 @@ function getDb() {
       notas          TEXT,
       created_at     TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS sync_sessions (
+      id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+      periodo_inicio          TEXT NOT NULL,
+      periodo_fin             TEXT NOT NULL,
+      productos_actualizados  INTEGER DEFAULT 0,
+      total_unidades          REAL DEFAULT 0,
+      estado                  TEXT DEFAULT 'completado',
+      notas                   TEXT,
+      created_at              TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS sync_deductions (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id       INTEGER NOT NULL,
+      art_codigo       TEXT NOT NULL,
+      nombre           TEXT,
+      cantidad_vendida REAL NOT NULL,
+      stock_antes      REAL DEFAULT 0,
+      stock_despues    REAL DEFAULT 0,
+      created_at       TEXT DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS almacen_movimientos (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo   TEXT NOT NULL,
+      nombre       TEXT,
+      tipo         TEXT NOT NULL CHECK(tipo IN ('entrada','salida')),
+      cantidad     REAL NOT NULL,
+      stock_antes  REAL DEFAULT 0,
+      stock_despues REAL DEFAULT 0,
+      usuario      TEXT DEFAULT 'TC52',
+      notas        TEXT,
+      created_at   TEXT DEFAULT (datetime('now'))
+    );
   `);
   return _db;
 }

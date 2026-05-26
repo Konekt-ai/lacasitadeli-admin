@@ -257,6 +257,37 @@ function buildTopProductsByMonthQuery({ months = 6, limit = 8, maxDate } = {}) {
   `;
 }
 
+// ── TICKETS — Ventas en tiempo real ──────────────────────────────────────────
+
+function buildRecentTicketsQuery({ limit = 50 } = {}) {
+  return `
+    SELECT TOP ${limit}
+      t.FolConsecutivo                        AS folio,
+      CONVERT(varchar(19), t.T_Fecha, 120)    AS fecha,
+      t.T_Cajero                              AS cajero,
+      t.T_Vendedor                            AS vendedor,
+      t.T_ImporteTotal                        AS importeTotal
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    ORDER BY t.T_Fecha DESC
+  `;
+}
+
+function buildTicketKPIsQuery({ period = 'day' } = {}) {
+  let whereClause;
+  if (period === 'week')       whereClause = `WHERE T_Fecha >= DATEADD(DAY, -7, GETDATE())`;
+  else if (period === 'month') whereClause = `WHERE T_Fecha >= DATEADD(DAY, -30, GETDATE())`;
+  else                         whereClause = `WHERE CAST(T_Fecha AS DATE) = CAST(GETDATE() AS DATE)`;
+
+  return `
+    SELECT
+      COUNT(*)                        AS totalTickets,
+      ISNULL(SUM(T_ImporteTotal), 0)  AS totalVentas,
+      ISNULL(AVG(T_ImporteTotal), 0)  AS ticketPromedio
+    FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+    ${whereClause}
+  `;
+}
+
 module.exports = {
   buildProductsQuery,
   buildProductsCountQuery,
@@ -271,4 +302,6 @@ module.exports = {
   buildTopProductsByHourQuery,
   buildSalesByMonthQuery,
   buildTopProductsByMonthQuery,
+  buildRecentTicketsQuery,
+  buildTicketKPIsQuery,
 };

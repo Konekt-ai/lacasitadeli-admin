@@ -26,6 +26,14 @@ interface DashProduct {
   costo:            number;
 }
 
+interface RecentTicket {
+  folio:        number;
+  fecha:        string;
+  cajero:       string | null;
+  vendedor:     string | null;
+  importeTotal: number;
+}
+
 type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
 
 const PERIOD_MAP: Record<TimeFilter, string> = {
@@ -65,9 +73,12 @@ interface Props {
 }
 
 export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, setActiveTab }: Props) {
-  const [kpis,        setKpis]        = useState<DashKPI | null>(null);
-  const [topProducts, setTopProducts] = useState<DashProduct[]>([]);
-  const [loading,     setLoading]     = useState(false);
+  const [kpis,           setKpis]           = useState<DashKPI | null>(null);
+  const [topProducts,    setTopProducts]    = useState<DashProduct[]>([]);
+  const [loading,        setLoading]        = useState(false);
+  const [recentTickets,  setRecentTickets]  = useState<RecentTicket[]>([]);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [lastRefresh,    setLastRefresh]    = useState<Date | null>(null);
 
   const period = PERIOD_MAP[timeFilter as TimeFilter] ?? 'day';
 
@@ -84,6 +95,22 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
   }, []);
 
   useEffect(() => { fetchDash(period); }, [period, fetchDash]);
+
+  const fetchRecentTickets = useCallback(async () => {
+    setTicketsLoading(true);
+    try {
+      const res  = await fetch('/api/novacaja/tickets/recent?limit=10');
+      const data = await res.json();
+      if (Array.isArray(data)) { setRecentTickets(data); setLastRefresh(new Date()); }
+    } catch (e) { console.error('Error tickets live', e); }
+    finally { setTicketsLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    fetchRecentTickets();
+    const id = setInterval(fetchRecentTickets, 30_000);
+    return () => clearInterval(id);
+  }, [fetchRecentTickets]);
 
   const fmt  = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
   const pct  = kpis && kpis.totalVentas > 0
@@ -308,6 +335,64 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
               </span>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* ── Últimas Ventas — Live Feed ────────────────────────────────────────── */}
+      <div className="mt-8">
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <h3 className="text-xl font-serif text-on-surface">Últimas Ventas</h3>
+            <span className="text-[9px] font-label uppercase tracking-widest bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-200">En vivo</span>
+          </div>
+          <div className="flex items-center gap-2">
+            {lastRefresh && (
+              <span className="text-[9px] font-label text-stone-400 hidden sm:inline">
+                {lastRefresh.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </span>
+            )}
+            <button onClick={fetchRecentTickets}
+              className={cn('p-1.5 rounded-full hover:bg-stone-100 text-stone-400 hover:text-primary transition-all', ticketsLoading && 'animate-spin')}>
+              <Icon name="refresh" className="text-base" />
+            </button>
+            <button onClick={() => setActiveTab('Reportes')}
+              className="text-primary text-[10px] font-label uppercase tracking-widest border-b border-primary pb-0.5">
+              Ver reporte
+            </button>
+          </div>
+        </div>
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden shadow-[0px_4px_12px_rgba(28,28,25,0.02)]">
+          {ticketsLoading && recentTickets.length === 0 ? (
+            <div className="py-10 flex items-center justify-center">
+              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : recentTickets.length === 0 ? (
+            <div className="py-10 text-center text-stone-300">
+              <Icon name="receipt_long" className="text-4xl opacity-20 mb-2" />
+              <p className="text-xs font-label uppercase tracking-widest">Sin ventas recientes</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-surface-container">
+              {recentTickets.map((t, i) => (
+                <div key={t.folio} className={cn('flex items-center px-5 py-3 hover:bg-background transition-colors', i === 0 && 'bg-emerald-50/40')}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-label font-bold text-[10px] text-primary bg-primary-fixed/30 px-2 py-0.5 rounded">#{t.folio}</span>
+                      {i === 0 && <span className="text-[8px] font-label uppercase tracking-widest bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">Reciente</span>}
+                    </div>
+                    <p className="text-[10px] font-label text-stone-400 mt-0.5">
+                      {new Date(t.fecha).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                      {t.cajero && ` · Cajero ${t.cajero}`}
+                    </p>
+                  </div>
+                  <p className="font-serif text-lg font-bold text-on-surface">
+                    ${Number(t.importeTotal).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </section>

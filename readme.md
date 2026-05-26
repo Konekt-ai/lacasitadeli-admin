@@ -149,6 +149,47 @@ Accesible en `http://localhost:3001/admin.html` — solo para cuentas con rol `a
 
 ---
 
+## 📡 Zebra TC52 — Sistema de Inventario en Bodega
+
+Flujo de operación del dispositivo Zebra TC52 para recepción y salida de mercancía en bodega, conectado directamente a la API REST del sistema.
+
+```mermaid
+flowchart TB
+    subgraph FLUJO1["FLUJO 1 — Recepción de mercancía"]
+        direction TB
+        A1["🚛 Llega trailer a bodega\nEmpleado con TC52"]
+        A2["📷 Escanea código de barras\nTC52 lee el producto"]
+        A3["🔢 Captura cantidad recibida\nTeclado numérico en pantalla"]
+        A4["✅ Confirma recepción\nPOST → API :3002"]
+        A1 --> A2 --> A3 --> A4
+    end
+
+    subgraph FLUJO2["FLUJO 2 — Búsqueda y salida de producto"]
+        direction TB
+        B1["📦 Requieren producto\nEmpleado con TC52"]
+        B2["🔍 Escanea o busca código\nGET → API :3002"]
+        B3["📊 Muestra existencia\nNombre + stock actual"]
+        B4["➡️ Registra cantidad a salir\nPOST → API :3002"]
+        B1 --> B2 --> B3 --> B4
+    end
+
+    A4 --> API
+    B4 --> API
+
+    API["🌐 API REST\nlocalhost:3002"]
+    SQL["🗄️ SQL Server 2014\nTabla artículos + inventario"]
+    PANEL["🖥️ Panel Admin\nlocalhost:3001"]
+    NOVA["📋 BD Nova Caja POS\nSolo catálogo, sin cantidades"]
+    TC52["📱 Zebra TC52"]
+
+    API --> SQL
+    SQL --> PANEL
+    SQL -.->|"sincronización / lectura existente"| NOVA
+    NOVA -.-> TC52
+```
+
+---
+
 ## 🗺 Roadmap
 
 - [x] **Fase 0** — POS base: cobro, carrito, sesión de caja, inventario y reportes

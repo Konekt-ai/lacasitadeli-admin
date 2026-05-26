@@ -435,4 +435,152 @@ router.post('/alerts/send-email', async (req, res) => {
   }
 });
 
+// ── GET /api/bodega/conteo/preview ────────────────────────────────────────────
+// Lee TicketsPS para el periodo y muestra cuánto se vendió por producto
+router.get('/conteo/preview', async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate)
+    return res.status(400).json({ error: 'startDate y endDate requeridos (YYYY-MM-DD)' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
+    return res.status(400).json({ error: 'Formato de fecha inválido (esperado YYYY-MM-DD)' });
+
+  try {
+    const result = await mssql.query(`
+      SELECT TOP 2000
+        CAST(t.Codigo AS NVARCHAR(50))           AS art_codigo,
+        MAX(ISNULL(
+          CAST(a.Art_Descripcion AS NVARCHAR(500)),
+          CAST(t.Concepto       AS NVARCHAR(500))
+        ))                                        AS nombre,
+        SUM(t.Cantidad)                           AS total_vendido,
+        ISNULL((
+          SELECT SUM(aa2.AA_ExistenciaActualU)
+          FROM [compucaja].[dbo].[ArticulosAlmacen] aa2 WITH (NOLOCK)
+          WHERE aa2.Art_Codigo = CAST(t.Codigo AS NVARCHAR(50))
+        ), 0)                                     AS stock_actual,
+        COUNT(DISTINCT t.FolConsecutivo)          AS num_tickets
+      FROM [compucaja].[dbo].[TicketsPS] t WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        ON a.Art_Codigo = CAST(t.Codigo AS NVARCHAR(50))
+      WHERE CAST(t.FechaHora AS DATE) BETWEEN '${esc(startDate)}' AND '${esc(endDate)}'
+        AND t.Codigo IS NOT NULL
+        AND LEN(CAST(t.Codigo AS NVARCHAR(50))) > 0
+        AND CAST(t.Codigo AS NVARCHAR(50)) != '0'
+      GROUP BY t.Codigo
+      ORDER BY SUM(t.Cantidad) DESC
+    `);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('Error conteo preview:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/bodega/conteo/sync ──────────────────────────────────────────────
+// Descuenta cantidades vendidas del inventario ArticulosAlmacen y registra la sesión
+router.post('/conteo/sync', async (req, res) => {
+  const { startDate, endDate } = req.body;
+  if (!startDate || !endDate)
+    return res.status(400).json({ error: 'startDate y endDate requeridos' });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
+    return res.status(400).json({ error: 'Formato de fecha inválido' });
+
+  try {
+    // 1. Obtener productos + cantidades + stock actual para el audit trail
+    const previewRes = await mssql.query(`
+      SELECT TOP 2000
+        CAST(t.Codigo AS NVARCHAR(50))                AS art_codigo,
+        MAX(ISNULL(
+          CAST(a.Art_Descripcion AS NVARCHAR(500)),
+          CAST(t.Concepto       AS NVARCHAR(500))
+        ))                                             AS nombre,
+        SUM(t.Cantidad)                                AS total_vendido,
+        ISNULL((
+          SELECT SUM(aa2.AA_ExistenciaActualU)
+          FROM [compucaja].[dbo].[ArticulosAlmacen] aa2 WITH (NOLOCK)
+          WHERE aa2.Art_Codigo = CAST(t.Codigo AS NVARCHAR(50))
+        ), 0)                                          AS stock_antes
+      FROM [compucaja].[dbo].[TicketsPS] t WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        ON a.Art_Codigo = CAST(t.Codigo AS NVARCHAR(50))
+      WHERE CAST(t.FechaHora AS DATE) BETWEEN '${esc(startDate)}' AND '${esc(endDate)}'
+        AND t.Codigo IS NOT NULL
+        AND LEN(CAST(t.Codigo AS NVARCHAR(50))) > 0
+        AND CAST(t.Codigo AS NVARCHAR(50)) != '0'
+      GROUP BY t.Codigo
+    `);
+
+    const products = previewRes.recordset || [];
+    if (products.length === 0)
+      return res.status(400).json({ error: 'Sin productos en el periodo seleccionado' });
+
+    // 2. Batch UPDATE en MSSQL
+    await mssql.query(`
+      UPDATE aa
+      SET    aa.AA_ExistenciaActualU = aa.AA_ExistenciaActualU - sales.total_sold
+      FROM   [compucaja].[dbo].[ArticulosAlmacen] aa
+      INNER JOIN (
+        SELECT CAST(t.Codigo AS NVARCHAR(50)) AS art_codigo,
+               SUM(t.Cantidad)               AS total_sold
+        FROM   [compucaja].[dbo].[TicketsPS] t WITH (NOLOCK)
+        WHERE  CAST(t.FechaHora AS DATE) BETWEEN '${esc(startDate)}' AND '${esc(endDate)}'
+          AND  t.Codigo IS NOT NULL
+          AND  LEN(CAST(t.Codigo AS NVARCHAR(50))) > 0
+          AND  CAST(t.Codigo AS NVARCHAR(50)) != '0'
+        GROUP BY t.Codigo
+      ) sales ON aa.Art_Codigo = sales.art_codigo
+    `);
+
+    // 3. Registrar sesión y detalle en SQLite
+    const db            = getDb();
+    const totalUnidades = products.reduce((s, p) => s + (parseFloat(p.total_vendido) || 0), 0);
+
+    const sessionRow = db.prepare(`
+      INSERT INTO sync_sessions (periodo_inicio, periodo_fin, productos_actualizados, total_unidades, estado)
+      VALUES (?, ?, ?, ?, 'completado')
+    `).run(startDate, endDate, products.length, totalUnidades);
+
+    const sessionId  = sessionRow.lastInsertRowid;
+    const insertDed  = db.prepare(`
+      INSERT INTO sync_deductions (session_id, art_codigo, nombre, cantidad_vendida, stock_antes, stock_despues)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    db.transaction((prods) => {
+      for (const p of prods) {
+        const antes    = parseFloat(p.stock_antes)    || 0;
+        const vendido  = parseFloat(p.total_vendido)  || 0;
+        insertDed.run(sessionId, p.art_codigo, p.nombre || null, vendido, antes, Math.max(0, antes - vendido));
+      }
+    })(products);
+
+    res.json({
+      message:   `${products.length} productos actualizados · ${totalUnidades.toLocaleString('es')} unidades descontadas`,
+      sessionId,
+      productos: products.length,
+      unidades:  totalUnidades,
+    });
+  } catch (err) {
+    console.error('Error conteo sync:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/bodega/conteo/historial ─────────────────────────────────────────
+router.get('/conteo/historial', (req, res) => {
+  try {
+    res.json(getDb().prepare(
+      `SELECT * FROM sync_sessions ORDER BY created_at DESC LIMIT 20`
+    ).all());
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/bodega/conteo/historial/:id ──────────────────────────────────────
+router.get('/conteo/historial/:id', (req, res) => {
+  try {
+    res.json(getDb().prepare(
+      `SELECT * FROM sync_deductions WHERE session_id = ? ORDER BY cantidad_vendida DESC`
+    ).all(req.params.id));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 module.exports = router;
