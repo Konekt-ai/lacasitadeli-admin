@@ -114,6 +114,19 @@ function getDb() {
       notas        TEXT,
       created_at   TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS merma_registros (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo   TEXT NOT NULL,
+      nombre       TEXT,
+      motivo       TEXT NOT NULL,
+      area         TEXT DEFAULT 'bodega',
+      cantidad     REAL NOT NULL,
+      stock_antes  REAL DEFAULT 0,
+      stock_despues REAL DEFAULT 0,
+      notas        TEXT,
+      usuario      TEXT DEFAULT 'TC52',
+      created_at   TEXT DEFAULT (datetime('now'))
+    );
   `);
   return _db;
 }

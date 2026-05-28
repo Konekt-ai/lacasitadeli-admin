@@ -7,7 +7,7 @@
  * or disable the default devtool with "devtool: false".
  * If you are looking for production-ready output files, see mode: "production" (https://webpack.js.org/configuration/mode/).
  */
-(self["webpackChunk_N_E"] = self["webpackChunk_N_E"] || []).push([["_app-pages-browser_app_tabs_BodegaTab_tsx"],{
+self["webpackHotUpdate_N_E"]("_app-pages-browser_app_tabs_BodegaTab_tsx",{
 
 /***/ "(app-pages-browser)/./app/tabs/BodegaTab.tsx":
 /*!********************************!*\
@@ -19,4 +19,4 @@ eval(__webpack_require__.ts("__webpack_require__.r(__webpack_exports__);\n/* har
 
 /***/ })
 
-}]);
+});

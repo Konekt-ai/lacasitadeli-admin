@@ -54,7 +54,8 @@ if not exist "%PWA_DIR%\package.json" goto :skip_env
 echo VITE_API_URL=http://%LOCAL_IP%:3002> "%PWA_DIR%\.env"
 :skip_env
 
-:: ── Detener procesos previos en 3002 y 3003 ──────────────────────────────────
+:: ── Detener procesos previos en 3001, 3002 y 3003 ───────────────────────────
+for /f "tokens=5" %%p in ('netstat -aon 2^>nul ^| findstr ":3001 " ^| findstr "LISTENING"') do taskkill /F /PID %%p >nul 2>&1
 for /f "tokens=5" %%p in ('netstat -aon 2^>nul ^| findstr ":3002 " ^| findstr "LISTENING"') do taskkill /F /PID %%p >nul 2>&1
 for /f "tokens=5" %%p in ('netstat -aon 2^>nul ^| findstr ":3003 " ^| findstr "LISTENING"') do taskkill /F /PID %%p >nul 2>&1
 

@@ -1017,6 +1017,9 @@ input:where([type='file']):focus {
 .max-h-\[520px\] {
   max-height: 520px;
 }
+.max-h-\[480px\] {
+  max-height: 480px;
+}
 .min-h-screen {
   min-height: 100vh;
 }
@@ -1142,6 +1145,9 @@ input:where([type='file']):focus {
 }
 .max-w-\[180px\] {
   max-width: 180px;
+}
+.max-w-\[120px\] {
+  max-width: 120px;
 }
 .flex-1 {
   flex: 1 1 0%;
@@ -1711,6 +1717,14 @@ input:where([type='file']):focus {
   --tw-bg-opacity: 1;
   background-color: rgb(254 242 242 / var(--tw-bg-opacity, 1));
 }
+.bg-red-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(254 226 226 / var(--tw-bg-opacity, 1));
+}
+.bg-rose-100 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 228 230 / var(--tw-bg-opacity, 1));
+}
 .bg-opacity-15 {
   --tw-bg-opacity: 0.15;
 }
@@ -1905,6 +1919,12 @@ input:where([type='file']):focus {
 .pb-0\.5 {
   padding-bottom: 0.125rem;
 }
+.pr-1 {
+  padding-right: 0.25rem;
+}
+.pt-6 {
+  padding-top: 1.5rem;
+}
 .text-left {
   text-align: left;
 }
@@ -1925,6 +1945,9 @@ input:where([type='file']):focus {
 }
 .font-serif {
   font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+}
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 .text-2xl {
   font-size: 1.5rem;
@@ -2147,6 +2170,14 @@ input:where([type='file']):focus {
 .text-red-700 {
   --tw-text-opacity: 1;
   color: rgb(185 28 28 / var(--tw-text-opacity, 1));
+}
+.text-rose-800 {
+  --tw-text-opacity: 1;
+  color: rgb(159 18 57 / var(--tw-text-opacity, 1));
+}
+.text-orange-600 {
+  --tw-text-opacity: 1;
+  color: rgb(234 88 12 / var(--tw-text-opacity, 1));
 }
 .antialiased {
   -webkit-font-smoothing: antialiased;
@@ -2500,6 +2531,11 @@ input:where([type='file']):focus {
 .group:hover .group-hover\:text-primary {
   --tw-text-opacity: 1;
   color: rgb(1 45 29 / var(--tw-text-opacity, 1));
+}
+
+.group:hover .group-hover\:text-stone-600 {
+  --tw-text-opacity: 1;
+  color: rgb(87 83 78 / var(--tw-text-opacity, 1));
 }
 
 .group\/s:hover .group-hover\/s\:opacity-60 {

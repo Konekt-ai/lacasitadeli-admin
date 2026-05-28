@@ -285,6 +285,28 @@ function AreasView() {
 }
 
 // ── Merma / Caducidad sub-view ──────────────────────────────────────────────────
+interface MermaTC52Record {
+  id: number;
+  codigo: string;
+  nombre: string | null;
+  motivo: 'vencimiento' | 'dano' | 'cocina' | 'robo' | 'otro';
+  area: string;
+  cantidad: number;
+  stock_antes: number;
+  stock_despues: number;
+  notas: string | null;
+  usuario: string;
+  fecha: string;
+}
+
+const MOTIVO_META: Record<MermaTC52Record['motivo'], { label: string; emoji: string; color: string; bg: string }> = {
+  vencimiento: { label: 'Vencimiento', emoji: '📅', color: 'text-orange-700', bg: 'bg-orange-100' },
+  dano:        { label: 'Daño',        emoji: '💥', color: 'text-red-700',    bg: 'bg-red-100' },
+  cocina:      { label: 'Cocina',      emoji: '🍳', color: 'text-amber-700',  bg: 'bg-amber-100' },
+  robo:        { label: 'Robo',        emoji: '🚨', color: 'text-rose-800',   bg: 'bg-rose-100' },
+  otro:        { label: 'Otro',        emoji: '❓', color: 'text-stone-600',  bg: 'bg-stone-100' },
+};
+
 function MermaView() {
   const [records, setRecords] = useState<ExpiryRecord[]>([]);
   const [loading, setLoading] = useState(false);
@@ -293,6 +315,21 @@ function MermaView() {
   const [form, setForm] = useState({ art_codigo: '', nombre: '', fecha_caducidad: '', cantidad: '', area: 'bodega' as Area, notas: '' });
   const [saving, setSaving] = useState(false);
   const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const [tc52Records, setTc52Records] = useState<MermaTC52Record[]>([]);
+  const [tc52Loading, setTc52Loading] = useState(false);
+  const [tc52Fecha, setTc52Fecha] = useState(new Date().toISOString().slice(0, 10));
+  const [tc52Collapsed, setTc52Collapsed] = useState(false);
+
+  const fetchTc52Merma = useCallback(async (fecha: string) => {
+    setTc52Loading(true);
+    try {
+      const data = await fetch(`/api/almacen/merma/historial?fecha=${fecha}&limit=100`).then(r => r.json());
+      setTc52Records(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setTc52Loading(false); }
+  }, []);
+
+  useEffect(() => { fetchTc52Merma(tc52Fecha); }, [fetchTc52Merma, tc52Fecha]);
 
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotif({ msg, type });
@@ -527,6 +564,93 @@ function MermaView() {
           ))}
         </div>
       )}
+
+      {/* ── TC52 Merma Historial ─────────────────────────────────────────── */}
+      <div className="mt-8 border-t border-outline-variant/10 pt-6">
+        <button
+          onClick={() => setTc52Collapsed(v => !v)}
+          className="w-full flex items-center justify-between mb-4 group">
+          <div className="flex items-center gap-2">
+            <Icon name="qr_code_scanner" className="text-base text-orange-600" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-600">
+              Merma registrada en TC52
+            </span>
+          </div>
+          <Icon
+            name={tc52Collapsed ? 'expand_more' : 'expand_less'}
+            className="text-stone-400 group-hover:text-stone-600 transition-colors"
+          />
+        </button>
+
+        {!tc52Collapsed && (
+          <>
+            <div className="flex items-center gap-3 mb-4">
+              <input
+                type="date"
+                value={tc52Fecha}
+                onChange={e => setTc52Fecha(e.target.value)}
+                className="px-3 py-1.5 bg-background border border-outline-variant/20 rounded-lg text-xs font-body outline-none focus:border-primary transition-colors"
+              />
+              <button
+                onClick={() => fetchTc52Merma(tc52Fecha)}
+                disabled={tc52Loading}
+                className="p-1.5 text-stone-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors">
+                <Icon name="refresh" className={cn('text-base', tc52Loading && 'animate-spin')} />
+              </button>
+              {tc52Records.length > 0 && (
+                <span className="ml-auto text-[10px] font-label text-stone-400">
+                  {tc52Records.length} registro{tc52Records.length !== 1 ? 's' : ''}
+                  {' · '}
+                  {tc52Records.reduce((s, r) => s + r.cantidad, 0)} pzas
+                </span>
+              )}
+            </div>
+
+            {tc52Loading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-3 border-primary/20 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : tc52Records.length === 0 ? (
+              <div className="py-10 flex flex-col items-center text-stone-300">
+                <Icon name="inventory_2" className="text-4xl opacity-20 mb-2" />
+                <p className="text-xs font-label uppercase tracking-widest">Sin mermas registradas en el TC52</p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[480px] overflow-y-auto pr-1">
+                {tc52Records.map(r => {
+                  const m = MOTIVO_META[r.motivo] ?? MOTIVO_META.otro;
+                  const areaM = AREA_META[r.area as Area];
+                  return (
+                    <div key={r.id}
+                      className="rounded-xl border border-outline-variant/10 bg-surface-container-low/50 p-3.5 flex items-center gap-3">
+                      <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold whitespace-nowrap', m.bg, m.color)}>
+                        {m.emoji} {m.label}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-body text-on-surface truncate">{r.nombre || r.codigo}</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="text-[10px] font-label text-stone-400 font-mono">−{r.cantidad} pzas</span>
+                          {areaM && (
+                            <span className={cn('text-[9px] font-label px-1.5 py-0.5 rounded uppercase', areaM.bg, areaM.color)}>
+                              {areaM.label}
+                            </span>
+                          )}
+                          {r.notas && (
+                            <span className="text-[10px] font-label text-stone-400 truncate max-w-[120px]">{r.notas}</span>
+                          )}
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-label text-stone-400 flex-shrink-0">
+                        {new Date(r.fecha).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }
