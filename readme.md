@@ -1,215 +1,268 @@
-# La Casita — Panel de Administración
+# La Casita Deli — Sistema de Administración
 
-Sistema de administración interno para La Casita: gestión de productos, categorías, ubicaciones, usuarios y corte diario de ventas.
+Sistema interno para La Casita Deli: panel administrativo web, control de bodega con Zebra TC52, y gestión de inventario conectada a NovaCaja (SQL Server).
 
-Desarrollado por **Konekt** como parte del sistema integral de inventarios y ventas.
-
-![Status](https://img.shields.io/badge/Status-En%20Desarrollo-yellow)
-![Python](https://img.shields.io/badge/Python-3.11+-blue)
-![SQLite](https://img.shields.io/badge/DB-SQLite-lightgrey)
+Desarrollado por **Konekt**.
 
 ---
 
-## 📖 Tabla de Contenidos
-- [¿Qué es este repo?](#-qué-es-este-repo)
-- [Arquitectura](#-arquitectura)
-- [Estructura del Proyecto](#-estructura-del-proyecto)
-- [Instalación y Uso](#-instalación-y-uso)
-- [Módulos del Panel Admin](#-módulos-del-panel-admin)
-- [Usuarios de prueba](#-usuarios-de-prueba)
-- [Roadmap](#-roadmap)
-
----
-
-## 🧭 ¿Qué es este repo?
-
-Este repositorio contiene el sistema operativo de La Casita: un **POS (Punto de Venta)** para cajeros y un **Panel de Administración** para gestión interna. Ambos corren como archivos HTML estáticos servidos por un backend Python/Flask con base de datos SQLite.
-
-| Interfaz | URL | Acceso |
-|----------|-----|--------|
-| POS — Punto de Venta | `http://localhost:3001/` | Cajeros |
-| Admin — Panel de gestión | `http://localhost:3001/admin.html` | Solo administradores |
-
----
-
-## 🏗 Arquitectura
-
-Arquitectura simple y sin dependencias externas. Todo corre localmente con Python y SQLite.
+## Arquitectura
 
 ```
-┌─────────────────────────────────────────┐
-│           Navegador (Frontend)          │
-│                                         │
-│  index.html  ←──── POS / Cajeros        │
-│  admin.html  ←──── Panel Admin          │
-└────────────────────┬────────────────────┘
-                     │ HTTP / REST API
-┌────────────────────▼────────────────────┐
-│         Python / Flask (server.py)      │
-│                                         │
-│  /api/auth        /api/products         │
-│  /api/sales       /api/sessions         │
-│  /api/locations   /api/admin/*          │
-└────────────────────┬────────────────────┘
-                     │
-┌────────────────────▼────────────────────┐
-│           SQLite (lacasita.db)          │
-│                                         │
-│  User · Location · Category · Product  │
-│  Inventory · Sale · SaleItem           │
-│  CashSession                           │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Panel Admin  (Next.js)          http://localhost:3001       │
+│  — Inventario, ventas, bodega, merma, surtido, reportes      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ /api/*  (proxy)
+┌──────────────────────────▼──────────────────────────────────┐
+│  API REST  (Express)             http://localhost:3002       │
+│  — almacen / bodega / ventas / auth / sync                   │
+└──────────┬────────────────────────────────┬─────────────────┘
+           │                                │
+┌──────────▼──────────┐        ┌────────────▼────────────────┐
+│  SQL Server 2014    │        │  SQLite  (lacasita.db)       │
+│  NovaCaja           │        │  — almacen_movimientos       │
+│  — VArticulosUnif.  │        │  — merma_registros           │
+│  — ArticulosAlmacen │        │  — ventas / surtido / ...    │
+└─────────────────────┘        └─────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  PWA Zebra TC52  (React/Vite)    http://<IP-LOCAL>:3003      │
+│  — Recepción, Salida, Merma, Búsqueda, Historial             │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 📂 Estructura del Proyecto
+## Requisitos previos
 
-```text
-lacasitadeli-konekt-admin/
+- **Node.js 18+** instalado
+- **SQL Server 2014** con NovaCaja accesible en red
+- Credenciales de MSSQL disponibles
+- Carpeta `lacasitadeli-almacen/pwa-bodega` junto a este repo (misma carpeta padre)
+
+---
+
+## Instalación desde cero
+
+### 1. Clonar / copiar el proyecto
+
+El directorio padre debe contener ambas carpetas:
+```
+Desktop/
+├── lacasitadeli-admin/        ← este repo
+└── lacasitadeli-almacen/
+    └── pwa-bodega/            ← app del Zebra TC52
+```
+
+### 2. Instalar dependencias
+
+Abrir terminal en `lacasitadeli-admin/` y ejecutar:
+
+```bat
+cd apps\api
+npm install
+
+cd ..\..\apps\web
+npm install
+```
+
+Para la PWA del TC52:
+```bat
+cd ..\..\lacasitadeli-almacen\pwa-bodega
+npm install
+```
+
+### 3. Configurar base de datos
+
+Crear el archivo `apps/api/.env` con las credenciales de NovaCaja:
+
+```env
+DB_SERVER=192.168.x.x
+DB_USER=usuario
+DB_PASSWORD=contraseña
+DB_DATABASE=compucaja
+```
+
+> Si no existe el `.env`, al ejecutar `iniciar.bat` se abre el asistente de configuración automáticamente.
+
+---
+
+## Uso diario (desarrollo / pruebas)
+
+Doble clic en **`iniciar.bat`** — levanta los 3 servicios con ventana de terminal visible.
+
+```
+Panel admin  →  http://localhost:3001          (se abre solo en el navegador)
+API          →  http://localhost:3002
+TC52 (WiFi)  →  http://<IP-LOCAL>:3003
+TC52 (VPN)   →  http://<IP-TAILSCALE>:3003     (si está conectado)
+```
+
+---
+
+## Configurar inicio automático 24/7
+
+**Ejecutar una sola vez** al instalar el sistema en el equipo del cliente.
+
+```bat
+configurar-inicio.bat
+```
+
+Esto hace en ~4 minutos:
+1. Instala **PM2** (gestor de procesos en segundo plano)
+2. Compila el panel web (Next.js producción — más rápido y estable)
+3. Compila la PWA del TC52 con la IP de red del equipo
+4. Arranca los 3 servicios vía PM2
+5. Coloca un script en la carpeta **Startup de Windows** → desde ese momento el sistema arranca solo al iniciar sesión, sin ventana de terminal
+
+> Si la IP de red del equipo cambia, volver a ejecutar `configurar-inicio.bat`.
+
+---
+
+## Comandos manuales (terminal)
+
+### Ver estado de los servicios
+```bash
+pm2 status
+```
+
+### Ver logs en vivo
+```bash
+pm2 logs                    # todos
+pm2 logs lacasita-api       # solo la API
+pm2 logs lacasita-web       # solo el panel
+pm2 logs lacasita-pwa       # solo la PWA TC52
+```
+
+### Reiniciar servicios
+```bash
+pm2 restart all             # reiniciar todo
+pm2 restart lacasita-api    # reiniciar solo la API
+pm2 restart lacasita-web    # reiniciar solo el panel
+```
+
+### Detener todo
+```bash
+pm2 stop all
+# o doble clic en detener.bat
+```
+
+### Volver a iniciar después de detener
+```bash
+pm2 resurrect
+# o doble clic en iniciar.bat (modo desarrollo)
+```
+
+### Ver los últimos errores
+```bash
+pm2 logs --err --lines 50
+```
+
+### Forzar recompilación del panel web
+```bat
+cd apps\web
+npm run build
+cd ..\..
+pm2 restart lacasita-web
+```
+
+### Forzar recompilación de la PWA TC52
+```bat
+cd ..\lacasitadeli-almacen\pwa-bodega
+npm run build
+cd ..\..\lacasitadeli-admin
+pm2 restart lacasita-pwa
+```
+
+---
+
+## Archivos importantes
+
+| Archivo | Para qué sirve |
+|---|---|
+| `iniciar.bat` | Arranque manual con terminal visible (desarrollo) |
+| `configurar-inicio.bat` | Instalación del inicio automático (correr una vez) |
+| `detener.bat` | Detener todos los servicios |
+| `arrancar.vbs` | Script silencioso que PM2 usa al iniciar Windows |
+| `ecosystem.config.js` | Configuración de los 3 procesos en PM2 |
+| `apps/pwa-server.js` | Servidor estático para la PWA compilada (puerto 3003) |
+| `apps/api/.env` | Credenciales de SQL Server (no subir a git) |
+| `apps/api/lacasita.db` | Base de datos SQLite local (movimientos, mermas, ventas) |
+| `logs/api.log` | Log de la API en producción |
+| `logs/web.log` | Log del panel web en producción |
+| `logs/pwa.log` | Log de la PWA TC52 en producción |
+
+---
+
+## Estructura del proyecto
+
+```
+lacasitadeli-admin/
 ├── apps/
 │   ├── api/
-│   │   └── src/
-│   │       ├── db/
-│   │       │   └── lacasita.db          # Base de datos SQLite
-│   │       ├── modules/
-│   │       │   ├── auth.js              # Login y ubicaciones
-│   │       │   ├── products.js          # Consulta de productos e inventario
-│   │       │   ├── sales.js             # Registro y reporte de ventas
-│   │       │   └── sessions.js          # Control de caja (apertura/cierre)
-│   │       ├── index.js                 # Servidor Node (legacy)
-│   │       └── server.py                # Servidor principal Python/Flask ✅
+│   │   ├── src/
+│   │   │   ├── db/index.js          # SQLite + tablas
+│   │   │   ├── db/mssql.js          # Conexión SQL Server
+│   │   │   ├── modules/
+│   │   │   │   ├── almacen.js       # Bodega TC52 (entrada/salida/merma)
+│   │   │   │   ├── bodega.js        # Caducidades, surtido, recuentos
+│   │   │   │   ├── ventas.js        # Sincronización ventas NovaCaja
+│   │   │   │   └── ...
+│   │   │   └── index.js             # Express server :3002
+│   │   └── lacasita.db              # Base de datos SQLite
 │   │
-│   └── web/
-│       └── public/
-│           ├── index.html               # POS — Punto de Venta (cajeros)
-│           └── admin.html               # Panel de Administración
+│   ├── web/
+│   │   └── app/
+│   │       ├── tabs/
+│   │       │   ├── BodegaTab.tsx    # Control de bodega
+│   │       │   ├── InventarioTab.tsx
+│   │       │   ├── VentasTab.tsx
+│   │       │   └── ...
+│   │       └── ...                  # Next.js :3001
+│   │
+│   └── pwa-server.js                # Servidor estático PWA :3003
 │
-├── infra/
-│   └── docker-compose.yml               # Opcional: n8n para automatizaciones
-│
-├── iniciar.sh                           # Arranque rápido (Linux/Mac)
-├── iniciar.bat                          # Arranque rápido (Windows)
-└── README.md
+├── ecosystem.config.js              # Configuración PM2
+├── iniciar.bat                      # Arranque desarrollo
+├── configurar-inicio.bat            # Setup producción 24/7
+├── detener.bat                      # Detener todo
+└── arrancar.vbs                     # Launcher silencioso (Startup Windows)
 ```
 
 ---
 
-## 🚀 Instalación y Uso
-
-### Requisitos
-- Python 3.11+
-- Flask (`pip install flask`)
-
-### Arranque rápido
-
-**Linux / Mac:**
-```bash
-chmod +x iniciar.sh
-./iniciar.sh
-```
-
-**Windows:**
-```bat
-iniciar.bat
-```
-
-El script verifica Python, instala Flask si no está, e inicia el servidor en `http://localhost:3001`.
-
-### Arranque manual
-```bash
-cd apps/api/src
-python3 server.py
-```
-
----
-
-## 🧩 Módulos del Panel Admin
-
-Accesible en `http://localhost:3001/admin.html` — solo para cuentas con rol `admin`.
+## Módulos del panel admin
 
 | Módulo | Descripción |
-|--------|-------------|
-| 📊 **Dashboard** | Métricas del día: ventas, ingresos, ganancia estimada, ticket promedio, top productos y alertas de stock bajo |
-| 📦 **Productos** | Alta, edición y baja de productos con código de barras, precio, costo, categoría y unidad |
-| 🏷️ **Categorías** | Gestión de categorías con color personalizado (se refleja en el POS) |
-| 📍 **Ubicaciones** | Alta de sucursales, almacenes, restaurante y ecommerce |
-| 👤 **Usuarios** | Gestión de cajeros, bodegueros y administradores con roles y contraseñas |
-| 🧾 **Corte del día** | Reporte filtrable por fecha y sucursal: ingresos por método de pago, productos más vendidos y detalle completo de ventas |
+|---|---|
+| **Dashboard** | Ventas del día, stock bajo, movimientos recientes |
+| **Inventario** | Búsqueda de productos, existencias NovaCaja |
+| **Ventas** | Corte del día, historial, sincronización con NovaCaja |
+| **Bodega** | Áreas, merma/caducidad, surtido, discrepancias, conteo, Zebra TC52 |
+| **Configuración** | Productos especiales, categorías, sobreescritura de imágenes |
+
+### Sub-módulo Zebra TC52 (en Bodega)
+Vista en el panel admin que muestra en tiempo real los movimientos registrados desde el dispositivo:
+- Historial de entradas y salidas del día
+- Mermas registradas (vencimiento, daño, cocina, robo, otro)
 
 ---
 
-## 👤 Usuarios de prueba
+## Zebra TC52 — App de bodega
 
-| Correo | Contraseña | Rol |
-|--------|------------|-----|
-| `admin@lacasita.com` | `admin123` | Administrador |
-| `cajero1@lacasita.com` | `cajero123` | Cajero |
-| `cajero2@lacasita.com` | `cajero123` | Cajero |
+URL: `http://<IP-LOCAL>:3003` — abrir en Chrome del TC52.
 
----
-
-## 📡 Zebra TC52 — Sistema de Inventario en Bodega
-
-Flujo de operación del dispositivo Zebra TC52 para recepción y salida de mercancía en bodega, conectado directamente a la API REST del sistema.
-
-```mermaid
-flowchart TB
-    subgraph FLUJO1["FLUJO 1 — Recepción de mercancía"]
-        direction TB
-        A1["🚛 Llega trailer a bodega\nEmpleado con TC52"]
-        A2["📷 Escanea código de barras\nTC52 lee el producto"]
-        A3["🔢 Captura cantidad recibida\nTeclado numérico en pantalla"]
-        A4["✅ Confirma recepción\nPOST → API :3002"]
-        A1 --> A2 --> A3 --> A4
-    end
-
-    subgraph FLUJO2["FLUJO 2 — Búsqueda y salida de producto"]
-        direction TB
-        B1["📦 Requieren producto\nEmpleado con TC52"]
-        B2["🔍 Escanea o busca código\nGET → API :3002"]
-        B3["📊 Muestra existencia\nNombre + stock actual"]
-        B4["➡️ Registra cantidad a salir\nPOST → API :3002"]
-        B1 --> B2 --> B3 --> B4
-    end
-
-    A4 --> API
-    B4 --> API
-
-    API["🌐 API REST\nlocalhost:3002"]
-    SQL["🗄️ SQL Server 2014\nTabla artículos + inventario"]
-    PANEL["🖥️ Panel Admin\nlocalhost:3001"]
-    NOVA["📋 BD Nova Caja POS\nSolo catálogo, sin cantidades"]
-    TC52["📱 Zebra TC52"]
-
-    API --> SQL
-    SQL --> PANEL
-    SQL -.->|"sincronización / lectura existente"| NOVA
-    NOVA -.-> TC52
-```
+| Sección | Función |
+|---|---|
+| **Recepción** | Escanear y registrar entrada de mercancía (+stock en NovaCaja) |
+| **Salida** | Escanear y registrar salida de mercancía (−stock en NovaCaja) |
+| **Merma** | Dar de baja producto con motivo (vencimiento/daño/cocina/robo) |
+| **Historial** | Ver movimientos del día |
+| **Buscar** | Consultar existencia por nombre o código |
 
 ---
 
-## 🗺 Roadmap
+## Licencia
 
-- [x] **Fase 0** — POS base: cobro, carrito, sesión de caja, inventario y reportes
-- [x] **Fase 0.5** — Panel admin: CRUD de productos, categorías, ubicaciones y usuarios
-- [ ] **Fase 1** — Rutas `/api/admin/*` en backend: guardar, editar y eliminar desde el panel
-- [ ] **Fase 1.5** — Control de inventario: entradas desde bodega, salidas por sucursal
-- [ ] **Fase 2** — Integración con Shopify: sincronización de stock en tiempo real
-- [ ] **Fase 2.5** — Integración con NOVACAJA: ventas físicas descuentan inventario central
-- [ ] **Fase 3** — Control de consumos en restaurante/bar
-- [ ] **Fase 3.5** — Alertas de stock bajo y caducidades vía n8n
-- [ ] **Fase 4** — Reportes consolidados multi-canal (tienda, ecommerce, restaurante)
-
----
-
-## 🔗 Repositorio
-
-[github.com/PlekDev/lacasitadeli-konekt-admin](https://github.com/PlekDev/lacasitadeli-konekt-admin)
-
----
-
-## 📄 Licencia
-
-Proyecto privado — propiedad de La Casita. Desarrollado por Konekt. Uso interno únicamente.
+Proyecto privado — propiedad de La Casita Deli. Desarrollado por Konekt. Uso interno únicamente.
