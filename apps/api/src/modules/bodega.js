@@ -212,18 +212,33 @@ router.put('/surtido/:id/autorizar', async (req, res) => {
   const db       = getDb();
   const transfer = db.prepare('SELECT * FROM surtido_transfers WHERE id = ?').get(req.params.id);
 
-  if (!transfer)         return res.status(404).json({ error: 'Transferencia no encontrada' });
+  if (!transfer)           return res.status(404).json({ error: 'Transferencia no encontrada' });
   if (transfer.autorizado) return res.status(400).json({ error: 'Ya está autorizada' });
+
+  const qty = parseFloat(transfer.cantidad);
 
   try {
     if (transfer.de_area === 'bodega') {
       await mssql.query(`
         UPDATE [compucaja].[dbo].[ArticulosAlmacen]
-        SET AA_ExistenciaActualU = AA_ExistenciaActualU - ${parseFloat(transfer.cantidad)}
+        SET AA_ExistenciaActualU = AA_ExistenciaActualU - ${qty}
         WHERE Art_Codigo = '${esc(transfer.art_codigo)}'
       `);
     }
     db.prepare('UPDATE surtido_transfers SET autorizado = 1 WHERE id = ?').run(req.params.id);
+
+    // Actualizar stock por ubicación: descontar origen, sumar destino
+    const upsert = db.prepare(`
+      INSERT INTO stock_ubicaciones (art_codigo, nombre, area, cantidad)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(art_codigo, area) DO UPDATE SET
+        nombre     = COALESCE(excluded.nombre, nombre),
+        cantidad   = MAX(0, cantidad + excluded.cantidad),
+        updated_at = datetime('now')
+    `);
+    upsert.run(transfer.art_codigo, transfer.nombre || null, transfer.de_area, -qty);
+    upsert.run(transfer.art_codigo, transfer.nombre || null, transfer.a_area,  +qty);
+
     res.json({ message: 'Autorizada y descontada del inventario' });
   } catch (err) {
     console.error('Error autorizar surtido:', err.message);
@@ -232,40 +247,61 @@ router.put('/surtido/:id/autorizar', async (req, res) => {
 });
 
 // ── GET /api/bodega/discrepancias ────────────────────────────────────────────
-// Productos con stock > 0 pero sin ventas en 30 días (posible estancamiento)
 router.get('/discrepancias', async (req, res) => {
+  const db = getDb();
+  const dismissed = new Set(
+    db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'stagnant'`).all().map(r => r.art_codigo)
+  );
+  const dismissedNoSales = new Set(
+    db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo)
+  );
+
+  let stagnant = [], noSales = [];
   try {
-    const stagnantRes = await mssql.query(`
-      SELECT TOP 50
-        a.Art_Codigo          AS id,
-        a.Art_Descripcion1    AS name,
-        aa.AA_ExistenciaActualU AS stock,
-        a.Org_Descripcion     AS category,
-        MAX(v.Fecha)          AS ultima_venta
-      FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
-      JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-        ON aa.Art_Codigo = a.Art_Codigo
-      LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-        ON v.Art_Codigo = a.Art_Codigo
-      WHERE aa.AA_ExistenciaActualU > 5 AND a.Art_Estatus = 'A'
-      GROUP BY a.Art_Codigo, a.Art_Descripcion1, aa.AA_ExistenciaActualU, a.Org_Descripcion
-      HAVING MAX(v.Fecha) < DATEADD(day, -30, GETDATE()) OR MAX(v.Fecha) IS NULL
-      ORDER BY aa.AA_ExistenciaActualU DESC
-    `);
-
-    const db        = getDb();
-    const recuentos = db.prepare(
-      `SELECT * FROM recuentos ORDER BY created_at DESC LIMIT 100`
-    ).all();
-
-    res.json({
-      stagnant:  stagnantRes.recordset || [],
-      recuentos,
-    });
-  } catch (err) {
-    console.error('Error discrepancias:', err.message);
-    res.status(500).json({ error: err.message });
+    const [sRes, nRes] = await Promise.all([
+      mssql.query(`
+        SELECT TOP 100
+          a.Art_Codigo              AS id,
+          a.Art_Descripcion         AS name,
+          ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+          a.Art_VECategoria         AS category,
+          a.Art_FechaUltimaVenta    AS ultima_venta
+        FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+        JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
+          ON aa.Art_Codigo = a.Art_Codigo
+        WHERE aa.AA_ExistenciaActualU > 0
+          AND a.Art_Bloqueado = 0
+          AND (a.Art_FechaUltimaVenta < DATEADD(day, -30, GETDATE()) OR a.Art_FechaUltimaVenta IS NULL)
+        ORDER BY aa.AA_ExistenciaActualU DESC
+      `),
+      mssql.query(`
+        SELECT TOP 100
+          a.Art_Codigo              AS id,
+          a.Art_Descripcion         AS name,
+          ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+          a.Art_VECategoria         AS category,
+          a.Art_FechaUltimaVenta    AS ultima_venta
+        FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+        JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
+          ON aa.Art_Codigo = a.Art_Codigo
+        WHERE aa.AA_ExistenciaActualU > 0
+          AND a.Art_Bloqueado = 0
+          AND (
+            a.Art_FechaUltimaVenta < DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
+            OR a.Art_FechaUltimaVenta IS NULL
+          )
+        ORDER BY aa.AA_ExistenciaActualU DESC
+      `),
+    ]);
+    stagnant = (sRes.recordset || []).filter(r => !dismissed.has(r.id));
+    noSales  = (nRes.recordset || []).filter(r => !dismissedNoSales.has(r.id));
+  } catch (e) {
+    console.error('MSSQL discrepancias error:', e.message);
   }
+
+  const recuentos = db.prepare(`SELECT * FROM recuentos ORDER BY created_at DESC LIMIT 100`).all();
+
+  res.json({ stagnant, noSales, recuentos });
 });
 
 // ── POST /api/bodega/recuento ─────────────────────────────────────────────────
@@ -306,46 +342,48 @@ router.get('/alerts', async (req, res) => {
       `SELECT * FROM product_expiry WHERE fecha_caducidad < ? ORDER BY fecha_caducidad DESC`
     ).all(today);
 
+    const dismissed        = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'stagnant'`).all().map(r => r.art_codigo));
+    const dismissedNoSales = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo));
+
     let stagnant = [], noSales = [];
     try {
       const [sRes, nRes] = await Promise.all([
         mssql.query(`
-          SELECT TOP 20
-            a.Art_Codigo          AS id,
-            a.Art_Descripcion1    AS name,
-            aa.AA_ExistenciaActualU AS stock,
-            a.Org_Descripcion     AS category,
-            MAX(v.Fecha)          AS ultima_venta
+          SELECT TOP 100
+            a.Art_Codigo              AS id,
+            a.Art_Descripcion         AS name,
+            ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+            a.Art_VECategoria         AS category,
+            a.Art_FechaUltimaVenta    AS ultima_venta
           FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
           JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
             ON aa.Art_Codigo = a.Art_Codigo
-          LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-            ON v.Art_Codigo = a.Art_Codigo
-          WHERE aa.AA_ExistenciaActualU > 0 AND a.Art_Estatus = 'A'
-          GROUP BY a.Art_Codigo, a.Art_Descripcion1, aa.AA_ExistenciaActualU, a.Org_Descripcion
-          HAVING MAX(v.Fecha) < DATEADD(day, -30, GETDATE()) OR MAX(v.Fecha) IS NULL
+          WHERE aa.AA_ExistenciaActualU > 0
+            AND a.Art_Bloqueado = 0
+            AND (a.Art_FechaUltimaVenta < DATEADD(day, -30, GETDATE()) OR a.Art_FechaUltimaVenta IS NULL)
           ORDER BY aa.AA_ExistenciaActualU DESC
         `),
         mssql.query(`
-          SELECT TOP 20
-            a.Art_Codigo          AS id,
-            a.Art_Descripcion1    AS name,
-            aa.AA_ExistenciaActualU AS stock,
-            a.Org_Descripcion     AS category
+          SELECT TOP 100
+            a.Art_Codigo              AS id,
+            a.Art_Descripcion         AS name,
+            ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+            a.Art_VECategoria         AS category,
+            a.Art_FechaUltimaVenta    AS ultima_venta
           FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
           JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
             ON aa.Art_Codigo = a.Art_Codigo
-          WHERE aa.AA_ExistenciaActualU > 0 AND a.Art_Estatus = 'A'
-            AND a.Art_Codigo NOT IN (
-              SELECT DISTINCT Art_Codigo
-              FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-              WHERE Fecha >= DATEADD(month, -1, GETDATE())
+          WHERE aa.AA_ExistenciaActualU > 0
+            AND a.Art_Bloqueado = 0
+            AND (
+              a.Art_FechaUltimaVenta < DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
+              OR a.Art_FechaUltimaVenta IS NULL
             )
           ORDER BY aa.AA_ExistenciaActualU DESC
         `),
       ]);
-      stagnant = sRes.recordset || [];
-      noSales  = nRes.recordset || [];
+      stagnant = (sRes.recordset || []).filter(r => !dismissed.has(r.id));
+      noSales  = (nRes.recordset || []).filter(r => !dismissedNoSales.has(r.id));
     } catch (e) {
       console.error('MSSQL alert fetch error:', e.message);
     }
@@ -364,6 +402,33 @@ router.get('/alerts', async (req, res) => {
     });
   } catch (err) {
     console.error('Error alerts:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/bodega/alerts/descartar ────────────────────────────────────────
+router.post('/alerts/descartar', (req, res) => {
+  const { art_codigo, tipo, notas } = req.body;
+  if (!art_codigo || !['stagnant', 'noSales', 'expiry'].includes(tipo))
+    return res.status(400).json({ error: 'art_codigo y tipo válido requeridos' });
+  try {
+    getDb().prepare(`
+      INSERT OR REPLACE INTO alertas_descartadas (art_codigo, tipo, notas)
+      VALUES (?, ?, ?)
+    `).run(art_codigo, tipo, notas || null);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/bodega/alerts/descartar/:codigo/:tipo ─────────────────────────
+router.delete('/alerts/descartar/:codigo/:tipo', (req, res) => {
+  try {
+    getDb().prepare(`DELETE FROM alertas_descartadas WHERE art_codigo = ? AND tipo = ?`)
+      .run(req.params.codigo, req.params.tipo);
+    res.json({ ok: true });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -581,6 +646,29 @@ router.get('/conteo/historial/:id', (req, res) => {
       `SELECT * FROM sync_deductions WHERE session_id = ? ORDER BY cantidad_vendida DESC`
     ).all(req.params.id));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/bodega/alerts/send-report — manual trigger full report ──────────
+router.post('/alerts/send-report', async (req, res) => {
+  try {
+    const result = await require('./emailService').sendMonthlyReport();
+    res.json({ ...result, message: `Reporte enviado a ${result.to}` });
+  } catch (err) {
+    console.error('send-report error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/bodega/alerts/report-log — last sends ───────────────────────────
+router.get('/alerts/report-log', (req, res) => {
+  try {
+    const rows = getDb().prepare(
+      `SELECT * FROM email_report_log ORDER BY created_at DESC LIMIT 10`
+    ).all();
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

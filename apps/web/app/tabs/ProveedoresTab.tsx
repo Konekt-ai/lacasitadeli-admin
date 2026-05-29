@@ -130,50 +130,106 @@ export default function ProveedoresTab({ timeFilter }: Props) {
   const totalPeriod = suppliers.reduce((sum, s) => sum + s.totalVentas, 0);
 
   const exportToExcel = () => {
-    const headers = ['#', 'Proveedor', 'RFC', 'Productos', 'Ventas ($)', 'Costo ($)', 'Ganancia ($)', 'Margen (%)', 'Tickets', 'Últ. Compra'];
-    const rows = suppliers.map((s, i) => {
-      const margen = s.totalVentas > 0 ? parseFloat(((s.ganancia / s.totalVentas) * 100).toFixed(2)) : 0;
+    const wb          = XLSX.utils.book_new();
+    const date        = new Date().toISOString().slice(0, 10);
+    const currFmt     = '"$"#,##0.00';
+    const pctFmt      = '0.00"%"';
+    const pLabel: Record<string, string> = { day: 'Hoy', week: 'Esta semana', month: 'Este mes' };
+
+    const totVentas    = suppliers.reduce((s, p) => s + p.totalVentas,      0);
+    const totCosto     = suppliers.reduce((s, p) => s + p.totalCosto,       0);
+    const totGanancia  = suppliers.reduce((s, p) => s + p.ganancia,         0);
+    const totTickets   = suppliers.reduce((s, p) => s + p.totalTickets,     0);
+    const totUnidades  = suppliers.reduce((s, p) => s + p.unidadesVendidas, 0);
+    const totProductos = suppliers.reduce((s, p) => s + p.totalProductos,   0);
+    const totMargen    = totVentas > 0 ? (totGanancia / totVentas) * 100 : 0;
+
+    // ── Hoja 1: Resumen por proveedor ──────────────────────────────────────────
+    const h1 = [
+      '#', 'Proveedor', 'RFC',
+      'Ventas ($)', '% Part. Ventas',
+      'Costo ($)', 'Utilidad ($)', 'Margen (%)', '% Part. Utilidad',
+      'Tickets', 'Unidades', 'Productos', 'Compras Acum. ($)', 'Últ. Compra',
+    ];
+
+    const dataRows = suppliers.map((s, i) => {
+      const margen    = s.totalVentas > 0 ? (s.ganancia    / s.totalVentas)  * 100 : 0;
+      const pctVentas = totVentas     > 0 ? (s.totalVentas / totVentas)      * 100 : 0;
+      const pctUtil   = totGanancia   > 0 ? (s.ganancia    / totGanancia)    * 100 : 0;
       return [
         i + 1,
         displayName(s),
         s.rfc || '',
-        s.totalProductos,
-        Number(s.totalVentas),
-        Number(s.totalCosto),
-        Number(s.ganancia),
-        margen,
+        +s.totalVentas.toFixed(2),
+        +pctVentas.toFixed(2),
+        +s.totalCosto.toFixed(2),
+        +s.ganancia.toFixed(2),
+        +margen.toFixed(2),
+        +pctUtil.toFixed(2),
         s.totalTickets,
+        s.unidadesVendidas,
+        s.totalProductos,
+        +s.comprasAcumuladas.toFixed(2),
         s.fechaUltimaCompra ? new Date(s.fechaUltimaCompra).toLocaleDateString('es-MX') : '',
       ];
     });
 
-    // Totals row
-    const totVentas   = suppliers.reduce((s, p) => s + p.totalVentas, 0);
-    const totCosto    = suppliers.reduce((s, p) => s + p.totalCosto, 0);
-    const totGanancia = suppliers.reduce((s, p) => s + p.ganancia, 0);
-    const totMargen   = totVentas > 0 ? parseFloat(((totGanancia / totVentas) * 100).toFixed(2)) : 0;
-    rows.push([]);
-    rows.push(['TOTAL', '', '', suppliers.reduce((s, p) => s + p.totalProductos, 0), totVentas, totCosto, totGanancia, totMargen, suppliers.reduce((s, p) => s + p.totalTickets, 0), ''] as unknown as (string | number)[]);
+    // Blank separator + totals row
+    dataRows.push([] as unknown as typeof dataRows[0]);
+    dataRows.push([
+      'TOTAL', `${suppliers.length} proveedores`, '',
+      +totVentas.toFixed(2),    100,
+      +totCosto.toFixed(2),     +totGanancia.toFixed(2), +totMargen.toFixed(2), 100,
+      totTickets, totUnidades, totProductos, '', '',
+    ] as unknown as typeof dataRows[0]);
 
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
-    ws['!cols'] = [
-      { wch: 5 }, { wch: 35 }, { wch: 16 }, { wch: 10 },
-      { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
-      { wch: 10 }, { wch: 14 },
+    const aoa1 = [
+      [`Reporte de Proveedores — La Casita Deli`],
+      [`Periodo: ${pLabel[period] ?? period}   |   Generado: ${new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' })}`],
+      [],
+      h1,
+      ...dataRows,
     ];
-    const currFmt = '"$"#,##0.00';
-    const pctFmt  = '0.00"%"';
-    const dataStart = 1;
-    rows.forEach((_, i) => {
-      const r = dataStart + i;
-      (['E', 'F', 'G'] as const).forEach(col => { const c = ws[`${col}${r + 1}`]; if (c) c.z = currFmt; });
-      const hc = ws[`H${r + 1}`]; if (hc) hc.z = pctFmt;
-    });
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Proveedores');
-    const date = new Date().toISOString().slice(0, 10);
-    XLSX.writeFile(wb, `proveedores-${PERIOD_LABEL[period] || 'reporte'}-${date}.xlsx`);
+    const ws1 = XLSX.utils.aoa_to_sheet(aoa1);
+    ws1['!cols'] = [
+      { wch: 4 }, { wch: 36 }, { wch: 16 },
+      { wch: 14 }, { wch: 14 },
+      { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 14 },
+      { wch: 9 },  { wch: 10 }, { wch: 9 },  { wch: 16 }, { wch: 14 },
+    ];
+
+    // Number formats: data rows start at Excel row 5 (3 title/blank + 1 header)
+    const dStart = 5;
+    const dEnd   = 4 + dataRows.length;
+    for (let r = dStart; r <= dEnd; r++) {
+      (['D', 'F', 'G', 'M'] as const).forEach(col => { const c = ws1[`${col}${r}`]; if (c) c.z = currFmt; });
+      (['E', 'H', 'I']       as const).forEach(col => { const c = ws1[`${col}${r}`]; if (c) c.z = pctFmt; });
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws1, 'Por Proveedor');
+
+    // ── Hoja 2: Directorio de contacto ────────────────────────────────────────
+    const h2 = ['Proveedor', 'RFC', 'Teléfono', 'Web', 'Domicilio', 'Municipio', 'Estado', 'CP', 'País', 'Últ. Compra', 'Compras Acum. ($)'];
+    const contactRows = suppliers.map(s => [
+      displayName(s), s.rfc || '', s.telefono1 || '', s.url || '',
+      s.domicilio || '', s.municipio || '', s.estado || '', s.cp || '', s.pais || '',
+      s.fechaUltimaCompra ? new Date(s.fechaUltimaCompra).toLocaleDateString('es-MX') : '',
+      +s.comprasAcumuladas.toFixed(2),
+    ]);
+
+    const ws2 = XLSX.utils.aoa_to_sheet([h2, ...contactRows]);
+    ws2['!cols'] = [
+      { wch: 36 }, { wch: 16 }, { wch: 15 }, { wch: 30 },
+      { wch: 30 }, { wch: 20 }, { wch: 20 }, { wch: 8 }, { wch: 12 },
+      { wch: 14 }, { wch: 16 },
+    ];
+    for (let r = 2; r <= contactRows.length + 1; r++) {
+      const c = ws2[`K${r}`]; if (c) c.z = currFmt;
+    }
+    XLSX.utils.book_append_sheet(wb, ws2, 'Directorio');
+
+    XLSX.writeFile(wb, `proveedores-${period}-${date}.xlsx`);
   };
 
   const displayName = (s: Supplier) =>

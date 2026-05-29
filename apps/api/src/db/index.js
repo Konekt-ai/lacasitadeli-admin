@@ -127,7 +127,64 @@ function getDb() {
       usuario      TEXT DEFAULT 'TC52',
       created_at   TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS stock_ubicaciones (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo  TEXT NOT NULL,
+      nombre      TEXT,
+      area        TEXT NOT NULL,
+      cantidad    REAL DEFAULT 0,
+      updated_at  TEXT DEFAULT (datetime('now')),
+      UNIQUE(art_codigo, area)
+    );
+    CREATE TABLE IF NOT EXISTS alertas_descartadas (
+      art_codigo  TEXT    NOT NULL,
+      tipo        TEXT    NOT NULL CHECK(tipo IN ('stagnant','noSales','expiry')),
+      notas       TEXT,
+      created_at  TEXT    DEFAULT (datetime('now')),
+      PRIMARY KEY (art_codigo, tipo)
+    );
+    CREATE TABLE IF NOT EXISTS ubicaciones_config (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      clave       TEXT    NOT NULL UNIQUE,
+      nombre      TEXT    NOT NULL,
+      icono       TEXT    DEFAULT 'category',
+      color_bg    TEXT    DEFAULT 'bg-stone-100',
+      color_text  TEXT    DEFAULT 'text-stone-600',
+      activo      INTEGER DEFAULT 1,
+      orden       INTEGER DEFAULT 0,
+      created_at  TEXT    DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS email_report_log (
+      id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+      tipo                 TEXT    NOT NULL DEFAULT 'monthly',
+      productos_detectados INTEGER DEFAULT 0,
+      noSales              INTEGER DEFAULT 0,
+      stagnant             INTEGER DEFAULT 0,
+      expiry               INTEGER DEFAULT 0,
+      enviado_a            TEXT,
+      created_at           TEXT    DEFAULT (datetime('now'))
+    );
   `);
+
+  // Migración: agregar columna area a almacen_movimientos si no existe
+  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
+
+  // Seed áreas por defecto si la tabla está vacía
+  const areaCount = _db.prepare(`SELECT COUNT(*) AS n FROM ubicaciones_config`).get()?.n ?? 0;
+  if (areaCount === 0) {
+    const ins = _db.prepare(`
+      INSERT OR IGNORE INTO ubicaciones_config (clave, nombre, icono, color_bg, color_text, orden)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    [
+      ['bodega',       'Bodega',       'warehouse',  'bg-blue-50',   'text-blue-700',  0],
+      ['cocina',       'Cocina',       'restaurant', 'bg-amber-50',  'text-amber-700', 1],
+      ['tienda',       'Tienda',       'storefront', 'bg-green-50',  'text-green-700', 2],
+      ['refrigerador', 'Refrigerador', 'ac_unit',    'bg-cyan-50',   'text-cyan-700',  3],
+      ['otro',         'Otro',         'category',   'bg-stone-100', 'text-stone-600', 4],
+    ].forEach(a => ins.run(...a));
+  }
+
   return _db;
 }
 

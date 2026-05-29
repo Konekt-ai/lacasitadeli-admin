@@ -49,7 +49,18 @@ export interface AnalyticsData {
 }
 
 // ── Bodega / Control Interno ──────────────────────────────────────────────────
-export type Area = 'bodega' | 'cocina' | 'tienda' | 'refrigerador' | 'otro';
+export type Area = string; // configurable — formerly 'bodega'|'cocina'|'tienda'|'refrigerador'|'otro'
+
+export interface AreaConfig {
+  id:         number;
+  clave:      string;
+  nombre:     string;
+  icono:      string;
+  color_bg:   string;
+  color_text: string;
+  activo:     number;
+  orden:      number;
+}
 
 export interface AreaCount  { area: Area; total: number; }
 
@@ -89,4 +100,37 @@ export interface BodegaAlerts {
   stagnant:   StagnantProduct[];
   noSales:    StagnantProduct[];
   totals:     AlertTotals;
+}
+
+// ── Ubicaciones y movimientos unificados ──────────────────────────────────────
+export interface StockUbicacion {
+  art_codigo: string;
+  nombre:     string | null;
+  area:       string;
+  cantidad:   number;
+  updated_at: string;
+}
+
+export interface ResumenUbicacion {
+  area:      string;
+  productos: number;
+  unidades:  number;
+}
+
+export type TipoMovimiento = 'entrada' | 'salida' | 'merma' | 'transferencia';
+
+export interface MovimientoUnificado {
+  uid:           string;
+  tipo:          TipoMovimiento;
+  codigo:        string;
+  nombre:        string | null;
+  cantidad:      number;
+  area_origen:   string | null;
+  area_destino:  string | null;
+  stock_antes:   number | null;
+  stock_despues: number | null;
+  motivo:        string | null;
+  notas:         string | null;
+  usuario:       string;
+  fecha:         string;
 }
