@@ -6,20 +6,22 @@ import type {
   Area, AreaConfig, AreaCount, AreaProduct, ExpiryRecord,
   SurtidoTransfer, Recuento, StagnantProduct,
   StockUbicacion, ResumenUbicacion, MovimientoUnificado, TipoMovimiento,
+  PedidoRecepcion, PedidoConDetalle, EstadoPedido, ConsumoArea,
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'areas' | 'ubicaciones' | 'merma' | 'surtido' | 'discrepancias' | 'conteo' | 'facturas' | 'zebra' | 'config';
+type SubView = 'areas' | 'ubicaciones' | 'merma' | 'surtido' | 'discrepancias' | 'conteo' | 'facturas' | 'zebra' | 'config' | 'recepcion';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
-  { id: 'ubicaciones',   label: 'Ubicaciones',     icon: 'inventory_2' },
-  { id: 'areas',         label: 'Asignar Áreas',   icon: 'warehouse' },
+  { id: 'ubicaciones',   label: 'Ubicaciones',       icon: 'inventory_2' },
+  { id: 'recepcion',     label: 'Recepción',         icon: 'local_shipping' },
+  { id: 'areas',         label: 'Asignar Áreas',     icon: 'warehouse' },
   { id: 'merma',         label: 'Merma / Caducidad', icon: 'event_busy' },
-  { id: 'surtido',       label: 'Surtido',         icon: 'swap_horiz' },
-  { id: 'discrepancias', label: 'Discrepancias',   icon: 'difference' },
-  { id: 'conteo',        label: 'Conteo Ventas',   icon: 'calculate' },
-  { id: 'facturas',      label: 'Facturas PDF',    icon: 'receipt_long', dev: true },
-  { id: 'zebra',         label: 'Movimientos TC52', icon: 'qr_code_scanner' },
-  { id: 'config',        label: 'Configurar Áreas', icon: 'tune' },
+  { id: 'surtido',       label: 'Surtido',           icon: 'swap_horiz' },
+  { id: 'discrepancias', label: 'Discrepancias',     icon: 'difference' },
+  { id: 'conteo',        label: 'Conteo Ventas',     icon: 'calculate' },
+  { id: 'facturas',      label: 'Facturas PDF',      icon: 'receipt_long', dev: true },
+  { id: 'zebra',         label: 'Movimientos TC52',  icon: 'qr_code_scanner' },
+  { id: 'config',        label: 'Configurar Áreas',  icon: 'tune' },
 ];
 
 type AreaMeta = { label: string; icon: string; color: string; bg: string };
@@ -533,6 +535,15 @@ const MOTIVO_META: Record<MermaTC52Record['motivo'], { label: string; emoji: str
   otro:        { label: 'Otro',        emoji: '❓', color: 'text-stone-600',  bg: 'bg-stone-100' },
 };
 
+interface MermaStats {
+  periodo:      string;
+  totales:      { num_registros: number; total_unidades: number };
+  porMotivo:    { motivo: string; num_registros: number; total_unidades: number }[];
+  topProductos: { codigo: string; nombre: string; num_registros: number; total_unidades: number }[];
+  porArea:      { area: string; num_registros: number; total_unidades: number }[];
+  tendencia:    { mes: string; num_registros: number; total_unidades: number }[];
+}
+
 function MermaView() {
   const { areas, areaMap } = useAreasCtx();
   const [records, setRecords] = useState<ExpiryRecord[]>([]);
@@ -546,17 +557,96 @@ function MermaView() {
   const [tc52Loading, setTc52Loading] = useState(false);
   const [tc52Fecha, setTc52Fecha] = useState(new Date().toISOString().slice(0, 10));
   const [tc52Collapsed, setTc52Collapsed] = useState(false);
+  const [stats,        setStats]        = useState<MermaStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsMes,     setStatsMes]     = useState(new Date().toISOString().slice(0, 7));
+  const [statsCollapsed, setStatsCollapsed] = useState(false);
 
   const fetchTc52Merma = useCallback(async (fecha: string) => {
     setTc52Loading(true);
     try {
-      const data = await fetch(`/api/almacen/merma/historial?fecha=${fecha}&limit=100`).then(r => r.json());
+      const data = await fetch(`/api/almacen/merma/historial?fecha=${fecha}&limit=200`).then(r => r.json());
       setTc52Records(Array.isArray(data) ? data : []);
     } catch { /* silent */ }
     finally { setTc52Loading(false); }
   }, []);
 
+  const fetchStats = useCallback(async (mes: string) => {
+    setStatsLoading(true);
+    try {
+      const data = await fetch(`/api/almacen/merma/stats?mes=${mes}`).then(r => r.json());
+      setStats(data);
+    } catch { /* silent */ }
+    finally { setStatsLoading(false); }
+  }, []);
+
   useEffect(() => { fetchTc52Merma(tc52Fecha); }, [fetchTc52Merma, tc52Fecha]);
+  useEffect(() => { fetchStats(statsMes); }, [fetchStats, statsMes]);
+
+  const exportarExcel = () => {
+    if (!tc52Records.length) return;
+    const XLSX = require('xlsx');
+    const mesLabel = new Date(tc52Fecha + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+
+    const filas = tc52Records.map(r => ({
+      'Fecha':          new Date(r.fecha).toLocaleString('es-MX', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }),
+      'Código':         r.codigo,
+      'Producto':       r.nombre || r.codigo,
+      'Motivo':         MOTIVO_META[r.motivo]?.label ?? r.motivo,
+      'Área':           areaMap[r.area]?.label ?? r.area,
+      'Cantidad':       r.cantidad,
+      'Stock antes':    r.stock_antes,
+      'Stock después':  r.stock_despues,
+      'Notas':          r.notas || '',
+      'Usuario':        r.usuario,
+    }));
+
+    const wb  = XLSX.utils.book_new();
+    const ws  = XLSX.utils.json_to_sheet([], { skipHeader: true });
+    XLSX.utils.sheet_add_aoa(ws, [
+      [`Historial de Merma — La Casita Deli`],
+      [`Fecha: ${mesLabel}`],
+      [`Total: ${tc52Records.length} registros · ${tc52Records.reduce((s, r) => s + r.cantidad, 0)} unidades`],
+      [],
+    ]);
+    XLSX.utils.sheet_add_json(ws, filas, { origin: 'A5' });
+
+    // Column widths
+    ws['!cols'] = [{ wch: 22 }, { wch: 14 }, { wch: 36 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 28 }, { wch: 12 }];
+
+    // Style header rows
+    ['A1', 'A2', 'A3'].forEach(cell => {
+      if (ws[cell]) ws[cell].s = { font: { bold: true } };
+    });
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Merma');
+
+    // Segunda hoja: resumen por motivo
+    if (stats) {
+      const resumen = stats.porMotivo.map(m => ({
+        'Motivo':    MOTIVO_META[m.motivo as MermaTC52Record['motivo']]?.label ?? m.motivo,
+        'Registros': m.num_registros,
+        'Unidades':  m.total_unidades,
+        '% del total': stats.totales.total_unidades > 0
+          ? ((m.total_unidades / stats.totales.total_unidades) * 100).toFixed(1) + '%'
+          : '0%',
+      }));
+      const ws2 = XLSX.utils.json_to_sheet(resumen);
+      ws2['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws2, 'Por Motivo');
+
+      const topWs = XLSX.utils.json_to_sheet(stats.topProductos.map(p => ({
+        'Código':    p.codigo,
+        'Producto':  p.nombre,
+        'Registros': p.num_registros,
+        'Unidades':  p.total_unidades,
+      })));
+      topWs['!cols'] = [{ wch: 14 }, { wch: 36 }, { wch: 12 }, { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, topWs, 'Top Productos');
+    }
+
+    XLSX.writeFile(wb, `merma-${tc52Fecha}.xlsx`);
+  };
 
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotif({ msg, type });
@@ -792,6 +882,109 @@ function MermaView() {
         </div>
       )}
 
+      {/* ── Estadísticas de merma ────────────────────────────────────────── */}
+      <div className="mt-8 border-t border-outline-variant/10 pt-6">
+        <button
+          onClick={() => setStatsCollapsed(v => !v)}
+          className="w-full flex items-center justify-between mb-4 group">
+          <div className="flex items-center gap-2">
+            <Icon name="bar_chart" className="text-base text-rose-600" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-600">
+              Estadísticas de Merma
+            </span>
+          </div>
+          <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+            <input
+              type="month"
+              value={statsMes}
+              onChange={e => setStatsMes(e.target.value)}
+              className="px-3 py-1 bg-background border border-outline-variant/20 rounded-lg text-xs font-body outline-none focus:border-primary transition-colors"
+            />
+            <Icon
+              name={statsCollapsed ? 'expand_more' : 'expand_less'}
+              className="text-stone-400 group-hover:text-stone-600 transition-colors pointer-events-none"
+            />
+          </div>
+        </button>
+
+        {!statsCollapsed && (
+          <>
+            {statsLoading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : !stats || stats.totales.num_registros === 0 ? (
+              <div className="py-10 flex flex-col items-center text-stone-300">
+                <Icon name="bar_chart" className="text-4xl opacity-20 mb-2" />
+                <p className="text-xs font-label uppercase tracking-widest">Sin mermas en este período</p>
+              </div>
+            ) : (
+              <div className="space-y-4 mb-6">
+                {/* Summary cards */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-rose-100 bg-rose-50/60 p-4">
+                    <p className="text-[10px] font-label font-bold uppercase tracking-widest text-rose-400 mb-1">Unidades perdidas</p>
+                    <p className="text-3xl font-serif text-rose-700">{stats.totales.total_unidades}</p>
+                  </div>
+                  <div className="rounded-xl border border-orange-100 bg-orange-50/60 p-4">
+                    <p className="text-[10px] font-label font-bold uppercase tracking-widest text-orange-400 mb-1">Incidencias</p>
+                    <p className="text-3xl font-serif text-orange-700">{stats.totales.num_registros}</p>
+                  </div>
+                </div>
+
+                {/* Por motivo */}
+                {stats.porMotivo.length > 0 && (
+                  <div className="rounded-xl border border-outline-variant/10 bg-surface-container-low/50 p-4">
+                    <p className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500 mb-3">Por motivo</p>
+                    <div className="space-y-3">
+                      {stats.porMotivo.map(m => {
+                        const meta = MOTIVO_META[m.motivo as MermaTC52Record['motivo']] ?? MOTIVO_META.otro;
+                        const pct  = stats.totales.total_unidades > 0
+                          ? (m.total_unidades / stats.totales.total_unidades) * 100
+                          : 0;
+                        return (
+                          <div key={m.motivo}>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-label text-stone-600">{meta.emoji} {meta.label}</span>
+                              <span className="text-xs font-label font-bold text-stone-500">
+                                {m.total_unidades} uds
+                                <span className="text-stone-400 font-normal ml-1">({pct.toFixed(0)}%)</span>
+                              </span>
+                            </div>
+                            <div className="h-2 rounded-full bg-stone-100 overflow-hidden">
+                              <div
+                                className={cn('h-full rounded-full transition-all duration-500', meta.bg)}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Top productos */}
+                {stats.topProductos.length > 0 && (
+                  <div className="rounded-xl border border-outline-variant/10 bg-surface-container-low/50 p-4">
+                    <p className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500 mb-3">Top productos con más merma</p>
+                    <div className="space-y-2">
+                      {stats.topProductos.slice(0, 8).map((p, i) => (
+                        <div key={p.codigo} className="flex items-center gap-3">
+                          <span className="text-[10px] font-label font-bold text-stone-300 w-4 text-right">{i + 1}</span>
+                          <span className="flex-1 text-xs font-body text-on-surface truncate">{p.nombre || p.codigo}</span>
+                          <span className="text-xs font-label font-bold text-rose-600 flex-shrink-0">{p.total_unidades} uds</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
       {/* ── TC52 Merma Historial ─────────────────────────────────────────── */}
       <div className="mt-8 border-t border-outline-variant/10 pt-6">
         <button
@@ -823,6 +1016,13 @@ function MermaView() {
                 disabled={tc52Loading}
                 className="p-1.5 text-stone-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors">
                 <Icon name="refresh" className={cn('text-base', tc52Loading && 'animate-spin')} />
+              </button>
+              <button
+                onClick={exportarExcel}
+                disabled={!tc52Records.length}
+                title="Exportar a Excel"
+                className="p-1.5 text-stone-400 hover:text-green-700 hover:bg-green-50 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                <Icon name="download" className="text-base" />
               </button>
               {tc52Records.length > 0 && (
                 <span className="ml-auto text-[10px] font-label text-stone-400">
@@ -885,6 +1085,8 @@ function MermaView() {
 // ── Surtido sub-view ──────────────────────────────────────────────────────────
 function SurtidoView() {
   const { areas, areaMap } = useAreasCtx();
+
+  // ── Surtido (transferencias) ──────────────────────────────────────────────
   const [transfers, setTransfers] = useState<SurtidoTransfer[]>([]);
   const [loading,   setLoading]   = useState(false);
   const [showForm,  setShowForm]  = useState(false);
@@ -894,6 +1096,21 @@ function SurtidoView() {
     de_area: 'bodega' as Area, a_area: 'cocina' as Area,
     cantidad: '', notas: '',
   });
+
+  // ── Stock actual por área ─────────────────────────────────────────────────
+  const nonBodegaAreas = areas.filter(a => a !== 'bodega');
+  const [stockArea,      setStockArea]      = useState<Area>(nonBodegaAreas[0] ?? 'cocina');
+  const [stockItems,     setStockItems]     = useState<StockUbicacion[]>([]);
+  const [stockLoading,   setStockLoading]   = useState(false);
+  const [stockCollapsed, setStockCollapsed] = useState(false);
+
+  // ── Consumo por área ──────────────────────────────────────────────────────
+  const [consumos,       setConsumos]       = useState<ConsumoArea[]>([]);
+  const [consumoLoading, setConsumoLoading] = useState(false);
+  const [showConsumo,    setShowConsumo]    = useState(false);
+  const [savingConsumo,  setSavingConsumo]  = useState(false);
+  const [consumoForm,    setConsumoForm]    = useState({ art_codigo: '', nombre: '', cantidad: '', notas: '' });
+
   const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -910,7 +1127,26 @@ function SurtidoView() {
     finally { setLoading(false); }
   }, []);
 
+  const fetchStock = useCallback(async (area: Area) => {
+    setStockLoading(true);
+    try {
+      const data = await fetch(`/api/bodega/stock-ubicaciones?area=${encodeURIComponent(area)}`).then(r => r.json());
+      setStockItems(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setStockLoading(false); }
+  }, []);
+
+  const fetchConsumos = useCallback(async (area: Area) => {
+    setConsumoLoading(true);
+    try {
+      const data = await fetch(`/api/bodega/consumo-area?area=${encodeURIComponent(area)}`).then(r => r.json());
+      setConsumos(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setConsumoLoading(false); }
+  }, []);
+
   useEffect(() => { fetchTransfers(); }, [fetchTransfers]);
+  useEffect(() => { fetchStock(stockArea); fetchConsumos(stockArea); }, [fetchStock, fetchConsumos, stockArea]);
 
   const saveTransfer = async () => {
     if (!form.art_codigo || !form.cantidad) { notify('Código y cantidad son requeridos', 'error'); return; }
@@ -936,18 +1172,41 @@ function SurtidoView() {
     try {
       const res  = await fetch(`/api/bodega/surtido/${id}/autorizar`, { method: 'PUT' });
       const data = await res.json();
-      if (res.ok) { notify(data.message || 'Autorizado'); fetchTransfers(); }
+      if (res.ok) { notify(data.message || 'Autorizado'); fetchTransfers(); fetchStock(stockArea); }
       else notify(data.error || 'Error', 'error');
     } catch { notify('Error de conexión', 'error'); }
   };
 
-  // Group by week
+  const saveConsumo = async () => {
+    if (!consumoForm.art_codigo || !consumoForm.cantidad) { notify('Código y cantidad son requeridos', 'error'); return; }
+    setSavingConsumo(true);
+    try {
+      const res  = await fetch('/api/bodega/consumo-area', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ...consumoForm, area: stockArea }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify('Consumo registrado');
+        setShowConsumo(false);
+        setConsumoForm({ art_codigo: '', nombre: '', cantidad: '', notas: '' });
+        fetchStock(stockArea);
+        fetchConsumos(stockArea);
+      } else notify(data.error || 'Error', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setSavingConsumo(false); }
+  };
+
+  // Group transfers by week
   const byWeek = transfers.reduce<Record<string, SurtidoTransfer[]>>((acc, t) => {
     const key = t.semana || 'Sin semana';
     if (!acc[key]) acc[key] = [];
     acc[key].push(t);
     return acc;
   }, {});
+
+  const totalUdsArea = stockItems.reduce((s, i) => s + i.cantidad, 0);
 
   return (
     <div>
@@ -961,10 +1220,186 @@ function SurtidoView() {
         </div>
       )}
 
-      {/* Header */}
+      {/* ── Panel: Stock actual por área ────────────────────────────────── */}
+      <div className="mb-6 rounded-2xl border border-outline-variant/10 bg-surface-container-low overflow-hidden">
+        <button
+          onClick={() => setStockCollapsed(v => !v)}
+          className="w-full flex items-center justify-between px-5 py-4 group">
+          <div className="flex items-center gap-2">
+            <Icon name="inventory_2" className="text-base text-primary" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-600">
+              Stock físico por área
+            </span>
+          </div>
+          <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
+            {/* Area tabs */}
+            <div className="flex gap-1">
+              {nonBodegaAreas.map(a => (
+                <button
+                  key={a}
+                  onClick={() => setStockArea(a)}
+                  className={cn(
+                    'px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest transition-all',
+                    stockArea === a
+                      ? cn(areaMap[a]?.bg || 'bg-primary/10', areaMap[a]?.color || 'text-primary')
+                      : 'bg-stone-100 text-stone-400 hover:bg-stone-200'
+                  )}>
+                  {areaMap[a]?.label || a}
+                </button>
+              ))}
+            </div>
+            <Icon
+              name={stockCollapsed ? 'expand_more' : 'expand_less'}
+              className="text-stone-400 group-hover:text-stone-600 transition-colors pointer-events-none"
+            />
+          </div>
+        </button>
+
+        {!stockCollapsed && (
+          <div className="px-5 pb-5">
+            {/* Área header + consumo button */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className={cn('w-7 h-7 rounded-full flex items-center justify-center', areaMap[stockArea]?.bg || 'bg-stone-100')}>
+                  <Icon name={areaMap[stockArea]?.icon || 'category'} className={cn('text-sm', areaMap[stockArea]?.color || 'text-stone-500')} />
+                </div>
+                <div>
+                  <p className="text-sm font-serif text-on-surface">{areaMap[stockArea]?.label || stockArea}</p>
+                  {!stockLoading && (
+                    <p className="text-[10px] font-label text-stone-400">
+                      {stockItems.length} producto{stockItems.length !== 1 ? 's' : ''} · {totalUdsArea} uds totales
+                    </p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setShowConsumo(v => !v)}
+                className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-[10px] font-label font-bold uppercase tracking-widest flex items-center gap-1.5 hover:bg-amber-700 transition-all shadow-sm">
+                <Icon name={showConsumo ? 'close' : 'remove_circle_outline'} className="text-sm" />
+                {showConsumo ? 'Cancelar' : 'Registrar Consumo'}
+              </button>
+            </div>
+
+            {/* Consumo form */}
+            {showConsumo && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 space-y-3">
+                <p className="text-[10px] font-label font-bold uppercase tracking-widest text-amber-700">
+                  Consumo en {areaMap[stockArea]?.label || stockArea}
+                </p>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Código *</label>
+                    <input
+                      value={consumoForm.art_codigo}
+                      onChange={e => setConsumoForm(f => ({ ...f, art_codigo: e.target.value }))}
+                      placeholder="Art_Codigo"
+                      list="stock-area-list"
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-sm font-body outline-none focus:border-amber-400 transition-colors" />
+                    <datalist id="stock-area-list">
+                      {stockItems.map(i => <option key={i.art_codigo} value={i.art_codigo}>{i.nombre || i.art_codigo}</option>)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Nombre</label>
+                    <input
+                      value={consumoForm.nombre}
+                      onChange={e => setConsumoForm(f => ({ ...f, nombre: e.target.value }))}
+                      placeholder="Nombre del producto"
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-sm font-body outline-none focus:border-amber-400 transition-colors" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad *</label>
+                    <input
+                      type="number" min="0.01" step="0.01"
+                      value={consumoForm.cantidad}
+                      onChange={e => setConsumoForm(f => ({ ...f, cantidad: e.target.value }))}
+                      placeholder="Ej: 2"
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-sm font-body outline-none focus:border-amber-400 transition-colors" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Notas</label>
+                    <input
+                      value={consumoForm.notas}
+                      onChange={e => setConsumoForm(f => ({ ...f, notas: e.target.value }))}
+                      placeholder="Opcional"
+                      className="w-full px-3 py-2 bg-white border border-amber-200 rounded-lg text-sm font-body outline-none focus:border-amber-400 transition-colors" />
+                  </div>
+                </div>
+                <button onClick={saveConsumo} disabled={savingConsumo}
+                  className={cn(
+                    'w-full py-2 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
+                    savingConsumo ? 'bg-stone-200 text-stone-400' : 'bg-amber-600 text-white hover:bg-amber-700'
+                  )}>
+                  {savingConsumo
+                    ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+                    : <Icon name="check" className="text-base" />}
+                  Confirmar Consumo
+                </button>
+              </div>
+            )}
+
+            {/* Stock table */}
+            {stockLoading ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : stockItems.length === 0 ? (
+              <div className="py-8 flex flex-col items-center text-stone-300">
+                <Icon name="inventory_2" className="text-4xl opacity-20 mb-2" />
+                <p className="text-xs font-label uppercase tracking-widest">
+                  Sin stock registrado en {areaMap[stockArea]?.label || stockArea}
+                </p>
+                <p className="text-[10px] font-label text-stone-300 mt-1">Autoriza surtidos desde bodega para que aparezca aquí</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+                {stockItems.map(item => (
+                  <div key={item.art_codigo}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-background border border-outline-variant/10 hover:border-primary/20 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-body text-on-surface truncate">{item.nombre || item.art_codigo}</p>
+                      <p className="text-[10px] font-label text-stone-400 font-mono">{item.art_codigo}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-label font-bold text-on-surface">{item.cantidad}</p>
+                      <p className="text-[9px] font-label text-stone-300">uds</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Últimos consumos */}
+            {consumos.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-outline-variant/10">
+                <p className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-400 mb-2">Consumos recientes</p>
+                <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
+                  {consumos.slice(0, 10).map(c => (
+                    <div key={c.id} className="flex items-center gap-3 px-3 py-2 rounded-lg bg-amber-50/50 border border-amber-100">
+                      <Icon name="remove_circle_outline" className="text-sm text-amber-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-body text-on-surface truncate">{c.nombre || c.art_codigo}</p>
+                        {c.notas && <p className="text-[10px] font-label text-stone-400 truncate">{c.notas}</p>}
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-xs font-label font-bold text-amber-700">−{c.cantidad}</p>
+                        <p className="text-[9px] font-label text-stone-300">
+                          {new Date(c.created_at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Registrar surtido ────────────────────────────────────────────── */}
       <div className="flex justify-between items-center mb-5">
         <p className="text-[11px] font-label uppercase tracking-widest text-stone-400">
-          Registro de movimientos bodega ↔ áreas
+          Historial de movimientos bodega ↔ áreas
         </p>
         <button onClick={() => setShowForm(v => !v)}
           className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-primary-container transition-all">
@@ -1199,7 +1634,7 @@ function StagnantTable({
 interface ReportLog { id: number; tipo: string; productos_detectados: number; noSales: number; stagnant: number; expiry: number; enviado_a: string | null; created_at: string; }
 
 function DiscrepanciasView() {
-  const { areas } = useAreasCtx();
+  const { areas, areaMap } = useAreasCtx();
   const [stagnant,  setStagnant]  = useState<StagnantProduct[]>([]);
   const [noSales,   setNoSales]   = useState<StagnantProduct[]>([]);
   const [recuentos, setRecuentos] = useState<Recuento[]>([]);
@@ -1963,6 +2398,406 @@ function ZebraView() {
 }
 
 // ── Configuración de Áreas ─────────────────────────────────────────────────────
+// ── Recepción de Mercancía ─────────────────────────────────────────────────────
+
+const ESTADO_META: Record<EstadoPedido, { label: string; color: string; bg: string; icon: string }> = {
+  pendiente:    { label: 'Pendiente',     color: 'text-amber-700',  bg: 'bg-amber-50',   icon: 'schedule' },
+  en_recepcion: { label: 'En Recepción',  color: 'text-blue-700',   bg: 'bg-blue-50',    icon: 'local_shipping' },
+  cerrado:      { label: 'Cerrado',       color: 'text-emerald-700',bg: 'bg-emerald-50', icon: 'check_circle' },
+  cancelado:    { label: 'Cancelado',     color: 'text-stone-500',  bg: 'bg-stone-100',  icon: 'cancel' },
+};
+
+interface ItemForm { art_codigo: string; nombre: string; cantidad_esperada: string; }
+
+function RecepcionView() {
+  const [pedidos,      setPedidos]      = useState<PedidoRecepcion[]>([]);
+  const [selected,     setSelected]     = useState<PedidoConDetalle | null>(null);
+  const [showForm,     setShowForm]     = useState(false);
+  const [loading,      setLoading]      = useState(false);
+  const [saving,       setSaving]       = useState(false);
+  const [filtroEstado, setFiltroEstado] = useState<string>('activos');
+  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  // Formulario nuevo pedido
+  const [proveedor,      setProveedor]      = useState('');
+  const [fechaEsperada,  setFechaEsperada]  = useState('');
+  const [notas,          setNotas]          = useState('');
+  const [items,          setItems]          = useState<ItemForm[]>([{ art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+  const [busqueda,       setBusqueda]       = useState<Record<number, string>>({});
+  const [sugerencias,    setSugerencias]    = useState<Record<number, { id: string; nombre: string }[]>>({});
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type }); setTimeout(() => setNotif(null), 3500);
+  };
+
+  const fetchPedidos = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetch('/api/almacen/pedidos').then(r => r.json());
+      setPedidos(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+
+  const fetchDetalle = useCallback(async (id: number) => {
+    try {
+      const data = await fetch(`/api/almacen/pedidos/${id}`).then(r => r.json());
+      setSelected(data);
+    } catch { notify('Error al cargar detalle', 'error'); }
+  }, []);
+
+  useEffect(() => { fetchPedidos(); }, [fetchPedidos]);
+
+  const buscarProducto = async (idx: number, q: string) => {
+    setBusqueda(p => ({ ...p, [idx]: q }));
+    if (q.length < 2) { setSugerencias(p => ({ ...p, [idx]: [] })); return; }
+    try {
+      const res = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(q)}`).then(r => r.json());
+      setSugerencias(p => ({ ...p, [idx]: (res || []).slice(0, 6).map((r: any) => ({ id: r.codigo, nombre: r.nombre })) }));
+    } catch { /* silent */ }
+  };
+
+  const seleccionarProducto = (idx: number, codigo: string, nombre: string) => {
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, art_codigo: codigo, nombre } : it));
+    setBusqueda(p => ({ ...p, [idx]: nombre }));
+    setSugerencias(p => ({ ...p, [idx]: [] }));
+  };
+
+  const agregarItem = () => setItems(p => [...p, { art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+  const quitarItem  = (idx: number) => setItems(p => p.filter((_, i) => i !== idx));
+
+  const crearPedido = async () => {
+    const validItems = items.filter(it => it.art_codigo && parseFloat(it.cantidad_esperada) > 0);
+    if (!validItems.length) { notify('Agrega al menos un producto con cantidad', 'error'); return; }
+    setSaving(true);
+    try {
+      const res  = await fetch('/api/almacen/pedidos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ proveedor, fecha_esperada: fechaEsperada, notas, items: validItems }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(`Pedido ${data.folio} creado`);
+        setShowForm(false);
+        setProveedor(''); setFechaEsperada(''); setNotas('');
+        setItems([{ art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+        fetchPedidos();
+      } else notify(data.error || 'Error al crear', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const cambiarEstado = async (id: number, estado: EstadoPedido) => {
+    try {
+      await fetch(`/api/almacen/pedidos/${id}/estado`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado }),
+      });
+      notify(estado === 'cerrado' ? 'Pedido cerrado' : 'Estado actualizado');
+      fetchPedidos();
+      if (selected?.id === id) fetchDetalle(id);
+    } catch { notify('Error', 'error'); }
+  };
+
+  const pedidosFiltrados = pedidos.filter(p => {
+    if (filtroEstado === 'activos') return p.estado === 'pendiente' || p.estado === 'en_recepcion';
+    if (filtroEstado === 'cerrados') return p.estado === 'cerrado';
+    if (filtroEstado === 'cancelados') return p.estado === 'cancelado';
+    return true;
+  });
+
+  return (
+    <div>
+      {notif && (
+        <div className={cn('fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error')}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <div>
+          <h3 className="font-serif text-xl text-primary">Recepción de Mercancía</h3>
+          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
+            Registra lo esperado · el TC52 confirma lo recibido · el sistema detecta diferencias
+          </p>
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-on-primary rounded-xl text-[11px] font-label font-bold uppercase tracking-widest hover:bg-primary/90 shadow-sm transition-all">
+          <Icon name={showForm ? 'close' : 'add'} className="text-base" />
+          {showForm ? 'Cancelar' : 'Nueva Orden'}
+        </button>
+      </div>
+
+      {/* Formulario nueva orden */}
+      {showForm && (
+        <div className="bg-surface-container-lowest rounded-2xl border border-primary/20 p-5 mb-6 space-y-4">
+          <h4 className="font-serif text-base text-primary flex items-center gap-2">
+            <Icon name="local_shipping" className="text-primary" /> Nueva Orden de Recepción
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Proveedor</label>
+              <input value={proveedor} onChange={e => setProveedor(e.target.value)} placeholder="Nombre del proveedor"
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha esperada</label>
+              <input type="date" value={fechaEsperada} onChange={e => setFechaEsperada(e.target.value)}
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Notas</label>
+              <input value={notas} onChange={e => setNotas(e.target.value)} placeholder="Opcional"
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500">Productos esperados</label>
+              <button onClick={agregarItem} className="flex items-center gap-1 text-[10px] font-label uppercase tracking-widest text-primary hover:underline">
+                <Icon name="add_circle" className="text-sm" /> Agregar producto
+              </button>
+            </div>
+            <div className="space-y-2">
+              {items.map((item, idx) => (
+                <div key={idx} className="flex gap-2 items-start">
+                  {/* Buscador de producto */}
+                  <div className="flex-1 relative">
+                    <input
+                      value={busqueda[idx] ?? item.nombre}
+                      onChange={e => buscarProducto(idx, e.target.value)}
+                      placeholder="Buscar producto por nombre o código…"
+                      className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors"
+                    />
+                    {(sugerencias[idx] || []).length > 0 && (
+                      <div className="absolute top-full left-0 right-0 z-50 bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-xl mt-1 overflow-hidden">
+                        {sugerencias[idx].map(s => (
+                          <button key={s.id} onClick={() => seleccionarProducto(idx, s.id, s.nombre)}
+                            className="w-full text-left px-3 py-2 text-sm font-body hover:bg-primary/5 flex items-center gap-2 border-b border-outline-variant/5 last:border-0">
+                            <Icon name="inventory_2" className="text-stone-300 text-sm flex-shrink-0" />
+                            <span className="flex-1 min-w-0 truncate">{s.nombre}</span>
+                            <span className="text-[10px] font-mono text-stone-400 flex-shrink-0">{s.id}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {/* Cantidad */}
+                  <div className="w-24 flex-shrink-0">
+                    <input type="number" min="1" value={item.cantidad_esperada}
+                      onChange={e => setItems(p => p.map((it, i) => i === idx ? { ...it, cantidad_esperada: e.target.value } : it))}
+                      placeholder="Cant."
+                      className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors text-center"
+                    />
+                  </div>
+                  <button onClick={() => quitarItem(idx)} disabled={items.length === 1}
+                    className="p-2 text-stone-300 hover:text-error transition-colors disabled:opacity-20 flex-shrink-0 mt-0.5">
+                    <Icon name="remove_circle_outline" className="text-lg" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={crearPedido} disabled={saving}
+              className={cn('flex-1 py-2.5 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
+                saving ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary/90')}>
+              {saving ? <div className="w-3 h-3 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" /> : <Icon name="save" className="text-sm" />}
+              Crear Orden
+            </button>
+            <button onClick={() => setShowForm(false)} className="px-5 py-2.5 bg-surface-container text-stone-500 rounded-xl text-xs font-label uppercase tracking-widest">
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Vista detalle de un pedido */}
+      {selected && (
+        <div className="mb-6 bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-hidden">
+          {/* Header del detalle */}
+          <div className="p-4 border-b border-outline-variant/10 flex items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-base font-serif text-primary font-bold">{selected.folio}</span>
+                <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest flex items-center gap-1',
+                  ESTADO_META[selected.estado].bg, ESTADO_META[selected.estado].color)}>
+                  <Icon name={ESTADO_META[selected.estado].icon} className="text-xs" />
+                  {ESTADO_META[selected.estado].label}
+                </span>
+              </div>
+              <p className="text-xs font-body text-stone-500 mt-1">
+                {selected.proveedor || 'Sin proveedor'}{selected.fecha_esperada ? ` · Esperado: ${new Date(selected.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}
+              </p>
+              {selected.notas && <p className="text-xs font-body text-stone-400 mt-0.5 italic">{selected.notas}</p>}
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {selected.estado !== 'cerrado' && selected.estado !== 'cancelado' && (
+                <button onClick={() => cambiarEstado(selected.id, 'cerrado')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-emerald-100 transition-all border border-emerald-200">
+                  <Icon name="check_circle" className="text-sm" /> Cerrar pedido
+                </button>
+              )}
+              <button onClick={() => setSelected(null)}
+                className="p-1.5 rounded-lg text-stone-300 hover:text-stone-500 hover:bg-surface-container transition-all">
+                <Icon name="close" className="text-lg" />
+              </button>
+            </div>
+          </div>
+
+          {/* Tabla de discrepancias */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-surface-container-low">
+                  <th className="text-left px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Producto</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Esperado</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Recibido</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Diferencia</th>
+                  <th className="px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selected.detalle.map(d => {
+                  const ok       = d.diferencia === 0;
+                  const faltante = d.diferencia < 0;
+                  const sobrante = d.diferencia > 0;
+                  return (
+                    <tr key={d.id} className="border-t border-outline-variant/5 hover:bg-surface-container-low/50">
+                      <td className="px-4 py-3">
+                        <p className="font-body text-on-surface text-sm">{d.nombre || d.art_codigo}</p>
+                        <p className="text-[10px] font-mono text-stone-400">{d.art_codigo}</p>
+                      </td>
+                      <td className="px-4 py-3 text-right font-body font-semibold text-stone-600">{d.cantidad_esperada}</td>
+                      <td className="px-4 py-3 text-right font-body font-semibold">
+                        <span className={d.cantidad_recibida === 0 ? 'text-stone-300' : 'text-on-surface'}>{d.cantidad_recibida}</span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-serif font-bold text-base">
+                        <span className={ok ? 'text-emerald-600' : faltante ? 'text-error' : 'text-amber-600'}>
+                          {sobrante ? '+' : ''}{d.diferencia}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {ok ? (
+                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-emerald-600">
+                            <Icon name="check_circle" className="text-sm" /> OK
+                          </span>
+                        ) : faltante ? (
+                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-error">
+                            <Icon name="warning" className="text-sm" /> Faltante
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-amber-600">
+                            <Icon name="info" className="text-sm" /> Sobrante
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Resumen */}
+          <div className="p-4 border-t border-outline-variant/10 flex gap-4 flex-wrap">
+            {(() => {
+              const faltantes = selected.detalle.filter(d => d.diferencia < 0).length;
+              const sobrantes = selected.detalle.filter(d => d.diferencia > 0).length;
+              const ok        = selected.detalle.filter(d => d.diferencia === 0 && d.cantidad_recibida > 0).length;
+              const pendientes = selected.detalle.filter(d => d.cantidad_recibida === 0).length;
+              return (
+                <>
+                  <div className="flex items-center gap-1.5 text-[11px] font-label text-emerald-600"><Icon name="check_circle" className="text-sm" />{ok} correctos</div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-label text-error"><Icon name="warning" className="text-sm" />{faltantes} faltantes</div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-label text-amber-600"><Icon name="info" className="text-sm" />{sobrantes} sobrantes</div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-label text-stone-400"><Icon name="schedule" className="text-sm" />{pendientes} sin recibir</div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div className="flex gap-2 mb-4">
+        {[
+          { id: 'activos',    label: 'Activos' },
+          { id: 'cerrados',   label: 'Cerrados' },
+          { id: 'cancelados', label: 'Cancelados' },
+          { id: 'todos',      label: 'Todos' },
+        ].map(f => (
+          <button key={f.id} onClick={() => setFiltroEstado(f.id)}
+            className={cn('px-3 py-1.5 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest transition-all',
+              filtroEstado === f.id ? 'bg-primary text-on-primary' : 'bg-surface-container-low text-stone-500 hover:text-primary hover:bg-primary/5')}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Lista de pedidos */}
+      {loading ? (
+        <div className="flex justify-center py-10">
+          <div className="w-7 h-7 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : pedidosFiltrados.length === 0 ? (
+        <div className="py-14 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-2xl">
+          <Icon name="local_shipping" className="text-5xl opacity-20 mb-3" />
+          <p className="text-xs font-label uppercase tracking-widest">Sin órdenes en esta categoría</p>
+          <p className="text-xs font-body text-stone-300 mt-1">Crea una nueva orden cuando esperes un trailer</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {pedidosFiltrados.map(p => {
+            const meta   = ESTADO_META[p.estado];
+            const pct    = p.total_esperado > 0 ? Math.min(100, Math.round((p.total_recibido / p.total_esperado) * 100)) : 0;
+            return (
+              <button key={p.id} onClick={() => fetchDetalle(p.id)}
+                className={cn('w-full text-left bg-surface-container-lowest rounded-xl border transition-all hover:border-primary/30 hover:shadow-sm p-4',
+                  selected?.id === p.id ? 'border-primary/40 ring-1 ring-primary/20' : 'border-outline-variant/10')}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-serif text-sm text-primary font-bold">{p.folio}</span>
+                      <span className={cn('px-2 py-0.5 rounded-full text-[9px] font-label font-bold uppercase tracking-widest flex items-center gap-1', meta.bg, meta.color)}>
+                        <Icon name={meta.icon} className="text-[10px]" />{meta.label}
+                      </span>
+                    </div>
+                    <p className="text-xs font-body text-stone-500 mt-0.5 truncate">
+                      {p.proveedor || 'Sin proveedor'}{p.fecha_esperada ? ` · ${new Date(p.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}` : ''}
+                      {' · '}{p.num_items} productos
+                    </p>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-xs font-label font-bold text-stone-600">{p.total_recibido} / {p.total_esperado} uds</p>
+                    <p className="text-[10px] font-label text-stone-400">{pct}% recibido</p>
+                  </div>
+                </div>
+                {/* Barra de progreso */}
+                {p.estado !== 'pendiente' && (
+                  <div className="mt-2.5 h-1.5 bg-surface-container rounded-full overflow-hidden">
+                    <div className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-emerald-500' : 'bg-primary')}
+                      style={{ width: `${pct}%` }} />
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DEFAULT_CLAVES = ['bodega', 'cocina', 'tienda', 'refrigerador', 'otro'];
 
 function ConfiguracionAreasView() {
@@ -2253,6 +3088,7 @@ export default function BodegaTab() {
       {/* Content */}
       <div className="min-h-[400px]">
         {view === 'ubicaciones'   && <UbicacionesView />}
+        {view === 'recepcion'     && <RecepcionView />}
         {view === 'areas'         && <AreasView />}
         {view === 'merma'         && <MermaView />}
         {view === 'surtido'       && <SurtidoView />}

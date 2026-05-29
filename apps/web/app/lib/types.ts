@@ -102,6 +102,37 @@ export interface BodegaAlerts {
   totals:     AlertTotals;
 }
 
+// ── Recepción de mercancía ────────────────────────────────────────────────────
+export type EstadoPedido = 'pendiente' | 'en_recepcion' | 'cerrado' | 'cancelado';
+
+export interface PedidoRecepcion {
+  id:             number;
+  folio:          string;
+  proveedor:      string | null;
+  fecha_esperada: string | null;
+  estado:         EstadoPedido;
+  notas:          string | null;
+  cerrado_at:     string | null;
+  created_at:     string;
+  num_items:      number;
+  total_esperado: number;
+  total_recibido: number;
+}
+
+export interface PedidoDetalle {
+  id:               number;
+  pedido_id:        number;
+  art_codigo:       string;
+  nombre:           string | null;
+  cantidad_esperada: number;
+  cantidad_recibida: number;
+  diferencia:       number;
+}
+
+export interface PedidoConDetalle extends PedidoRecepcion {
+  detalle: PedidoDetalle[];
+}
+
 // ── Ubicaciones y movimientos unificados ──────────────────────────────────────
 export interface StockUbicacion {
   art_codigo: string;
@@ -109,6 +140,17 @@ export interface StockUbicacion {
   area:       string;
   cantidad:   number;
   updated_at: string;
+}
+
+export interface ConsumoArea {
+  id:         number;
+  art_codigo: string;
+  nombre:     string | null;
+  area:       string;
+  cantidad:   number;
+  notas:      string | null;
+  usuario:    string;
+  created_at: string;
 }
 
 export interface ResumenUbicacion {

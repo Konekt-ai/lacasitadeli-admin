@@ -164,10 +164,40 @@ function getDb() {
       enviado_a            TEXT,
       created_at           TEXT    DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS pedidos_recepcion (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      folio          TEXT    NOT NULL UNIQUE,
+      proveedor      TEXT,
+      fecha_esperada TEXT,
+      estado         TEXT    NOT NULL DEFAULT 'pendiente'
+                              CHECK(estado IN ('pendiente','en_recepcion','cerrado','cancelado')),
+      notas          TEXT,
+      cerrado_at     TEXT,
+      created_at     TEXT    DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS pedidos_recepcion_detalle (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      pedido_id         INTEGER NOT NULL REFERENCES pedidos_recepcion(id) ON DELETE CASCADE,
+      art_codigo        TEXT    NOT NULL,
+      nombre            TEXT,
+      cantidad_esperada REAL    NOT NULL,
+      created_at        TEXT    DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS consumo_area (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo  TEXT NOT NULL,
+      nombre      TEXT,
+      area        TEXT NOT NULL,
+      cantidad    REAL NOT NULL,
+      notas       TEXT,
+      usuario     TEXT DEFAULT 'admin',
+      created_at  TEXT DEFAULT (datetime('now'))
+    );
   `);
 
-  // Migración: agregar columna area a almacen_movimientos si no existe
+  // Migraciones de columnas
   try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
+  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN pedido_id INTEGER`); } catch (_) {}
 
   // Seed áreas por defecto si la tabla está vacía
   const areaCount = _db.prepare(`SELECT COUNT(*) AS n FROM ubicaciones_config`).get()?.n ?? 0;

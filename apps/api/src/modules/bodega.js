@@ -246,6 +246,60 @@ router.put('/surtido/:id/autorizar', async (req, res) => {
   }
 });
 
+// ── GET /api/bodega/stock-ubicaciones ────────────────────────────────────────
+router.get('/stock-ubicaciones', (req, res) => {
+  const { area } = req.query;
+  try {
+    const db = getDb();
+    const rows = area
+      ? db.prepare(`SELECT art_codigo, nombre, area, cantidad, updated_at FROM stock_ubicaciones WHERE area = ? AND cantidad > 0 ORDER BY nombre ASC`).all(area)
+      : db.prepare(`SELECT art_codigo, nombre, area, cantidad, updated_at FROM stock_ubicaciones WHERE cantidad > 0 ORDER BY area, nombre ASC`).all();
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/bodega/consumo-area ─────────────────────────────────────────────
+router.post('/consumo-area', (req, res) => {
+  const { art_codigo, nombre, area, cantidad, notas } = req.body;
+  if (!art_codigo || !area || !cantidad)
+    return res.status(400).json({ error: 'art_codigo, area y cantidad son requeridos' });
+  const qty = parseFloat(cantidad);
+  if (qty <= 0) return res.status(400).json({ error: 'Cantidad debe ser mayor a 0' });
+
+  const db = getDb();
+  try {
+    const current = db.prepare(`SELECT cantidad FROM stock_ubicaciones WHERE art_codigo = ? AND area = ?`).get(art_codigo, area);
+    const stockAntes = current?.cantidad ?? 0;
+
+    db.prepare(`INSERT INTO consumo_area (art_codigo, nombre, area, cantidad, notas) VALUES (?, ?, ?, ?, ?)`)
+      .run(art_codigo, nombre || null, area, qty, notas || null);
+
+    db.prepare(`
+      INSERT INTO stock_ubicaciones (art_codigo, nombre, area, cantidad)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(art_codigo, area) DO UPDATE SET
+        cantidad   = MAX(0, cantidad - excluded.cantidad),
+        updated_at = datetime('now')
+    `).run(art_codigo, nombre || null, area, qty);
+
+    res.json({ ok: true, message: 'Consumo registrado', stockAntes, stockDespues: Math.max(0, stockAntes - qty) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET /api/bodega/consumo-area ──────────────────────────────────────────────
+router.get('/consumo-area', (req, res) => {
+  const { area, fecha } = req.query;
+  const db = getDb();
+  try {
+    let sql = `SELECT * FROM consumo_area WHERE 1=1`;
+    const params = [];
+    if (area)  { sql += ` AND area = ?`;           params.push(area); }
+    if (fecha) { sql += ` AND date(created_at) = ?`; params.push(fecha); }
+    sql += ` ORDER BY created_at DESC LIMIT 200`;
+    res.json(db.prepare(sql).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── GET /api/bodega/discrepancias ────────────────────────────────────────────
 router.get('/discrepancias', async (req, res) => {
   const db = getDb();

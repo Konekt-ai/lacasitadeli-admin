@@ -6,6 +6,63 @@ const router = express.Router();
 
 function esc(s) { return String(s || '').replace(/'/g, "''"); }
 
+// Color conversion: Tailwind text class → hex (for TC52 which uses hex colors)
+const TAILWIND_HEX = {
+  'text-blue-700':    '#1d4ed8',
+  'text-amber-700':   '#b45309',
+  'text-green-700':   '#15803d',
+  'text-cyan-700':    '#0e7490',
+  'text-purple-700':  '#7e22ce',
+  'text-rose-700':    '#be123c',
+  'text-stone-600':   '#57534e',
+  'text-orange-700':  '#c2410c',
+  'text-teal-700':    '#0f766e',
+  'text-indigo-700':  '#4338ca',
+  'text-pink-700':    '#be185d',
+  'text-emerald-700': '#047857',
+};
+
+// Hex → Tailwind (for areas created from the TC52)
+const HEX_TO_TAILWIND = {
+  '#1d4ed8': { bg: 'bg-blue-50',    text: 'text-blue-700' },
+  '#b45309': { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  '#15803d': { bg: 'bg-green-50',   text: 'text-green-700' },
+  '#0e7490': { bg: 'bg-cyan-50',    text: 'text-cyan-700' },
+  '#7e22ce': { bg: 'bg-purple-50',  text: 'text-purple-700' },
+  '#be123c': { bg: 'bg-rose-50',    text: 'text-rose-700' },
+  '#57534e': { bg: 'bg-stone-100',  text: 'text-stone-600' },
+  '#c2410c': { bg: 'bg-orange-50',  text: 'text-orange-700' },
+  '#0f766e': { bg: 'bg-teal-50',    text: 'text-teal-700' },
+  '#4338ca': { bg: 'bg-indigo-50',  text: 'text-indigo-700' },
+  '#be185d': { bg: 'bg-pink-50',    text: 'text-pink-700' },
+  '#047857': { bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  // TC52 palette colors
+  '#1D9E75': { bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  '#1d9e75': { bg: 'bg-emerald-50', text: 'text-emerald-700' },
+  '#3B82F6': { bg: 'bg-blue-50',    text: 'text-blue-700' },
+  '#3b82f6': { bg: 'bg-blue-50',    text: 'text-blue-700' },
+  '#8B5CF6': { bg: 'bg-purple-50',  text: 'text-purple-700' },
+  '#8b5cf6': { bg: 'bg-purple-50',  text: 'text-purple-700' },
+  '#E07B39': { bg: 'bg-orange-50',  text: 'text-orange-700' },
+  '#e07b39': { bg: 'bg-orange-50',  text: 'text-orange-700' },
+  '#EF4444': { bg: 'bg-rose-50',    text: 'text-rose-700' },
+  '#ef4444': { bg: 'bg-rose-50',    text: 'text-rose-700' },
+  '#06B6D4': { bg: 'bg-cyan-50',    text: 'text-cyan-700' },
+  '#06b6d4': { bg: 'bg-cyan-50',    text: 'text-cyan-700' },
+  '#F59E0B': { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  '#f59e0b': { bg: 'bg-amber-50',   text: 'text-amber-700' },
+  '#EC4899': { bg: 'bg-pink-50',    text: 'text-pink-700' },
+  '#ec4899': { bg: 'bg-pink-50',    text: 'text-pink-700' },
+  '#6B7280': { bg: 'bg-stone-100',  text: 'text-stone-600' },
+  '#6b7280': { bg: 'bg-stone-100',  text: 'text-stone-600' },
+  '#1F2937': { bg: 'bg-stone-100',  text: 'text-stone-600' },
+  '#1f2937': { bg: 'bg-stone-100',  text: 'text-stone-600' },
+};
+
+function configToTc52(r) {
+  return { id: r.id, nombre: r.nombre, color: TAILWIND_HEX[r.color_text] || '#3B82F6', clave: r.clave };
+}
+
 // Mantiene stock_ubicaciones actualizado después de cada movimiento
 function upsertUbicacion(db, codigo, nombre, area, delta) {
   db.prepare(`
@@ -45,7 +102,8 @@ router.get('/producto/:codigo', async (req, res) => {
     const row = result.recordset[0];
     if (!row) return res.status(404).json({ mensaje: 'Producto no encontrado' });
 
-    res.json({ codigo: row.codigo, nombre: row.nombre, stock: Number(row.stock) || 0 });
+    const loc = getDb().prepare(`SELECT area FROM product_locations WHERE art_codigo=?`).get(row.codigo);
+    res.json({ codigo: row.codigo, nombre: row.nombre, stock: Number(row.stock) || 0, ubicacion: loc?.area ?? null });
   } catch (err) {
     console.error('Error producto lookup:', err.message);
     res.status(500).json({ mensaje: 'Error del servidor' });
@@ -54,7 +112,7 @@ router.get('/producto/:codigo', async (req, res) => {
 
 // ── POST /api/almacen/entrada ─────────────────────────────────────────────────
 router.post('/entrada', async (req, res) => {
-  const { codigo, cantidad, nombre, area = 'bodega' } = req.body;
+  const { codigo, cantidad, nombre, area = 'bodega', pedido_id = null } = req.body;
   const qty = parseFloat(cantidad);
   if (!codigo || !qty || qty <= 0)
     return res.status(400).json({ ok: false, mensaje: 'Código y cantidad válida requeridos' });
@@ -77,9 +135,17 @@ router.post('/entrada', async (req, res) => {
     const db = getDb();
 
     db.prepare(`
-      INSERT INTO almacen_movimientos (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario)
-      VALUES (?, ?, 'entrada', ?, ?, ?, ?, 'TC52')
-    `).run(codigo, nombre || null, qty, stockAntes, stockDespues, area);
+      INSERT INTO almacen_movimientos (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario, pedido_id)
+      VALUES (?, ?, 'entrada', ?, ?, ?, ?, 'TC52', ?)
+    `).run(codigo, nombre || null, qty, stockAntes, stockDespues, area, pedido_id || null);
+
+    // Si viene vinculado a un pedido, actualizar estado a en_recepcion
+    if (pedido_id) {
+      db.prepare(`
+        UPDATE pedidos_recepcion SET estado = 'en_recepcion'
+        WHERE id = ? AND estado = 'pendiente'
+      `).run(pedido_id);
+    }
 
     upsertUbicacion(db, codigo, nombre, area, qty);
 
@@ -389,6 +455,49 @@ router.get('/merma', (req, res) => {
   }
 });
 
+// ── GET /api/almacen/merma/stats — estadísticas por período ──────────────────
+router.get('/merma/stats', (req, res) => {
+  const periodo = (req.query.mes || new Date().toISOString().slice(0, 7));
+  try {
+    const db = getDb();
+
+    const totales = db.prepare(`
+      SELECT COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
+      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
+    `).get(periodo);
+
+    const porMotivo = db.prepare(`
+      SELECT motivo, COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
+      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
+      GROUP BY motivo ORDER BY total_unidades DESC
+    `).all(periodo);
+
+    const topProductos = db.prepare(`
+      SELECT art_codigo AS codigo, COALESCE(nombre, art_codigo) AS nombre,
+             COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
+      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
+      GROUP BY art_codigo ORDER BY total_unidades DESC LIMIT 10
+    `).all(periodo);
+
+    const porArea = db.prepare(`
+      SELECT area, COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
+      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
+      GROUP BY area ORDER BY total_unidades DESC
+    `).all(periodo);
+
+    const tendencia = db.prepare(`
+      SELECT strftime('%Y-%m', created_at) AS mes,
+             COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
+      FROM merma_registros WHERE created_at >= date('now','-5 months','start of month')
+      GROUP BY strftime('%Y-%m', created_at) ORDER BY mes ASC
+    `).all();
+
+    res.json({ periodo, totales, porMotivo, topProductos, porArea, tendencia });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/merma/historial', (req, res) => {
   const { fecha, motivo, area, limit = 300 } = req.query;
   try {
@@ -487,6 +596,206 @@ router.get('/buscar', async (req, res) => {
     console.error('Error buscar:', err.message);
     res.status(500).json({ mensaje: 'Error del servidor al buscar' });
   }
+});
+
+// ── Pedidos de recepción ──────────────────────────────────────────────────────
+
+function genFolio() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `REC-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${Date.now().toString().slice(-4)}`;
+}
+
+// GET /api/almacen/pedidos — lista (?estado=activos|pendiente|en_recepcion|cerrado|cancelado)
+router.get('/pedidos', (req, res) => {
+  const { estado } = req.query;
+  try {
+    const db  = getDb();
+    let rows;
+    if (estado === 'activos') {
+      rows = db.prepare(
+        `SELECT * FROM pedidos_recepcion WHERE estado IN ('pendiente','en_recepcion') ORDER BY created_at DESC LIMIT 100`
+      ).all();
+    } else if (estado) {
+      rows = db.prepare(
+        `SELECT * FROM pedidos_recepcion WHERE estado = ? ORDER BY created_at DESC LIMIT 100`
+      ).all(estado);
+    } else {
+      rows = db.prepare(`SELECT * FROM pedidos_recepcion ORDER BY created_at DESC LIMIT 100`).all();
+    }
+
+    // Enrich with item count and received count
+    const detail = db.prepare(`
+      SELECT pedido_id, COUNT(*) AS num_items, SUM(cantidad_esperada) AS total_esperado
+      FROM pedidos_recepcion_detalle GROUP BY pedido_id
+    `).all();
+    const detailMap = Object.fromEntries(detail.map(d => [d.pedido_id, d]));
+
+    const received = db.prepare(`
+      SELECT pedido_id, COUNT(DISTINCT art_codigo) AS num_recibidos, SUM(cantidad) AS total_recibido
+      FROM almacen_movimientos WHERE pedido_id IS NOT NULL AND tipo = 'entrada'
+      GROUP BY pedido_id
+    `).all();
+    const recMap = Object.fromEntries(received.map(r => [r.pedido_id, r]));
+
+    res.json(rows.map(r => ({
+      ...r,
+      num_items:      detailMap[r.id]?.num_items      ?? 0,
+      total_esperado: detailMap[r.id]?.total_esperado ?? 0,
+      total_recibido: recMap[r.id]?.total_recibido    ?? 0,
+    })));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/almacen/pedidos — crear pedido con items
+router.post('/pedidos', (req, res) => {
+  const { proveedor, fecha_esperada, notas, items = [] } = req.body;
+  if (!items.length) return res.status(400).json({ error: 'Se requiere al menos un producto' });
+
+  const db    = getDb();
+  const folio = genFolio();
+  try {
+    const r = db.prepare(`
+      INSERT INTO pedidos_recepcion (folio, proveedor, fecha_esperada, notas)
+      VALUES (?, ?, ?, ?)
+    `).run(folio, proveedor?.trim() || null, fecha_esperada || null, notas?.trim() || null);
+
+    const pedidoId = r.lastInsertRowid;
+    const ins = db.prepare(`
+      INSERT INTO pedidos_recepcion_detalle (pedido_id, art_codigo, nombre, cantidad_esperada)
+      VALUES (?, ?, ?, ?)
+    `);
+    for (const item of items) {
+      ins.run(pedidoId, item.art_codigo, item.nombre || null, parseFloat(item.cantidad_esperada) || 0);
+    }
+    res.status(201).json({ id: pedidoId, folio, message: 'Pedido creado' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/almacen/pedidos/:id — detalle con discrepancias calculadas
+router.get('/pedidos/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const db = getDb();
+  try {
+    const pedido = db.prepare(`SELECT * FROM pedidos_recepcion WHERE id = ?`).get(id);
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    const items = db.prepare(`SELECT * FROM pedidos_recepcion_detalle WHERE pedido_id = ?`).all(id);
+
+    // Sumar lo recibido en almacen_movimientos vinculado a este pedido
+    const recibidos = db.prepare(`
+      SELECT art_codigo, SUM(cantidad) AS recibido
+      FROM almacen_movimientos
+      WHERE pedido_id = ? AND tipo = 'entrada'
+      GROUP BY art_codigo
+    `).all(id);
+    const recMap = Object.fromEntries(recibidos.map(r => [r.art_codigo, r.recibido]));
+
+    const detalle = items.map(item => {
+      const recibido   = recMap[item.art_codigo] ?? 0;
+      const diferencia = recibido - item.cantidad_esperada;
+      return { ...item, cantidad_recibida: recibido, diferencia };
+    });
+
+    res.json({ ...pedido, detalle });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/almacen/pedidos/:id/estado — cambiar estado
+router.put('/pedidos/:id/estado', (req, res) => {
+  const id     = parseInt(req.params.id, 10);
+  const { estado } = req.body;
+  const valid  = ['pendiente', 'en_recepcion', 'cerrado', 'cancelado'];
+  if (!valid.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
+  try {
+    const cerrado_at = estado === 'cerrado' ? new Date().toISOString() : null;
+    getDb().prepare(`
+      UPDATE pedidos_recepcion SET estado = ?, cerrado_at = ? WHERE id = ?
+    `).run(estado, cerrado_at, id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/almacen/pedidos/:id — cancelar (soft: cambia estado)
+router.delete('/pedidos/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  try {
+    getDb().prepare(`UPDATE pedidos_recepcion SET estado = 'cancelado' WHERE id = ?`).run(id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/almacen/ubicaciones/areas — TC52 compatible ─────────────────────
+router.get('/ubicaciones/areas', (req, res) => {
+  try {
+    const rows = getDb().prepare(
+      `SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`
+    ).all();
+    res.json(rows.map(configToTc52));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/almacen/ubicaciones/areas — TC52 crea área ─────────────────────
+router.post('/ubicaciones/areas', (req, res) => {
+  const { nombre, color = '#3B82F6' } = req.body;
+  if (!nombre?.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+
+  const db = getDb();
+  const tw = HEX_TO_TAILWIND[color] || HEX_TO_TAILWIND[color.toLowerCase()] || { bg: 'bg-stone-100', text: 'text-stone-600' };
+
+  let clave = nombre.toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '_') || 'area';
+  if (db.prepare(`SELECT id FROM ubicaciones_config WHERE clave=?`).get(clave))
+    clave = `${clave}_${Date.now().toString().slice(-4)}`;
+
+  try {
+    const maxOrden = db.prepare(`SELECT COALESCE(MAX(orden),-1) AS m FROM ubicaciones_config WHERE activo=1`).get()?.m ?? -1;
+    db.prepare(`INSERT INTO ubicaciones_config (clave,nombre,icono,color_bg,color_text,orden) VALUES (?,?,?,?,?,?)`)
+      .run(clave, nombre.trim(), 'category', tw.bg, tw.text, maxOrden + 1);
+    const rows = db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`).all();
+    res.status(201).json(rows.map(configToTc52));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── DELETE /api/almacen/ubicaciones/areas/:id — TC52 soft-delete área ─────────
+router.delete('/ubicaciones/areas/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const db = getDb();
+  try {
+    db.prepare(`UPDATE ubicaciones_config SET activo=0 WHERE id=?`).run(id);
+    const rows = db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`).all();
+    res.json(rows.map(configToTc52));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/almacen/producto-ubicacion — TC52 asigna área a producto ────────
+router.post('/producto-ubicacion', (req, res) => {
+  const { codigo, ubicacion } = req.body;
+  if (!codigo) return res.status(400).json({ error: 'Código requerido' });
+  const db = getDb();
+  try {
+    if (!ubicacion) {
+      db.prepare(`DELETE FROM product_locations WHERE art_codigo=?`).run(codigo);
+    } else {
+      db.prepare(`
+        INSERT INTO product_locations (art_codigo, area)
+        VALUES (?, ?)
+        ON CONFLICT(art_codigo) DO UPDATE SET area=excluded.area, updated_at=datetime('now')
+      `).run(codigo, ubicacion);
+    }
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── GET /api/almacen/ubicaciones/config ───────────────────────────────────────
