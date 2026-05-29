@@ -142,6 +142,38 @@ export interface StockUbicacion {
   updated_at: string;
 }
 
+export type EstadoFactura = 'en_camino' | 'en_almacen' | 'cancelada';
+
+export interface FacturaCompra {
+  id:              number;
+  folio:           string;
+  proveedor:       string;
+  numero_factura:  string | null;
+  fecha_emision:   string | null;
+  fecha_esperada:  string | null;
+  estado:          EstadoFactura;
+  total_calculado: number;
+  notas:           string | null;
+  pedido_id:       number | null;
+  entregado_at:    string | null;
+  created_at:      string;
+}
+
+export interface FacturaDetalle {
+  id:              number;
+  factura_id:      number;
+  art_codigo:      string;
+  nombre:          string | null;
+  cantidad:        number;
+  precio_unitario: number;
+  subtotal:        number;
+}
+
+export interface FacturaConDetalle extends FacturaCompra {
+  detalle: FacturaDetalle[];
+  pedido:  { id: number; folio: string; estado: string; total_esperado: number; total_recibido: number; num_items: number } | null;
+}
+
 export interface ConsumoArea {
   id:         number;
   art_codigo: string;

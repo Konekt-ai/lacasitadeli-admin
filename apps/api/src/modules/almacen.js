@@ -714,10 +714,19 @@ router.put('/pedidos/:id/estado', (req, res) => {
   const valid  = ['pendiente', 'en_recepcion', 'cerrado', 'cancelado'];
   if (!valid.includes(estado)) return res.status(400).json({ error: 'Estado inválido' });
   try {
+    const db         = getDb();
     const cerrado_at = estado === 'cerrado' ? new Date().toISOString() : null;
-    getDb().prepare(`
-      UPDATE pedidos_recepcion SET estado = ?, cerrado_at = ? WHERE id = ?
-    `).run(estado, cerrado_at, id);
+    db.prepare(`UPDATE pedidos_recepcion SET estado = ?, cerrado_at = ? WHERE id = ?`).run(estado, cerrado_at, id);
+
+    // Si se cierra el pedido, actualiza la factura vinculada a "en_almacen"
+    if (estado === 'cerrado') {
+      db.prepare(`
+        UPDATE facturas_compra
+        SET estado = 'en_almacen', entregado_at = datetime('now')
+        WHERE pedido_id = ? AND estado = 'en_camino'
+      `).run(id);
+    }
+
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -17,7 +17,8 @@ app.use('/api/products', require('./modules/products'));
 app.use('/api/sales',    require('./modules/sales'));
 app.use('/api/novacaja', require('./modules/novacaja'));
 app.use('/api/bodega',   require('./modules/bodega'));
-app.use('/api/almacen', require('./modules/almacen'));
+app.use('/api/almacen',  require('./modules/almacen'));
+app.use('/api/facturas', require('./modules/facturas'));
 
 app.get('/api/health', async (req, res) => {
   const status = { api: 'ok', sqlserver: 'error', sqlite: 'error' };

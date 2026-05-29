@@ -193,6 +193,31 @@ function getDb() {
       usuario     TEXT DEFAULT 'admin',
       created_at  TEXT DEFAULT (datetime('now'))
     );
+    CREATE TABLE IF NOT EXISTS facturas_compra (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      folio            TEXT    NOT NULL UNIQUE,
+      proveedor        TEXT    NOT NULL,
+      numero_factura   TEXT,
+      fecha_emision    TEXT,
+      fecha_esperada   TEXT,
+      estado           TEXT    NOT NULL DEFAULT 'en_camino'
+                                CHECK(estado IN ('en_camino','en_almacen','cancelada')),
+      total_calculado  REAL    DEFAULT 0,
+      notas            TEXT,
+      pedido_id        INTEGER REFERENCES pedidos_recepcion(id),
+      entregado_at     TEXT,
+      created_at       TEXT    DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS facturas_compra_detalle (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      factura_id       INTEGER NOT NULL REFERENCES facturas_compra(id) ON DELETE CASCADE,
+      art_codigo       TEXT    NOT NULL,
+      nombre           TEXT,
+      cantidad         REAL    NOT NULL,
+      precio_unitario  REAL    NOT NULL,
+      subtotal         REAL    NOT NULL,
+      created_at       TEXT    DEFAULT (datetime('now'))
+    );
   `);
 
   // Migraciones de columnas

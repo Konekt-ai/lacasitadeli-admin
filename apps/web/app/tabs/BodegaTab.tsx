@@ -7,6 +7,7 @@ import type {
   SurtidoTransfer, Recuento, StagnantProduct,
   StockUbicacion, ResumenUbicacion, MovimientoUnificado, TipoMovimiento,
   PedidoRecepcion, PedidoConDetalle, EstadoPedido, ConsumoArea,
+  EstadoFactura, FacturaCompra, FacturaConDetalle, FacturaDetalle,
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
@@ -19,7 +20,7 @@ const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] =
   { id: 'surtido',       label: 'Surtido',           icon: 'swap_horiz' },
   { id: 'discrepancias', label: 'Discrepancias',     icon: 'difference' },
   { id: 'conteo',        label: 'Conteo Ventas',     icon: 'calculate' },
-  { id: 'facturas',      label: 'Facturas PDF',      icon: 'receipt_long', dev: true },
+  { id: 'facturas',      label: 'Facturas',           icon: 'receipt_long' },
   { id: 'zebra',         label: 'Movimientos TC52',  icon: 'qr_code_scanner' },
   { id: 'config',        label: 'Configurar Áreas',  icon: 'tune' },
 ];
@@ -3023,6 +3024,516 @@ function ConfiguracionAreasView() {
   );
 }
 
+// ── Facturas sub-view ─────────────────────────────────────────────────────────
+const ESTADO_FACTURA_META: Record<EstadoFactura, { label: string; color: string; bg: string; icon: string }> = {
+  en_camino:  { label: 'En Camino',  color: 'text-blue-700',  bg: 'bg-blue-100',  icon: 'local_shipping' },
+  en_almacen: { label: 'En Almacén', color: 'text-green-700', bg: 'bg-green-100', icon: 'inventory_2' },
+  cancelada:  { label: 'Cancelada',  color: 'text-stone-500', bg: 'bg-stone-100', icon: 'cancel' },
+};
+
+interface FacturaItemForm { art_codigo: string; nombre: string; cantidad: string; precio_unitario: string }
+const ITEM_VACIO: FacturaItemForm = { art_codigo: '', nombre: '', cantidad: '', precio_unitario: '' };
+
+function FacturasView() {
+  const [facturas,     setFacturas]     = useState<FacturaCompra[]>([]);
+  const [loading,      setLoading]      = useState(false);
+  const [filtroEstado, setFiltroEstado] = useState<EstadoFactura | 'todos'>('todos');
+  const [busqueda,     setBusqueda]     = useState('');
+  const [detalle,      setDetalle]      = useState<FacturaConDetalle | null>(null);
+  const [detalleOpen,  setDetalleOpen]  = useState(false);
+  const [detalleLoad,  setDetalleLoad]  = useState(false);
+  const [showForm,     setShowForm]     = useState(false);
+  const [saving,       setSaving]       = useState(false);
+  const [notif,        setNotif]        = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const [form, setForm] = useState({
+    proveedor: '', numero_factura: '', fecha_emision: '', fecha_esperada: '', notas: '',
+  });
+  const [items, setItems] = useState<FacturaItemForm[]>([{ ...ITEM_VACIO }]);
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type });
+    setTimeout(() => setNotif(null), 3500);
+  };
+
+  const fetchFacturas = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: '200' });
+      if (filtroEstado !== 'todos') params.set('estado', filtroEstado);
+      if (busqueda) params.set('q', busqueda);
+      const data = await fetch(`/api/facturas?${params}`).then(r => r.json());
+      setFacturas(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, [filtroEstado, busqueda]);
+
+  useEffect(() => { fetchFacturas(); }, [fetchFacturas]);
+
+  const openDetalle = async (id: number) => {
+    setDetalleLoad(true);
+    setDetalleOpen(true);
+    setDetalle(null);
+    try {
+      const data = await fetch(`/api/facturas/${id}`).then(r => r.json());
+      setDetalle(data);
+    } catch { notify('Error al cargar detalle', 'error'); }
+    finally { setDetalleLoad(false); }
+  };
+
+  const cambiarEstado = async (id: number, estado: EstadoFactura) => {
+    try {
+      const res  = await fetch(`/api/facturas/${id}/estado`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(data.message || 'Estado actualizado');
+        setDetalleOpen(false);
+        fetchFacturas();
+      } else notify(data.error || 'Error', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+  };
+
+  const addItem    = () => setItems(p => [...p, { ...ITEM_VACIO }]);
+  const removeItem = (i: number) => setItems(p => p.filter((_, idx) => idx !== i));
+  const setItem    = (i: number, field: keyof FacturaItemForm, val: string) =>
+    setItems(p => p.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
+
+  const totalForm = items.reduce((s, r) => {
+    const q = parseFloat(r.cantidad) || 0;
+    const p = parseFloat(r.precio_unitario) || 0;
+    return s + q * p;
+  }, 0);
+
+  const saveFactura = async () => {
+    if (!form.proveedor.trim()) { notify('El proveedor es requerido', 'error'); return; }
+    const validItems = items.filter(r => r.art_codigo.trim() && parseFloat(r.cantidad) > 0 && parseFloat(r.precio_unitario) >= 0);
+    if (!validItems.length) { notify('Agrega al menos un artículo con código y cantidad', 'error'); return; }
+    setSaving(true);
+    try {
+      const res  = await fetch('/api/facturas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, items: validItems }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(`Factura ${data.folio} registrada · Pedido ${data.pedido_folio} creado`);
+        setShowForm(false);
+        setForm({ proveedor: '', numero_factura: '', fecha_emision: '', fecha_esperada: '', notas: '' });
+        setItems([{ ...ITEM_VACIO }]);
+        fetchFacturas();
+      } else notify(data.error || 'Error al guardar', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const fmt = (n: number) => `$${n.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  const filtradas = facturas.filter(f =>
+    busqueda === '' ||
+    f.proveedor.toLowerCase().includes(busqueda.toLowerCase()) ||
+    (f.numero_factura ?? '').toLowerCase().includes(busqueda.toLowerCase()) ||
+    f.folio.toLowerCase().includes(busqueda.toLowerCase())
+  );
+
+  return (
+    <div>
+      {notif && (
+        <div className={cn(
+          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
+        )}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      {/* Modal detalle */}
+      {detalleOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-start justify-between p-6 border-b border-outline-variant/10">
+              <div>
+                {detalle && (
+                  <>
+                    <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-1">{detalle.folio}</p>
+                    <h3 className="font-serif text-xl text-primary">{detalle.proveedor}</h3>
+                    {detalle.numero_factura && (
+                      <p className="text-xs font-label text-stone-500 mt-0.5">Factura proveedor: <strong>{detalle.numero_factura}</strong></p>
+                    )}
+                  </>
+                )}
+              </div>
+              <button onClick={() => setDetalleOpen(false)}
+                className="p-1.5 text-stone-400 hover:text-on-surface rounded-lg transition-colors">
+                <Icon name="close" className="text-xl" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 p-6 space-y-5">
+              {detalleLoad ? (
+                <div className="flex justify-center py-12">
+                  <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                </div>
+              ) : detalle ? (
+                <>
+                  {/* Estado + fechas */}
+                  <div className="flex flex-wrap gap-3">
+                    {(() => {
+                      const m = ESTADO_FACTURA_META[detalle.estado];
+                      return (
+                        <span className={cn('flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest', m.bg, m.color)}>
+                          <Icon name={m.icon} className="text-sm" /> {m.label}
+                        </span>
+                      );
+                    })()}
+                    {detalle.fecha_emision && (
+                      <span className="text-[10px] font-label text-stone-400 flex items-center gap-1">
+                        <Icon name="calendar_today" className="text-xs" />
+                        Emitida: {new Date(detalle.fecha_emision + 'T12:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </span>
+                    )}
+                    {detalle.fecha_esperada && (
+                      <span className="text-[10px] font-label text-stone-400 flex items-center gap-1">
+                        <Icon name="local_shipping" className="text-xs" />
+                        Esperada: {new Date(detalle.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </span>
+                    )}
+                    {detalle.entregado_at && (
+                      <span className="text-[10px] font-label text-green-600 flex items-center gap-1">
+                        <Icon name="check_circle" className="text-xs" />
+                        Entregado: {new Date(detalle.entregado_at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Pedido vinculado */}
+                  {detalle.pedido && (
+                    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Icon name="qr_code_scanner" className="text-sm text-primary" />
+                          <span className="text-[10px] font-label font-bold uppercase tracking-widest text-primary">Pedido TC52</span>
+                          <span className="text-[10px] font-label text-stone-500">{detalle.pedido.folio}</span>
+                        </div>
+                        <span className={cn(
+                          'text-[9px] font-label font-bold uppercase tracking-widest px-2 py-0.5 rounded-full',
+                          detalle.pedido.estado === 'cerrado'   ? 'bg-green-100 text-green-700' :
+                          detalle.pedido.estado === 'en_recepcion' ? 'bg-blue-100 text-blue-700' :
+                          detalle.pedido.estado === 'cancelado' ? 'bg-stone-100 text-stone-500' :
+                          'bg-yellow-100 text-yellow-700'
+                        )}>
+                          {detalle.pedido.estado.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-stone-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary rounded-full transition-all"
+                          style={{ width: detalle.pedido.total_esperado > 0 ? `${Math.min(100, (detalle.pedido.total_recibido / detalle.pedido.total_esperado) * 100)}%` : '0%' }}
+                        />
+                      </div>
+                      <p className="text-[10px] font-label text-stone-400 mt-1">
+                        {detalle.pedido.total_recibido} de {detalle.pedido.total_esperado} uds recibidas
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Detalle de artículos */}
+                  <div>
+                    <p className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500 mb-2">Artículos</p>
+                    <div className="rounded-xl border border-outline-variant/10 overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-surface-container-low/50">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Producto</th>
+                            <th className="text-right px-3 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Cant.</th>
+                            <th className="text-right px-3 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">P.Unit.</th>
+                            <th className="text-right px-3 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Subtotal</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-outline-variant/10">
+                          {detalle.detalle.map(d => (
+                            <tr key={d.id} className="hover:bg-surface-container-low/30 transition-colors">
+                              <td className="px-3 py-2.5">
+                                <p className="font-body text-on-surface">{d.nombre || d.art_codigo}</p>
+                                <p className="text-stone-400 font-mono text-[10px]">{d.art_codigo}</p>
+                              </td>
+                              <td className="px-3 py-2.5 text-right font-label text-on-surface">{d.cantidad}</td>
+                              <td className="px-3 py-2.5 text-right font-label text-stone-500">{fmt(d.precio_unitario)}</td>
+                              <td className="px-3 py-2.5 text-right font-label font-bold text-on-surface">{fmt(d.subtotal)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot className="bg-surface-container-low/50 border-t border-outline-variant/10">
+                          <tr>
+                            <td colSpan={3} className="px-3 py-2.5 text-right font-label font-bold uppercase tracking-widest text-[10px] text-stone-500">Total</td>
+                            <td className="px-3 py-2.5 text-right font-serif text-lg text-primary">{fmt(detalle.total_calculado)}</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Notas */}
+                  {detalle.notas && (
+                    <p className="text-xs font-body text-stone-500 bg-stone-50 rounded-lg p-3 border border-stone-100">
+                      {detalle.notas}
+                    </p>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            {/* Footer acciones */}
+            {detalle && detalle.estado !== 'cancelada' && (
+              <div className="p-4 border-t border-outline-variant/10 flex items-center gap-3">
+                {detalle.estado === 'en_camino' && (
+                  <button
+                    onClick={() => cambiarEstado(detalle.id, 'en_almacen')}
+                    className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-green-700 transition-all shadow-sm">
+                    <Icon name="inventory_2" className="text-base" />
+                    Marcar como Recibido
+                  </button>
+                )}
+                <button
+                  onClick={() => cambiarEstado(detalle.id, 'cancelada')}
+                  className="px-4 py-2.5 text-stone-400 hover:text-error hover:bg-error-container/20 rounded-xl text-xs font-label font-bold uppercase tracking-widest transition-all">
+                  Cancelar Factura
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Header + filtros */}
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between mb-5">
+        <div className="flex gap-1.5 flex-wrap">
+          {(['todos', 'en_camino', 'en_almacen', 'cancelada'] as const).map(e => {
+            const m = e === 'todos' ? null : ESTADO_FACTURA_META[e];
+            return (
+              <button key={e} onClick={() => setFiltroEstado(e)}
+                className={cn(
+                  'px-3 py-1.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest transition-all',
+                  filtroEstado === e
+                    ? (m ? cn(m.bg, m.color) : 'bg-primary text-on-primary')
+                    : 'bg-stone-100 text-stone-400 hover:bg-stone-200'
+                )}>
+                {e === 'todos' ? 'Todas' : m!.label}
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={() => setShowForm(v => !v)}
+          className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-primary-container transition-all flex-shrink-0">
+          <Icon name={showForm ? 'close' : 'add'} className="text-base" />
+          {showForm ? 'Cancelar' : 'Nueva Factura'}
+        </button>
+      </div>
+
+      {/* Búsqueda */}
+      <div className="relative mb-5">
+        <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-base" />
+        <input
+          value={busqueda}
+          onChange={e => setBusqueda(e.target.value)}
+          placeholder="Buscar por proveedor, folio o número de factura..."
+          className="w-full pl-9 pr-4 py-2.5 bg-surface-container-low border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors"
+        />
+      </div>
+
+      {/* Formulario nueva factura */}
+      {showForm && (
+        <div className="bg-surface-container-low rounded-2xl border border-primary/20 p-5 mb-6 space-y-5">
+          <h4 className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">Nueva Factura de Compra</h4>
+
+          {/* Datos generales */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 sm:col-span-1">
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Proveedor *</label>
+              <input value={form.proveedor} onChange={e => setForm(f => ({ ...f, proveedor: e.target.value }))}
+                placeholder="Nombre del proveedor"
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">N° Factura del Proveedor</label>
+              <input value={form.numero_factura} onChange={e => setForm(f => ({ ...f, numero_factura: e.target.value }))}
+                placeholder="Ej: F-2026-0045"
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha de emisión</label>
+              <input type="date" value={form.fecha_emision} onChange={e => setForm(f => ({ ...f, fecha_emision: e.target.value }))}
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha esperada de entrega</label>
+              <input type="date" value={form.fecha_esperada} onChange={e => setForm(f => ({ ...f, fecha_esperada: e.target.value }))}
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Notas</label>
+              <input value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
+                placeholder="Opcional"
+                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
+          </div>
+
+          {/* Tabla de artículos */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">Artículos</p>
+              <button onClick={addItem}
+                className="flex items-center gap-1 text-[10px] font-label font-bold uppercase tracking-widest text-primary hover:text-primary-container transition-colors">
+                <Icon name="add_circle_outline" className="text-sm" /> Agregar fila
+              </button>
+            </div>
+            <div className="rounded-xl border border-outline-variant/10 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-surface-container-low/70">
+                  <tr>
+                    <th className="text-left px-2 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Código</th>
+                    <th className="text-left px-2 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Nombre</th>
+                    <th className="text-right px-2 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Cant.</th>
+                    <th className="text-right px-2 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">P. Unit.</th>
+                    <th className="text-right px-2 py-2 font-label uppercase tracking-widest text-stone-400 text-[10px]">Subtotal</th>
+                    <th className="w-8" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-outline-variant/10">
+                  {items.map((row, i) => {
+                    const sub = (parseFloat(row.cantidad) || 0) * (parseFloat(row.precio_unitario) || 0);
+                    return (
+                      <tr key={i} className="bg-background">
+                        <td className="px-2 py-1.5">
+                          <input value={row.art_codigo} onChange={e => setItem(i, 'art_codigo', e.target.value)}
+                            placeholder="Código"
+                            className="w-full px-2 py-1 bg-transparent border border-outline-variant/20 rounded-md text-xs font-body outline-none focus:border-primary transition-colors" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={row.nombre} onChange={e => setItem(i, 'nombre', e.target.value)}
+                            placeholder="Nombre"
+                            className="w-full px-2 py-1 bg-transparent border border-outline-variant/20 rounded-md text-xs font-body outline-none focus:border-primary transition-colors" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="number" min="0" step="0.01" value={row.cantidad} onChange={e => setItem(i, 'cantidad', e.target.value)}
+                            placeholder="0"
+                            className="w-20 px-2 py-1 bg-transparent border border-outline-variant/20 rounded-md text-xs font-body text-right outline-none focus:border-primary transition-colors" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="number" min="0" step="0.01" value={row.precio_unitario} onChange={e => setItem(i, 'precio_unitario', e.target.value)}
+                            placeholder="0.00"
+                            className="w-24 px-2 py-1 bg-transparent border border-outline-variant/20 rounded-md text-xs font-body text-right outline-none focus:border-primary transition-colors" />
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-label font-bold text-on-surface whitespace-nowrap">
+                          {sub > 0 ? fmt(sub) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          {items.length > 1 && (
+                            <button onClick={() => removeItem(i)}
+                              className="p-0.5 text-stone-300 hover:text-error transition-colors">
+                              <Icon name="close" className="text-sm" />
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-surface-container-low/50 border-t border-outline-variant/10">
+                  <tr>
+                    <td colSpan={4} className="px-3 py-2.5 text-right font-label font-bold uppercase tracking-widest text-[10px] text-stone-500">Total estimado</td>
+                    <td className="px-2 py-2.5 text-right font-serif text-base text-primary">{fmt(totalForm)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          {/* Aviso pedido */}
+          <div className="flex items-start gap-2 bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700">
+            <Icon name="info" className="text-sm flex-shrink-0 mt-0.5" />
+            <span>Al guardar se creará automáticamente un <strong>pedido de recepción</strong> para que el TC52 pueda escanear la llegada de la mercancía.</span>
+          </div>
+
+          <button onClick={saveFactura} disabled={saving}
+            className={cn(
+              'w-full py-3 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all shadow-md',
+              saving ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary-container'
+            )}>
+            {saving
+              ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+              : <Icon name="receipt_long" className="text-base" />}
+            Registrar Factura
+          </button>
+        </div>
+      )}
+
+      {/* Lista de facturas */}
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : filtradas.length === 0 ? (
+        <div className="py-16 flex flex-col items-center text-stone-300">
+          <Icon name="receipt_long" className="text-5xl opacity-20 mb-3" />
+          <p className="text-sm font-label uppercase tracking-widest">
+            {filtroEstado === 'todos' ? 'Sin facturas registradas' : `Sin facturas "${ESTADO_FACTURA_META[filtroEstado as EstadoFactura]?.label}"`}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtradas.map(f => {
+            const m = ESTADO_FACTURA_META[f.estado];
+            return (
+              <button key={f.id} onClick={() => openDetalle(f.id)}
+                className="w-full text-left bg-surface-container-lowest rounded-xl border border-outline-variant/10 hover:border-primary/20 hover:shadow-sm p-4 flex items-center gap-4 transition-all group">
+                {/* Estado */}
+                <div className={cn('w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0', m.bg)}>
+                  <Icon name={m.icon} className={cn('text-lg', m.color)} />
+                </div>
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <p className="font-body text-sm text-on-surface font-medium truncate">{f.proveedor}</p>
+                    {f.numero_factura && (
+                      <span className="text-[10px] font-label text-stone-400 flex-shrink-0">· {f.numero_factura}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-label text-stone-400 font-mono">{f.folio}</span>
+                    {f.fecha_esperada && (
+                      <span className="text-[10px] font-label text-stone-400">
+                        Llega: {new Date(f.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}
+                      </span>
+                    )}
+                    <span className={cn('text-[9px] font-label font-bold uppercase tracking-widest px-2 py-0.5 rounded-full', m.bg, m.color)}>
+                      {m.label}
+                    </span>
+                  </div>
+                </div>
+                {/* Total */}
+                <div className="text-right flex-shrink-0">
+                  <p className="font-serif text-base text-on-surface">{fmt(f.total_calculado)}</p>
+                  <p className="text-[10px] font-label text-stone-400">
+                    {new Date(f.created_at).toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </p>
+                </div>
+                <Icon name="chevron_right" className="text-stone-300 group-hover:text-primary transition-colors flex-shrink-0" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
   const [view,      setView]      = useState<SubView>('ubicaciones');
@@ -3094,7 +3605,7 @@ export default function BodegaTab() {
         {view === 'surtido'       && <SurtidoView />}
         {view === 'discrepancias' && <DiscrepanciasView />}
         {view === 'conteo'        && <ConteoView />}
-        {view === 'facturas'      && <DevPlaceholder label="Automatización de Facturas PDF" icon="receipt_long" />}
+        {view === 'facturas'      && <FacturasView />}
         {view === 'zebra'         && <ZebraView />}
         {view === 'config'        && <ConfiguracionAreasView />}
       </div>
