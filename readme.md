@@ -11,19 +11,21 @@ Desarrollado por **Konekt**.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  Panel Admin  (Next.js)          http://localhost:3001       │
-│  — Inventario, ventas, bodega, merma, surtido, reportes      │
+│  — Dashboard, Inventario, Ventas, Bodega, Alertas, Prov.     │
 └──────────────────────────┬──────────────────────────────────┘
-                           │ /api/*  (proxy)
+                           │ /api/*  (proxy → :3002)
 ┌──────────────────────────▼──────────────────────────────────┐
 │  API REST  (Express)             http://localhost:3002       │
-│  — almacen / bodega / ventas / auth / sync                   │
+│  — products / sales / novacaja / bodega / almacen / facturas │
 └──────────┬────────────────────────────────┬─────────────────┘
            │                                │
 ┌──────────▼──────────┐        ┌────────────▼────────────────┐
 │  SQL Server 2014    │        │  SQLite  (lacasita.db)       │
 │  NovaCaja           │        │  — almacen_movimientos       │
-│  — VArticulosUnif.  │        │  — merma_registros           │
-│  — ArticulosAlmacen │        │  — ventas / surtido / ...    │
+│  — Articulos        │        │  — merma_registros           │
+│  — ArticulosAlmacen │        │  — stock_ubicaciones         │
+│  — VArticulosUnif.  │        │  — product_expiry            │
+│  — Proveedores      │        │  — pedidos / facturas        │
 └─────────────────────┘        └─────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -37,7 +39,7 @@ Desarrollado por **Konekt**.
 ## Requisitos previos
 
 - **Node.js 18+** instalado
-- **SQL Server 2014** con NovaCaja accesible en red
+- **SQL Server 2014** con NovaCaja accesible en red local o VPN (Tailscale)
 - Credenciales de MSSQL disponibles
 - Carpeta `lacasitadeli-almacen/pwa-bodega` junto a este repo (misma carpeta padre)
 
@@ -60,31 +62,45 @@ Desktop/
 Abrir terminal en `lacasitadeli-admin/` y ejecutar:
 
 ```bat
-cd apps\api
-npm install
-
-cd ..\..\apps\web
-npm install
+cd apps\api && npm install
+cd ..\..\apps\web && npm install
 ```
 
 Para la PWA del TC52:
 ```bat
-cd ..\..\lacasitadeli-almacen\pwa-bodega
-npm install
+cd ..\..\lacasitadeli-almacen\pwa-bodega && npm install
 ```
 
-### 3. Configurar base de datos
+### 3. Configurar variables de entorno
 
-Crear el archivo `apps/api/.env` con las credenciales de NovaCaja:
+Crear el archivo **`apps/api/.env`** con las credenciales de NovaCaja:
 
 ```env
-DB_SERVER=192.168.x.x
-DB_USER=usuario
-DB_PASSWORD=contraseña
-DB_DATABASE=compucaja
+# SQL Server (NovaCaja) — requerido
+MSSQL_SERVER=192.168.x.x
+MSSQL_DATABASE=compucaja
+MSSQL_USER=sa
+MSSQL_PASSWORD=contraseña
+MSSQL_PORT=1433
+
+# Puerto de la API (opcional, default: 3002)
+PORT=3002
+
+# Umbral de stock bajo para el dashboard (opcional, default: 5 unidades)
+LOW_STOCK_THRESHOLD=5
+
+# Correo para reportes mensuales automáticos (opcional)
+# Opción A — Gmail con contraseña de aplicación
+EMAIL_USER=correo@gmail.com
+EMAIL_PASS=xxxx-xxxx-xxxx-xxxx
+
+# Opción B — Resend.dev (alternativa a Gmail)
+RESEND_API_KEY=re_xxxxxxxxxxxx
 ```
 
 > Si no existe el `.env`, al ejecutar `iniciar.bat` se abre el asistente de configuración automáticamente.
+
+La base de datos SQLite (`apps/api/lacasita.db`) se crea sola al iniciar la API por primera vez.
 
 ---
 
@@ -96,7 +112,7 @@ Doble clic en **`iniciar.bat`** — levanta los 3 servicios con ventana de termi
 Panel admin  →  http://localhost:3001          (se abre solo en el navegador)
 API          →  http://localhost:3002
 TC52 (WiFi)  →  http://<IP-LOCAL>:3003
-TC52 (VPN)   →  http://<IP-TAILSCALE>:3003     (si está conectado)
+TC52 (VPN)   →  http://<IP-TAILSCALE>:3003     (si está conectado a Tailscale)
 ```
 
 ---
@@ -114,7 +130,7 @@ Esto hace en ~4 minutos:
 2. Compila el panel web (Next.js producción — más rápido y estable)
 3. Compila la PWA del TC52 con la IP de red del equipo
 4. Arranca los 3 servicios vía PM2
-5. Coloca un script en la carpeta **Startup de Windows** → desde ese momento el sistema arranca solo al iniciar sesión, sin ventana de terminal
+5. Coloca un script en la carpeta **Startup de Windows** → el sistema arranca solo al iniciar sesión, sin ventana de terminal
 
 > Si la IP de red del equipo cambia, volver a ejecutar `configurar-inicio.bat`.
 
@@ -187,8 +203,8 @@ pm2 restart lacasita-pwa
 | `arrancar.vbs` | Script silencioso que PM2 usa al iniciar Windows |
 | `ecosystem.config.js` | Configuración de los 3 procesos en PM2 |
 | `apps/pwa-server.js` | Servidor estático para la PWA compilada (puerto 3003) |
-| `apps/api/.env` | Credenciales de SQL Server (no subir a git) |
-| `apps/api/lacasita.db` | Base de datos SQLite local (movimientos, mermas, ventas) |
+| `apps/api/.env` | Credenciales de SQL Server + email (no subir a git) |
+| `apps/api/lacasita.db` | Base de datos SQLite local (movimientos, mermas, pedidos…) |
 | `logs/api.log` | Log de la API en producción |
 | `logs/web.log` | Log del panel web en producción |
 | `logs/pwa.log` | Log de la PWA TC52 en producción |
@@ -202,24 +218,34 @@ lacasitadeli-admin/
 ├── apps/
 │   ├── api/
 │   │   ├── src/
-│   │   │   ├── db/index.js          # SQLite + tablas
-│   │   │   ├── db/mssql.js          # Conexión SQL Server
+│   │   │   ├── db/
+│   │   │   │   ├── index.js         # SQLite + tablas + índices
+│   │   │   │   └── mssql.js         # Conexión SQL Server (pool)
+│   │   │   ├── config/
+│   │   │   │   └── novacaja-mapping.js  # Queries MSSQL reutilizables
 │   │   │   ├── modules/
-│   │   │   │   ├── almacen.js       # Bodega TC52 (entrada/salida/merma)
-│   │   │   │   ├── bodega.js        # Caducidades, surtido, recuentos
-│   │   │   │   ├── ventas.js        # Sincronización ventas NovaCaja
-│   │   │   │   └── ...
-│   │   │   └── index.js             # Express server :3002
-│   │   └── lacasita.db              # Base de datos SQLite
+│   │   │   │   ├── almacen.js       # Pedidos de recepción, movimientos
+│   │   │   │   ├── bodega.js        # Áreas, merma, surtido, alertas, recuentos
+│   │   │   │   ├── facturas.js      # Facturas de compra
+│   │   │   │   ├── novacaja.js      # Dashboard NovaCaja, proveedores, polizas
+│   │   │   │   ├── products.js      # Inventario, precios, stock
+│   │   │   │   ├── sales.js         # Ventas locales (SQLite)
+│   │   │   │   └── emailService.js  # Reporte mensual automático por correo
+│   │   │   └── index.js             # Express server :3002 + cron mensual
+│   │   ├── lacasita.db              # Base de datos SQLite (auto-generada)
+│   │   └── .env                     # Variables de entorno (no en git)
 │   │
 │   ├── web/
 │   │   └── app/
 │   │       ├── tabs/
-│   │       │   ├── BodegaTab.tsx    # Control de bodega
-│   │       │   ├── InventarioTab.tsx
-│   │       │   ├── VentasTab.tsx
-│   │       │   └── ...
-│   │       └── ...                  # Next.js :3001
+│   │       │   ├── DashboardTab.tsx    # KPIs del día, ventas, stock bajo
+│   │       │   ├── InventarioTab.tsx   # Búsqueda y edición de productos
+│   │       │   ├── VentasTab.tsx       # Análisis de ventas NovaCaja
+│   │       │   ├── BodegaTab.tsx       # Bodega completa (sub-módulos abajo)
+│   │       │   ├── AlertasTab.tsx      # Caducidades, estancados, sin ventas
+│   │       │   ├── ProveedoresTab.tsx  # Proveedores, rendimiento, reasignación
+│   │       │   └── ReportesTab.tsx     # Pólizas de venta detalladas
+│   │       └── ...                     # Next.js :3001
 │   │
 │   └── pwa-server.js                # Servidor estático PWA :3003
 │
@@ -236,16 +262,27 @@ lacasitadeli-admin/
 
 | Módulo | Descripción |
 |---|---|
-| **Dashboard** | Ventas del día, stock bajo, movimientos recientes |
-| **Inventario** | Búsqueda de productos, existencias NovaCaja |
-| **Ventas** | Corte del día, historial, sincronización con NovaCaja |
-| **Bodega** | Áreas, merma/caducidad, surtido, discrepancias, conteo, Zebra TC52 |
-| **Configuración** | Productos especiales, categorías, sobreescritura de imágenes |
+| **Dashboard** | Ventas del día, KPIs, stock bajo, movimientos recientes de bodega |
+| **Inventario** | Búsqueda de productos NovaCaja, edición de precios y stock |
+| **Ventas** | Análisis por periodo, top productos, pólizas de venta |
+| **Bodega** | Control de áreas, merma/caducidad, surtido, discrepancias, conteos, TC52 |
+| **Alertas** | Productos por caducar, estancados (+30 días sin venta), sin ventas en el mes |
+| **Proveedores** | Rendimiento por proveedor, directorio, agregar/eliminar, reasignación |
+| **Reportes** | Pólizas diarias detalladas, exportación a Excel |
 
-### Sub-módulo Zebra TC52 (en Bodega)
-Vista en el panel admin que muestra en tiempo real los movimientos registrados desde el dispositivo:
-- Historial de entradas y salidas del día
-- Mermas registradas (vencimiento, daño, cocina, robo, otro)
+### Sub-módulos de Bodega
+
+| Sub-módulo | Función |
+|---|---|
+| **Áreas** | Vista por área (bodega / cocina / tienda / refrigerador) |
+| **Merma** | Registro de bajas con motivo y área |
+| **Caducidades** | Control de fechas de vencimiento |
+| **Surtido** | Transferencias entre áreas con autorización |
+| **Recuentos** | Conteo físico vs sistema |
+| **Discrepancias** | Diferencias entre stock NovaCaja y movimientos locales |
+| **Recepción** | Pedidos de compra y recepción de mercancía |
+| **Facturas** | Facturas de compra ligadas a pedidos |
+| **TC52 en vivo** | Historial del día desde el Zebra TC52 |
 
 ---
 
@@ -260,6 +297,18 @@ URL: `http://<IP-LOCAL>:3003` — abrir en Chrome del TC52.
 | **Merma** | Dar de baja producto con motivo (vencimiento/daño/cocina/robo) |
 | **Historial** | Ver movimientos del día |
 | **Buscar** | Consultar existencia por nombre o código |
+
+---
+
+## Reportes automáticos por correo
+
+El día 1 de cada mes a las 8:00 AM (hora México), la API envía automáticamente un reporte de inventario con:
+
+- Productos estancados (sin venta en 30+ días)
+- Productos sin ventas en el mes
+- Caducidades próximas o vencidas
+
+Requiere `EMAIL_USER` + `EMAIL_PASS` (Gmail) **o** `RESEND_API_KEY` en el `.env`.
 
 ---
 

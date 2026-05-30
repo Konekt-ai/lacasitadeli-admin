@@ -9,6 +9,10 @@ function getDb() {
   _db = new Database(DB_PATH);
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
+  _db.pragma('cache_size = -32000');   // 32 MB page cache
+  _db.pragma('synchronous = NORMAL'); // safe with WAL, faster than FULL
+  _db.pragma('temp_store = MEMORY');  // temp tables in memory
+  _db.pragma('mmap_size = 268435456'); // 256 MB memory-mapped I/O
   _db.exec(`
     CREATE TABLE IF NOT EXISTS product_overrides (
       art_codigo   TEXT PRIMARY KEY,
@@ -218,6 +222,28 @@ function getDb() {
       subtotal         REAL    NOT NULL,
       created_at       TEXT    DEFAULT (datetime('now'))
     );
+  `);
+
+  // Indexes — created once, skipped if already exist
+  _db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_expiry_fecha     ON product_expiry(fecha_caducidad);
+    CREATE INDEX IF NOT EXISTS idx_expiry_alerta    ON product_expiry(alerta_enviada);
+    CREATE INDEX IF NOT EXISTS idx_mov_art          ON almacen_movimientos(art_codigo);
+    CREATE INDEX IF NOT EXISTS idx_mov_created      ON almacen_movimientos(created_at);
+    CREATE INDEX IF NOT EXISTS idx_mov_pedido       ON almacen_movimientos(pedido_id);
+    CREATE INDEX IF NOT EXISTS idx_merma_art        ON merma_registros(art_codigo);
+    CREATE INDEX IF NOT EXISTS idx_merma_created    ON merma_registros(created_at);
+    CREATE INDEX IF NOT EXISTS idx_ubicaciones_area ON stock_ubicaciones(area);
+    CREATE INDEX IF NOT EXISTS idx_surtido_semana   ON surtido_transfers(semana);
+    CREATE INDEX IF NOT EXISTS idx_surtido_auth     ON surtido_transfers(autorizado);
+    CREATE INDEX IF NOT EXISTS idx_pedidos_estado   ON pedidos_recepcion(estado);
+    CREATE INDEX IF NOT EXISTS idx_peddet_pedido    ON pedidos_recepcion_detalle(pedido_id);
+    CREATE INDEX IF NOT EXISTS idx_facturas_estado  ON facturas_compra(estado);
+    CREATE INDEX IF NOT EXISTS idx_factdet_factura  ON facturas_compra_detalle(factura_id);
+    CREATE INDEX IF NOT EXISTS idx_consumo_area     ON consumo_area(area);
+    CREATE INDEX IF NOT EXISTS idx_consumo_created  ON consumo_area(created_at);
+    CREATE INDEX IF NOT EXISTS idx_recuentos_created ON recuentos(created_at);
+    CREATE INDEX IF NOT EXISTS idx_alertas_tipo     ON alertas_descartadas(tipo);
   `);
 
   // Migraciones de columnas

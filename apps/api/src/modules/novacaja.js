@@ -409,6 +409,35 @@ router.post('/proveedores', async (req, res) => {
   }
 });
 
+// ── DELETE /api/novacaja/proveedores/:id ──────────────────────────────────────
+router.delete('/proveedores/:id', async (req, res) => {
+  const { id } = req.params;
+  if (!id) return res.status(400).json({ error: 'ID requerido' });
+
+  try {
+    const check = await mssql.query(`
+      SELECT COUNT(*) AS cnt
+      FROM [compucaja].[dbo].[Proveedores]
+      WHERE Pro_Codigo = '${id.replace(/'/g, "''")}'
+    `);
+    if (!check.recordset[0]?.cnt) return res.status(404).json({ error: 'Proveedor no encontrado' });
+
+    await mssql.query(`
+      DELETE FROM [compucaja].[dbo].[Proveedores]
+      WHERE Pro_Codigo = '${id.replace(/'/g, "''")}'
+    `);
+
+    for (const k of _cache.keys()) {
+      if (k.startsWith('proveedores:') || k.startsWith('proveedor_prods:') || k === 'suppliers') _cache.delete(k);
+    }
+
+    res.json({ message: 'Proveedor eliminado correctamente' });
+  } catch (err) {
+    console.error('Error eliminando proveedor:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/novacaja/poliza-ventas — cached 30 s per period ──────────────────
 router.get('/poliza-ventas', async (req, res) => {
   const { date, period = 'day' } = req.query;

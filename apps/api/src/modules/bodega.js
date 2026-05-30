@@ -4,7 +4,11 @@ const mssql    = require('../db/mssql');
 
 const router = express.Router();
 
-const VALID_AREAS = ['bodega', 'cocina', 'tienda', 'refrigerador', 'otro'];
+function getValidAreas(db) {
+  return db.prepare(
+    `SELECT clave FROM ubicaciones_config WHERE activo = 1 ORDER BY orden`
+  ).all().map(r => r.clave);
+}
 
 function getWeekNumber(d) {
   const date   = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -19,12 +23,13 @@ function esc(s) { return String(s || '').replace(/'/g, "''"); }
 // ── GET /api/bodega/area-counts ───────────────────────────────────────────────
 router.get('/area-counts', (req, res) => {
   try {
-    const db   = getDb();
-    const rows = db.prepare(`
-      SELECT area, COUNT(*) as total FROM product_locations GROUP BY area
-    `).all();
-    const map = Object.fromEntries(rows.map(r => [r.area, r.total]));
-    res.json(VALID_AREAS.map(a => ({ area: a, total: map[a] || 0 })));
+    const db    = getDb();
+    const areas = db.prepare(
+      `SELECT clave, nombre FROM ubicaciones_config WHERE activo = 1 ORDER BY orden`
+    ).all();
+    const counts = db.prepare(`SELECT area, COUNT(*) AS total FROM product_locations GROUP BY area`).all();
+    const map    = Object.fromEntries(counts.map(r => [r.area, r.total]));
+    res.json(areas.map(a => ({ area: a.clave, nombre: a.nombre, total: map[a.clave] || 0 })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -47,10 +52,10 @@ router.get('/products-by-area', (req, res) => {
 router.get('/areas/:area/products', async (req, res) => {
   const { area } = req.params;
   const search   = (req.query.search || '').trim();
-  if (!VALID_AREAS.includes(area)) return res.status(400).json({ error: 'Área inválida' });
-
   try {
-    const db = getDb();
+    const db         = getDb();
+    const validAreas = getValidAreas(db);
+    if (!validAreas.includes(area)) return res.status(400).json({ error: 'Área inválida' });
     const searchClause = search
       ? `AND (a.Art_Descripcion1 LIKE '%${esc(search)}%' OR a.Art_Codigo LIKE '%${esc(search)}%')`
       : '';
@@ -120,10 +125,11 @@ router.put('/products/:id/location', (req, res) => {
   const { area, notas } = req.body;
   const artCodigo       = req.params.id;
 
-  if (!VALID_AREAS.includes(area)) return res.status(400).json({ error: 'Área inválida' });
+  const db = getDb();
+  if (!getValidAreas(db).includes(area)) return res.status(400).json({ error: 'Área inválida' });
 
   try {
-    getDb().prepare(`
+    db.prepare(`
       INSERT INTO product_locations (art_codigo, area, notas, updated_at)
       VALUES (?, ?, ?, datetime('now'))
       ON CONFLICT(art_codigo) DO UPDATE

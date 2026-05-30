@@ -6,6 +6,7 @@ import { cn } from './lib/utils';
 import { Icon } from './components/Icon';
 import { Notification } from './components/Notification';
 import type { Product, Category } from './lib/types';
+// Product is used by lowStockProducts
 
 // ── Lazy-load tabs ─────────────────────────────────────────────────────────────
 const DashboardTab  = dynamic(() => import('./tabs/DashboardTab'),  { ssr: false });
@@ -36,12 +37,9 @@ const TabSpinner = () => (
 // ── Main ───────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [activeTab,   setActiveTab]   = useState('Dashboard');
-  const [products,         setProducts]         = useState<Product[]>([]);
   const [lowStockProducts, setLowStockProducts] = useState<Product[]>([]);
   const [categories,       setCategories]       = useState<Category[]>([]);
   const [loading,          setLoading]          = useState(true);
-  const [productsLoading,  setProductsLoading]  = useState(false);
-  const [allProductsFetched, setAllProductsFetched] = useState(false);
   const [dbStatus,         setDbStatus]         = useState<'unknown' | 'ok' | 'error'>('unknown');
   const [notification,     setNotification]     = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [timeFilter,       setTimeFilter]       = useState('Hoy');
@@ -69,24 +67,7 @@ export default function Dashboard() {
     finally { setLoading(false); }
   }, []);
 
-  // Heavy fetch: all products — only when Inventario tab is opened
-  const fetchAllProducts = useCallback(async () => {
-    setProductsLoading(true);
-    try {
-      const data = await fetch('/api/products?pageSize=100000').then(r => r.json());
-      if (Array.isArray(data))  setProducts(data);
-      else if (data?.data)      setProducts(data.data);
-      setAllProductsFetched(true);
-    } catch (e) { console.error('Error cargando inventario:', e); }
-    finally { setProductsLoading(false); }
-  }, []);
-
   useEffect(() => { fetchData(); }, [fetchData]);
-
-  // Lazy-load full product list the first time Inventario tab is opened
-  useEffect(() => {
-    if (activeTab === 'Inventario' && !allProductsFetched) fetchAllProducts();
-  }, [activeTab, allProductsFetched, fetchAllProducts]);
 
   // ── Tab content ─────────────────────────────────────────────────────────────
   const renderContent = () => {
@@ -99,7 +80,7 @@ export default function Dashboard() {
     return (
       <Suspense fallback={<TabSpinner />}>
         {activeTab === 'Dashboard'  && <DashboardTab  timeFilter={timeFilter} lowStockProducts={lowStockProducts} dbStatus={dbStatus} setActiveTab={setActiveTab} />}
-        {activeTab === 'Inventario' && <InventarioTab products={products} lowStockProducts={lowStockProducts} categories={categories} loading={productsLoading} onRefresh={() => { fetchData(); fetchAllProducts(); }} />}
+        {activeTab === 'Inventario' && <InventarioTab lowStockProducts={lowStockProducts} categories={categories} onRefresh={fetchData} />}
         {activeTab === 'Ventas'     && <VentasTab />}
         {activeTab === 'Reportes'   && <ReportesTab timeFilter={timeFilter} />}
         {activeTab === 'Alertas'     && <AlertasTab     lowStockProducts={lowStockProducts} onRefresh={fetchData} />}

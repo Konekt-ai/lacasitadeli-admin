@@ -1077,6 +1077,9 @@ input:where([type='file']):focus {
 .w-2 {
   width: 0.5rem;
 }
+.w-2\.5 {
+  width: 0.625rem;
+}
 .w-20 {
   width: 5rem;
 }
@@ -1115,6 +1118,10 @@ input:where([type='file']):focus {
 }
 .w-\[400px\] {
   width: 400px;
+}
+.w-fit {
+  width: -moz-fit-content;
+  width: fit-content;
 }
 .w-full {
   width: 100%;
@@ -1676,6 +1683,9 @@ input:where([type='file']):focus {
 .bg-error\/10 {
   background-color: rgb(186 26 26 / 0.1);
 }
+.bg-error\/5 {
+  background-color: rgb(186 26 26 / 0.05);
+}
 .bg-green-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(220 252 231 / var(--tw-bg-opacity, 1));
@@ -2048,6 +2058,9 @@ input:where([type='file']):focus {
 .pr-1 {
   padding-right: 0.25rem;
 }
+.pr-10 {
+  padding-right: 2.5rem;
+}
 .pr-2 {
   padding-right: 0.5rem;
 }
@@ -2171,6 +2184,9 @@ input:where([type='file']):focus {
 }
 .leading-relaxed {
   line-height: 1.625;
+}
+.leading-tight {
+  line-height: 1.25;
 }
 .tracking-\[0\.2em\] {
   letter-spacing: 0.2em;
@@ -2585,6 +2601,11 @@ input:where([type='file']):focus {
   border-color: rgb(214 211 209 / var(--tw-border-opacity, 1));
 }
 
+.hover\:bg-amber-100:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(254 243 199 / var(--tw-bg-opacity, 1));
+}
+
 .hover\:bg-amber-700:hover {
   --tw-bg-opacity: 1;
   background-color: rgb(180 83 9 / var(--tw-bg-opacity, 1));
@@ -2602,6 +2623,10 @@ input:where([type='file']):focus {
 
 .hover\:bg-error-container\/20:hover {
   background-color: rgb(255 218 214 / 0.2);
+}
+
+.hover\:bg-error\/20:hover {
+  background-color: rgb(186 26 26 / 0.2);
 }
 
 .hover\:bg-error\/5:hover {
@@ -2723,6 +2748,10 @@ input:where([type='file']):focus {
 
 .hover\:underline:hover {
   text-decoration-line: underline;
+}
+
+.hover\:opacity-90:hover {
+  opacity: 0.9;
 }
 
 .hover\:shadow-lg:hover {

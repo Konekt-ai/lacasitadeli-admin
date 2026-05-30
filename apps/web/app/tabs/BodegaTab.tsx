@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
@@ -11,18 +11,15 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'areas' | 'ubicaciones' | 'merma' | 'surtido' | 'discrepancias' | 'conteo' | 'facturas' | 'zebra' | 'config' | 'recepcion';
+type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
-  { id: 'ubicaciones',   label: 'Ubicaciones',       icon: 'inventory_2' },
-  { id: 'recepcion',     label: 'Recepción',         icon: 'local_shipping' },
-  { id: 'areas',         label: 'Asignar Áreas',     icon: 'warehouse' },
-  { id: 'merma',         label: 'Merma / Caducidad', icon: 'event_busy' },
-  { id: 'surtido',       label: 'Surtido',           icon: 'swap_horiz' },
-  { id: 'discrepancias', label: 'Discrepancias',     icon: 'difference' },
-  { id: 'conteo',        label: 'Conteo Ventas',     icon: 'calculate' },
-  { id: 'facturas',      label: 'Facturas',           icon: 'receipt_long' },
-  { id: 'zebra',         label: 'Movimientos TC52',  icon: 'qr_code_scanner' },
-  { id: 'config',        label: 'Configurar Áreas',  icon: 'tune' },
+  { id: 'stock-surtido',  label: 'Stock & Surtido',   icon: 'inventory_2'    },
+  { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
+  { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
+  { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
+  { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
+  { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
+  { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
 ];
 
 type AreaMeta = { label: string; icon: string; color: string; bg: string };
@@ -1876,315 +1873,6 @@ function DiscrepanciasView() {
   );
 }
 
-// ── Conteo sub-view ────────────────────────────────────────────────────────────
-interface ConteoItem {
-  art_codigo:    string;
-  nombre:        string | null;
-  total_vendido: number;
-  stock_actual:  number;
-  num_tickets:   number;
-}
-interface SyncSession {
-  id:                     number;
-  periodo_inicio:         string;
-  periodo_fin:            string;
-  productos_actualizados: number;
-  total_unidades:         number;
-  estado:                 string;
-  notas:                  string | null;
-  created_at:             string;
-}
-
-function ConteoView() {
-  const today   = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(today);
-  const [endDate,   setEndDate]   = useState(today);
-  const [preview,   setPreview]   = useState<ConteoItem[]>([]);
-  const [historial, setHistorial] = useState<SyncSession[]>([]);
-  const [loadingPreview, setLoadingPreview] = useState(false);
-  const [syncing,        setSyncing]        = useState(false);
-  const [confirming,     setConfirming]     = useState(false);
-  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
-
-  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
-    setNotif({ msg, type }); setTimeout(() => setNotif(null), 4000);
-  };
-
-  const setPreset = (days: number) => {
-    const end   = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - days);
-    setStartDate(start.toISOString().slice(0, 10));
-    setEndDate(end.toISOString().slice(0, 10));
-    setPreview([]);
-  };
-
-  const fetchPreview = useCallback(async () => {
-    setLoadingPreview(true);
-    setPreview([]);
-    try {
-      const res  = await fetch(`/api/bodega/conteo/preview?startDate=${startDate}&endDate=${endDate}`);
-      const data = await res.json();
-      if (res.ok) setPreview(Array.isArray(data) ? data : []);
-      else notify(data.error || 'Error al cargar vista previa', 'error');
-    } catch { notify('Error de conexión', 'error'); }
-    finally { setLoadingPreview(false); }
-  }, [startDate, endDate]);
-
-  const fetchHistorial = useCallback(async () => {
-    try {
-      const data = await fetch('/api/bodega/conteo/historial').then(r => r.json());
-      if (Array.isArray(data)) setHistorial(data);
-    } catch { /* silent */ }
-  }, []);
-
-  useEffect(() => { fetchHistorial(); }, [fetchHistorial]);
-
-  const runSync = async () => {
-    setSyncing(true);
-    setConfirming(false);
-    try {
-      const res  = await fetch('/api/bodega/conteo/sync', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ startDate, endDate }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        notify(data.message || 'Sincronización completada');
-        setPreview([]);
-        fetchHistorial();
-      } else {
-        notify(data.error || 'Error al sincronizar', 'error');
-      }
-    } catch { notify('Error de conexión', 'error'); }
-    finally { setSyncing(false); }
-  };
-
-  const totalUnidades  = preview.reduce((s, p) => s + (Number(p.total_vendido) || 0), 0);
-  const negativeCount  = preview.filter(p => p.stock_actual - p.total_vendido < 0).length;
-
-  return (
-    <div>
-      {notif && (
-        <div className={cn(
-          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
-          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
-        )}>
-          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
-          {notif.msg}
-        </div>
-      )}
-
-      {/* Date selector */}
-      <div className="flex flex-wrap items-end gap-3 mb-5">
-        <div>
-          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Desde</label>
-          <input type="date" value={startDate}
-            onChange={e => { setStartDate(e.target.value); setPreview([]); }}
-            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-        </div>
-        <div>
-          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Hasta</label>
-          <input type="date" value={endDate}
-            onChange={e => { setEndDate(e.target.value); setPreview([]); }}
-            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-        </div>
-        <div className="flex gap-1.5">
-          {[{ label: 'Hoy', days: 0 }, { label: '7 días', days: 7 }, { label: '30 días', days: 30 }].map(p => (
-            <button key={p.label} onClick={() => setPreset(p.days)}
-              className="px-3 py-2 bg-surface-container-low text-stone-500 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest hover:bg-primary/10 hover:text-primary transition-all border border-outline-variant/20">
-              {p.label}
-            </button>
-          ))}
-        </div>
-        <button onClick={fetchPreview} disabled={loadingPreview}
-          className={cn(
-            'px-5 py-2 rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 transition-all',
-            loadingPreview ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary-container shadow-md'
-          )}>
-          {loadingPreview
-            ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
-            : <Icon name="search" className="text-base" />}
-          Vista Previa
-        </button>
-      </div>
-
-      {/* Warning */}
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 mb-5 text-sm font-body text-amber-800">
-        <Icon name="warning" className="text-amber-500 text-xl flex-shrink-0 mt-0.5" />
-        <div>
-          <strong>Advertencia:</strong> Esta operación lee <code>TicketsPS</code> y descuenta las cantidades vendidas del inventario en NovaCaja.
-          <strong> No apliques el mismo periodo dos veces</strong> — causaría doble deducción.
-        </div>
-      </div>
-
-      {/* Loading state */}
-      {loadingPreview && (
-        <div className="flex justify-center py-12">
-          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-        </div>
-      )}
-
-      {/* Preview results */}
-      {!loadingPreview && preview.length > 0 && (
-        <div>
-          {/* Summary bar */}
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-            <div className="flex items-center gap-3">
-              <div className="bg-primary/10 rounded-lg px-4 py-2 text-center">
-                <p className="text-[10px] font-label uppercase tracking-widest text-stone-500">Productos</p>
-                <p className="text-2xl font-serif text-primary">{preview.length.toLocaleString('es-MX')}</p>
-              </div>
-              <div className="bg-secondary/10 rounded-lg px-4 py-2 text-center">
-                <p className="text-[10px] font-label uppercase tracking-widest text-stone-500">Unidades</p>
-                <p className="text-2xl font-serif text-secondary">{totalUnidades.toLocaleString('es-MX')}</p>
-              </div>
-              {negativeCount > 0 && (
-                <div className="bg-error/10 rounded-lg px-4 py-2 text-center">
-                  <p className="text-[10px] font-label uppercase tracking-widest text-error">Stock negativo</p>
-                  <p className="text-2xl font-serif text-error">{negativeCount}</p>
-                </div>
-              )}
-            </div>
-            <button onClick={() => setConfirming(true)} disabled={syncing}
-              className={cn(
-                'px-5 py-2.5 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 transition-all shadow-md',
-                syncing ? 'bg-stone-200 text-stone-400' : 'bg-error text-on-error hover:bg-error/90'
-              )}>
-              {syncing
-                ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
-                : <Icon name="remove_shopping_cart" className="text-base" />}
-              Aplicar Descuento
-            </button>
-          </div>
-
-          {/* Table */}
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden mb-6">
-            <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-              <table className="w-full text-left">
-                <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
-                  <tr>
-                    <th className="px-4 py-3">Código</th>
-                    <th className="px-4 py-3">Producto</th>
-                    <th className="px-4 py-3 text-center">Tickets</th>
-                    <th className="px-4 py-3 text-center">Vendido</th>
-                    <th className="px-4 py-3 text-center">Stock actual</th>
-                    <th className="px-4 py-3 text-center">Stock resultante</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-surface-container">
-                  {preview.map(item => {
-                    const resultante = item.stock_actual - item.total_vendido;
-                    return (
-                      <tr key={item.art_codigo} className="hover:bg-background transition-colors">
-                        <td className="px-4 py-2.5">
-                          <span className="text-[10px] font-label text-stone-400">{item.art_codigo}</span>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <p className="text-sm font-body text-on-surface truncate max-w-[220px]">{item.nombre || item.art_codigo}</p>
-                        </td>
-                        <td className="px-4 py-2.5 text-center text-xs font-body text-stone-400">{item.num_tickets}</td>
-                        <td className="px-4 py-2.5 text-center">
-                          <span className="font-serif font-bold text-secondary">{item.total_vendido}</span>
-                        </td>
-                        <td className="px-4 py-2.5 text-center text-sm font-body text-stone-500">{item.stock_actual}</td>
-                        <td className="px-4 py-2.5 text-center">
-                          <span className={cn('font-serif font-bold', resultante < 0 ? 'text-error' : 'text-primary')}>
-                            {resultante}
-                          </span>
-                          {resultante < 0 && <Icon name="warning" className="text-error text-xs ml-1" />}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!loadingPreview && preview.length === 0 && (
-        <div className="py-14 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl mb-6">
-          <Icon name="calculate" className="text-5xl opacity-20 mb-3" />
-          <p className="text-sm font-label uppercase tracking-widest">Selecciona un periodo y haz clic en Vista Previa</p>
-        </div>
-      )}
-
-      {/* Confirmation modal */}
-      {confirming && (
-        <div className="fixed inset-0 bg-black/50 z-[400] flex items-center justify-center p-4">
-          <div className="bg-surface rounded-2xl p-6 max-w-md w-full shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 rounded-full bg-error/10 flex items-center justify-center flex-shrink-0">
-                <Icon name="warning" className="text-2xl text-error" />
-              </div>
-              <div>
-                <h3 className="font-serif text-xl text-on-surface">¿Confirmar descuento?</h3>
-                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400">Operación irreversible</p>
-              </div>
-            </div>
-            <p className="text-sm font-body text-stone-600 mb-2">
-              Se descontarán <strong className="text-primary">{totalUnidades.toLocaleString('es-MX')} unidades</strong> de{' '}
-              <strong className="text-primary">{preview.length} productos</strong> del inventario de NovaCaja.
-            </p>
-            <p className="text-sm font-body text-stone-500 mb-4">
-              Periodo: <strong>{startDate}</strong> al <strong>{endDate}</strong>
-            </p>
-            {negativeCount > 0 && (
-              <div className="bg-error/10 border border-error/20 rounded-lg p-3 mb-4 text-xs font-body text-error">
-                <strong>{negativeCount} productos</strong> quedarán con stock negativo. Verifica antes de continuar.
-              </div>
-            )}
-            <div className="flex gap-3">
-              <button onClick={runSync}
-                className="flex-1 py-3 bg-error text-on-error rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-error/90 transition-all">
-                Sí, aplicar
-              </button>
-              <button onClick={() => setConfirming(false)}
-                className="flex-1 py-3 bg-surface-container text-stone-600 rounded-xl text-xs font-label uppercase tracking-widest hover:bg-stone-200 transition-all">
-                Cancelar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Historial */}
-      {historial.length > 0 && (
-        <div>
-          <h4 className="font-serif text-base text-primary mb-3">Historial de Sincronizaciones</h4>
-          <div className="space-y-2">
-            {historial.map(s => (
-              <div key={s.id} className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 flex items-center gap-4">
-                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
-                  <Icon name="sync" className="text-primary text-base" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-body text-on-surface">
-                    {s.periodo_inicio}{s.periodo_fin !== s.periodo_inicio ? ` al ${s.periodo_fin}` : ''}
-                  </p>
-                  <p className="text-[10px] font-label text-stone-400">
-                    {new Date(s.created_at).toLocaleString('es-MX')} · {s.productos_actualizados} productos
-                  </p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-sm font-serif text-primary font-bold">{Number(s.total_unidades).toLocaleString('es-MX')} uds</p>
-                  <span className="text-[9px] font-label uppercase tracking-widest bg-primary-fixed/30 text-primary px-2 py-0.5 rounded-full">
-                    {s.estado}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Movimientos unificados (TC52 + merma + surtido) ──────────────────────────
 const TIPO_META: Record<TipoMovimiento, { label: string; sign: string; badgeCls: string; iconCls: string }> = {
   entrada:       { label: 'Entrada',       sign: '+', badgeCls: 'bg-emerald-50 text-emerald-700 border border-emerald-200',    iconCls: 'text-emerald-600' },
@@ -2192,6 +1880,192 @@ const TIPO_META: Record<TipoMovimiento, { label: string; sign: string; badgeCls:
   merma:         { label: 'Merma',         sign: '−', badgeCls: 'bg-orange-50 text-orange-700 border border-orange-200',       iconCls: 'text-orange-600' },
   transferencia: { label: 'Transferencia', sign: '↔', badgeCls: 'bg-blue-50 text-blue-700 border border-blue-200',             iconCls: 'text-blue-600' },
 };
+
+// ── TC52 stock row type ────────────────────────────────────────────────────────
+interface Tc52StockRow { art_codigo: string; nombre: string | null; ubicacion: string; cantidad: number; updated_at: string }
+interface Tc52Ubic     { nombre: string; color: string; orden: number }
+
+function Tc52StockPanel() {
+  const [rows,       setRows]       = useState<Tc52StockRow[]>([]);
+  const [ubics,      setUbics]      = useState<Tc52Ubic[]>([]);
+  const [loading,    setLoading]    = useState(false);
+  const [search,     setSearch]     = useState('');
+  const [collapsed,  setCollapsed]  = useState(false);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [dataRows, dataUbics] = await Promise.all([
+        fetch('/api/almacen/tc52/stock').then(r => r.json()),
+        fetch('/api/almacen/tc52/ubicaciones').then(r => r.json()),
+      ]);
+      if (Array.isArray(dataRows))  setRows(dataRows);
+      if (Array.isArray(dataUbics)) setUbics(dataUbics);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Pivot: {art_codigo, nombre, ubicaciones: {[ubic]: qty}, total}
+  type PivotRow = { art_codigo: string; nombre: string | null; locs: Record<string, number>; total: number };
+  const pivot = useMemo<PivotRow[]>(() => {
+    const map = new Map<string, PivotRow>();
+    for (const r of rows) {
+      if (!map.has(r.art_codigo)) map.set(r.art_codigo, { art_codigo: r.art_codigo, nombre: r.nombre, locs: {}, total: 0 });
+      const p = map.get(r.art_codigo)!;
+      p.locs[r.ubicacion] = (p.locs[r.ubicacion] || 0) + r.cantidad;
+      p.total += r.cantidad;
+    }
+    return Array.from(map.values()).sort((a, b) => (a.nombre || a.art_codigo).localeCompare(b.nombre || b.art_codigo, 'es'));
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return pivot;
+    const q = search.toLowerCase();
+    return pivot.filter(p => (p.nombre || p.art_codigo).toLowerCase().includes(q));
+  }, [pivot, search]);
+
+  const totalesGlobales = useMemo(() => {
+    const t: Record<string, number> = {};
+    for (const r of rows) t[r.ubicacion] = (t[r.ubicacion] || 0) + r.cantidad;
+    return t;
+  }, [rows]);
+
+  return (
+    <div className="mb-8 rounded-2xl border border-outline-variant/10 bg-surface-container-low overflow-hidden">
+      {/* Header */}
+      <button onClick={() => setCollapsed(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 group">
+        <div className="flex items-center gap-2">
+          <Icon name="inventory_2" className="text-base text-emerald-600" />
+          <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-600">
+            Stock actual por ubicación (TC52)
+          </span>
+          {!loading && rows.length > 0 && (
+            <span className="ml-2 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-label font-bold">
+              {filtered.length} productos · {rows.reduce((s, r) => s + r.cantidad, 0).toLocaleString('es-MX')} uds
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+          <button onClick={fetchAll} disabled={loading}
+            className={cn('p-1.5 rounded-lg text-stone-400 hover:text-primary transition-all', loading && 'animate-spin')}>
+            <Icon name="refresh" className="text-base" />
+          </button>
+          <Icon name={collapsed ? 'expand_more' : 'expand_less'}
+            className="text-stone-400 group-hover:text-stone-600 transition-colors pointer-events-none" />
+        </div>
+      </button>
+
+      {!collapsed && (
+        <div className="px-5 pb-5">
+          {/* Resumen chips por ubicación */}
+          {ubics.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              {ubics.map(u => {
+                const total = totalesGlobales[u.nombre] || 0;
+                const prods = new Set(rows.filter(r => r.ubicacion === u.nombre).map(r => r.art_codigo)).size;
+                return (
+                  <div key={u.nombre} className="px-3 py-2 rounded-xl border text-left"
+                    style={{ borderColor: `${u.color}30`, background: `${u.color}10` }}>
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <div className="w-2.5 h-2.5 rounded-full" style={{ background: u.color }} />
+                      <span className="text-[10px] font-label font-bold uppercase tracking-widest" style={{ color: u.color }}>
+                        {u.nombre}
+                      </span>
+                    </div>
+                    <p className="text-lg font-serif" style={{ color: u.color }}>{total.toLocaleString('es-MX')}</p>
+                    <p className="text-[9px] font-label text-stone-400">{prods} prod.</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Buscador */}
+          <div className="relative mb-4">
+            <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-base" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar producto..."
+              className="w-full pl-9 pr-4 py-2 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
+          </div>
+
+          {/* Tabla pivot */}
+          {loading ? (
+            <div className="flex justify-center py-10">
+              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="py-12 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl">
+              <Icon name="inventory_2" className="text-5xl opacity-20 mb-2" />
+              <p className="text-sm font-label uppercase tracking-widest">
+                {rows.length === 0 ? 'Sin datos — registra entradas desde el TC52' : 'Sin resultados'}
+              </p>
+            </div>
+          ) : (
+            <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+              <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-surface-container-low/60 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                    <tr>
+                      <th className="px-4 py-3 min-w-[200px]">Producto</th>
+                      {ubics.map(u => (
+                        <th key={u.nombre} className="px-3 py-3 text-center min-w-[80px]">
+                          <span className="inline-flex items-center gap-1">
+                            <span className="w-2 h-2 rounded-full" style={{ background: u.color }} />
+                            {u.nombre}
+                          </span>
+                        </th>
+                      ))}
+                      <th className="px-4 py-3 text-center">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-container">
+                    {filtered.map(p => (
+                      <tr key={p.art_codigo} className="hover:bg-background transition-colors">
+                        <td className="px-4 py-3">
+                          <p className="text-sm font-body text-on-surface truncate max-w-[220px]">{p.nombre || p.art_codigo}</p>
+                          <p className="text-[9px] font-label text-stone-400 mt-0.5 font-mono">{p.art_codigo}</p>
+                        </td>
+                        {ubics.map(u => {
+                          const qty = p.locs[u.nombre] || 0;
+                          return (
+                            <td key={u.nombre} className="px-3 py-3 text-center">
+                              {qty > 0 ? (
+                                <span className="inline-block px-2 py-0.5 rounded-full text-xs font-serif font-bold min-w-[32px]"
+                                  style={{ background: `${u.color}20`, color: u.color }}>
+                                  {qty.toLocaleString('es-MX')}
+                                </span>
+                              ) : (
+                                <span className="text-stone-200 text-xs">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="px-4 py-3 text-center">
+                          <span className="font-serif font-bold text-on-surface">{p.total.toLocaleString('es-MX')}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
+                <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+                  {filtered.length} producto{filtered.length !== 1 ? 's' : ''} con stock
+                </p>
+                <p className="text-[10px] font-label text-stone-400">
+                  Total: {filtered.reduce((s, p) => s + p.total, 0).toLocaleString('es-MX')} uds
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ZebraView() {
   const { areas, areaMap } = useAreasCtx();
@@ -2238,7 +2112,10 @@ function ZebraView() {
 
   return (
     <div>
-      {/* Filtros */}
+      {/* Stock por ubicación TC52 */}
+      <Tc52StockPanel />
+
+      {/* Filtros movimientos */}
       <div className="flex flex-wrap items-end gap-3 mb-5">
         <div>
           <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha</label>
@@ -3534,9 +3411,61 @@ function FacturasView() {
   );
 }
 
+// ── Áreas combinado: Asignar + Configurar ─────────────────────────────────────
+function GestionAreasView() {
+  const [inner, setInner] = useState<'asignar' | 'config'>('asignar');
+  return (
+    <div>
+      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
+        {([
+          { id: 'asignar', label: 'Asignar Áreas',    icon: 'warehouse' },
+          { id: 'config',  label: 'Configurar Áreas', icon: 'tune'      },
+        ] as const).map(t => (
+          <button key={t.id} onClick={() => setInner(t.id)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
+              inner === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600'
+            )}>
+            <Icon name={t.icon} className="text-base" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {inner === 'asignar' && <AreasView />}
+      {inner === 'config'  && <ConfiguracionAreasView />}
+    </div>
+  );
+}
+
+// ── Stock + Surtido combinado ──────────────────────────────────────────────────
+function StockSurtidoView() {
+  const [inner, setInner] = useState<'ubicaciones' | 'surtido'>('ubicaciones');
+  return (
+    <div>
+      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
+        {([
+          { id: 'ubicaciones', label: 'Stock por área', icon: 'inventory_2' },
+          { id: 'surtido',     label: 'Surtido',        icon: 'swap_horiz'  },
+        ] as const).map(t => (
+          <button key={t.id} onClick={() => setInner(t.id)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
+              inner === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600'
+            )}>
+            <Icon name={t.icon} className="text-base" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {inner === 'ubicaciones' && <UbicacionesView />}
+      {inner === 'surtido'     && <SurtidoView />}
+    </div>
+  );
+}
+
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
-  const [view,      setView]      = useState<SubView>('ubicaciones');
+  const [view,      setView]      = useState<SubView>('stock-surtido');
   const [areasData, setAreasData] = useState<AreaConfig[]>([]);
 
   const loadAreas = useCallback(async () => {
@@ -3598,16 +3527,13 @@ export default function BodegaTab() {
 
       {/* Content */}
       <div className="min-h-[400px]">
-        {view === 'ubicaciones'   && <UbicacionesView />}
-        {view === 'recepcion'     && <RecepcionView />}
-        {view === 'areas'         && <AreasView />}
-        {view === 'merma'         && <MermaView />}
-        {view === 'surtido'       && <SurtidoView />}
-        {view === 'discrepancias' && <DiscrepanciasView />}
-        {view === 'conteo'        && <ConteoView />}
-        {view === 'facturas'      && <FacturasView />}
-        {view === 'zebra'         && <ZebraView />}
-        {view === 'config'        && <ConfiguracionAreasView />}
+        {view === 'stock-surtido'  && <StockSurtidoView />}
+        {view === 'recepcion'      && <RecepcionView />}
+        {view === 'gestion-areas'  && <GestionAreasView />}
+        {view === 'merma'          && <MermaView />}
+        {view === 'discrepancias'  && <DiscrepanciasView />}
+        {view === 'facturas'       && <FacturasView />}
+        {view === 'zebra'          && <ZebraView />}
       </div>
     </section>
     </AreasCtx.Provider>

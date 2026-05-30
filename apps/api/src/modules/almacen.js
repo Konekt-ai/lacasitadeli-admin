@@ -6,7 +6,7 @@ const router = express.Router();
 
 function esc(s) { return String(s || '').replace(/'/g, "''"); }
 
-// Color conversion: Tailwind text class → hex (for TC52 which uses hex colors)
+
 const TAILWIND_HEX = {
   'text-blue-700':    '#1d4ed8',
   'text-amber-700':   '#b45309',
@@ -22,7 +22,8 @@ const TAILWIND_HEX = {
   'text-emerald-700': '#047857',
 };
 
-// Hex → Tailwind (for areas created from the TC52)
+
+
 const HEX_TO_TAILWIND = {
   '#1d4ed8': { bg: 'bg-blue-50',    text: 'text-blue-700' },
   '#b45309': { bg: 'bg-amber-50',   text: 'text-amber-700' },
@@ -889,6 +890,167 @@ router.put('/ubicaciones/config/:id/orden', (req, res) => {
     db.prepare(`UPDATE ubicaciones_config SET orden = ? WHERE id = ?`).run(curr.orden, neighbor.id);
     res.json({ ok: true });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/almacen/ubicaciones/areas — lista de ubicaciones del TC52 ─────────
+router.get('/ubicaciones/areas', async (_req, res) => {
+  try {
+    const result = await mssql.query(`
+      SELECT id, nombre, color FROM [compucaja].[dbo].[ubicaciones_bodega]
+      WHERE activa=1 ORDER BY orden, nombre`);
+    res.json(result.recordset || []);
+  } catch (err) {
+    // Si la tabla no existe aún, devolver una lista por defecto
+    res.json([
+      { id:1, nombre:'Bodega',       color:'#1D9E75' },
+      { id:2, nombre:'Casita 1',     color:'#3B82F6' },
+      { id:3, nombre:'Casita 2',     color:'#8B5CF6' },
+      { id:4, nombre:'USA',          color:'#F59E0B' },
+      { id:5, nombre:'Cocina',       color:'#E07B39' },
+      { id:6, nombre:'Refrigerador', color:'#06B6D4' },
+    ]);
+  }
+});
+
+// ── POST /api/almacen/ubicaciones/areas ─────────────────────────────────────────
+router.post('/ubicaciones/areas', async (req, res) => {
+  const { nombre, color } = req.body;
+  if (!nombre?.trim()) return res.status(400).json({ mensaje: 'Nombre requerido' });
+  try {
+    await mssql.query(
+      `INSERT INTO [compucaja].[dbo].[ubicaciones_bodega](nombre,color) VALUES('${nombre.trim().replace(/'/g,"''")}','${(color||'#5F5E5A').replace(/'/g,"''")}')`,
+    );
+    const result = await mssql.query(`SELECT id,nombre,color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden,nombre`);
+    res.json(result.recordset || []);
+  } catch (err) { res.status(500).json({ mensaje: err.message }); }
+});
+
+// ── DELETE /api/almacen/ubicaciones/areas/:id ──────────────────────────────────
+router.delete('/ubicaciones/areas/:id', async (req, res) => {
+  try {
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET activa=0 WHERE id=${parseInt(req.params.id)||0}`);
+    const result = await mssql.query(`SELECT id,nombre,color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden,nombre`);
+    res.json(result.recordset || []);
+  } catch (err) { res.status(500).json({ mensaje: err.message }); }
+});
+
+// ── POST /api/almacen/traslado — mover piezas entre ubicaciones ────────────────
+router.post('/traslado', async (req, res) => {
+  const { codigo, cantidad, de_ubicacion, a_ubicacion } = req.body;
+  const qty = parseInt(cantidad);
+  if (!codigo || !qty || qty <= 0 || !de_ubicacion || !a_ubicacion)
+    return res.status(400).json({ mensaje: 'Datos inválidos' });
+  if (de_ubicacion === a_ubicacion)
+    return res.status(400).json({ mensaje: 'El origen y destino deben ser diferentes' });
+  const esc = s => String(s||'').replace(/'/g,"''");
+  try {
+    // Verificar stock en origen
+    const chk = await mssql.query(`
+      SELECT ISNULL(SUM(cantidad),0) AS stock FROM [compucaja].[dbo].[inventario_bodega]
+      WHERE codigo_barras='${esc(codigo)}'
+        AND (ubicacion='${esc(de_ubicacion)}' OR (ubicacion IS NULL AND '${esc(de_ubicacion)}'='Bodega'))`);
+    const stockOrigen = Number(chk.recordset[0]?.stock) || 0;
+    if (stockOrigen < qty)
+      return res.status(400).json({ mensaje: `Stock insuficiente en ${de_ubicacion}. Disponible: ${stockOrigen} pzas` });
+
+    // Restar del origen
+    await mssql.query(`
+      UPDATE [compucaja].[dbo].[inventario_bodega]
+      SET cantidad=cantidad-${qty}, ultima_salida=GETDATE()
+      WHERE codigo_barras='${esc(codigo)}'
+        AND (ubicacion='${esc(de_ubicacion)}' OR (ubicacion IS NULL AND '${esc(de_ubicacion)}'='Bodega'))`);
+
+    // Sumar al destino (MERGE)
+    await mssql.query(`
+      MERGE [compucaja].[dbo].[inventario_bodega] AS target
+      USING (SELECT '${esc(codigo)}' AS cb, '${esc(a_ubicacion)}' AS ub) AS src
+        ON target.codigo_barras=src.cb AND target.ubicacion=src.ub
+      WHEN MATCHED THEN UPDATE SET cantidad=target.cantidad+${qty}, ultima_entrada=GETDATE()
+      WHEN NOT MATCHED THEN INSERT (codigo_barras,ubicacion,cantidad,ultima_entrada)
+        VALUES ('${esc(codigo)}','${esc(a_ubicacion)}',${qty},GETDATE());`);
+
+    // Registrar movimiento
+    await mssql.query(`
+      INSERT INTO [compucaja].[dbo].[movimientos_bodega](codigo_barras,tipo,cantidad,ubicacion,area,fecha)
+      VALUES('${esc(codigo)}','traslado',${qty},'${esc(a_ubicacion)}','${esc(de_ubicacion)}',GETDATE())`);
+
+    res.json({ ok:true, stockActual: stockOrigen - qty, mensaje: `Traslado: ${qty} pzas de ${de_ubicacion} → ${a_ubicacion}` });
+  } catch (err) {
+    console.error('traslado:', err.message);
+    res.status(500).json({ mensaje: err.message });
+  }
+});
+
+// ── GET /api/almacen/inventario — todo el stock registrado en TC52 ─────────────
+router.get('/inventario', async (_req, res) => {
+  const esc = s => String(s||'').replace(/'/g,"''");
+  try {
+    const result = await mssql.query(`
+      SELECT
+        i.codigo_barras                                        AS codigo,
+        ISNULL(v.Art_Descripcion, i.codigo_barras)             AS nombre,
+        ISNULL(i.ubicacion,'Bodega')                           AS ubicacion,
+        i.cantidad,
+        ISNULL(u.color,'#6B7280')                              AS color
+      FROM [compucaja].[dbo].[inventario_bodega] i
+      OUTER APPLY (
+        SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados]
+        WHERE Art_GTIN=i.codigo_barras OR CodAlt_Codigo=i.codigo_barras
+      ) v
+      LEFT JOIN [compucaja].[dbo].[ubicaciones_bodega] u
+        ON u.nombre=ISNULL(i.ubicacion,'Bodega') AND u.activa=1
+      WHERE i.cantidad > 0
+      ORDER BY nombre, i.ubicacion`);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('inventario:', err.message);
+    res.status(500).json({ mensaje: err.message });
+  }
+});
+
+// ── POST /api/almacen/producto-ubicacion (stub) ───────────────────────────────
+router.post('/producto-ubicacion', (_req, res) => res.json({ ok: true }));
+
+// ── GET /api/almacen/tc52/stock — inventario del TC52 por ubicación ────────────
+router.get('/tc52/stock', async (req, res) => {
+  try {
+    const result = await mssql.query(`
+      SELECT
+        i.codigo_barras                                      AS art_codigo,
+        ISNULL(v.Art_Descripcion, i.codigo_barras)           AS nombre,
+        i.ubicacion,
+        i.cantidad,
+        CONVERT(VARCHAR(23), ISNULL(i.ultima_entrada, i.creado), 120) AS updated_at
+      FROM [compucaja].[dbo].[inventario_bodega] i
+      OUTER APPLY (
+        SELECT TOP 1 Art_Descripcion
+        FROM [compucaja].[dbo].[VArticulosUnificados]
+        WHERE Art_GTIN = i.codigo_barras OR CodAlt_Codigo = i.codigo_barras
+      ) v
+      WHERE i.cantidad > 0
+      ORDER BY nombre, i.ubicacion
+    `);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('Error tc52/stock:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/almacen/tc52/ubicaciones — ubicaciones configuradas en TC52 ───────
+router.get('/tc52/ubicaciones', async (req, res) => {
+  try {
+    const result = await mssql.query(`
+      SELECT nombre, color, orden
+      FROM [compucaja].[dbo].[ubicaciones_bodega]
+      WHERE activa = 1
+      ORDER BY orden, nombre
+    `);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('Error tc52/ubicaciones:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

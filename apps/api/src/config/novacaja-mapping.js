@@ -1,15 +1,18 @@
 // ── Mapeo real de compucaja — vistas y tablas confirmadas
+const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 
-function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
+function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200 } = {}) {
+  const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
-        a.Art_Descripcion  LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.Art_GTIN      LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.Art_PLU       LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.Art_SKU       LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.CodAlt_Codigo LIKE '%${search.replace(/'/g, "''")}%'
+        a.Art_Descripcion  LIKE '%${esc(search)}%'
+        OR a.Art_GTIN      LIKE '%${esc(search)}%'
+        OR a.Art_PLU       LIKE '%${esc(search)}%'
+        OR a.Art_SKU       LIKE '%${esc(search)}%'
+        OR a.CodAlt_Codigo LIKE '%${esc(search)}%'
       )`
     : '';
+  const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
 
   return `
     SELECT
@@ -35,6 +38,7 @@ function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
     WHERE a.Art_Descripcion <> ''
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
+      ${whereCategory}
     GROUP BY
       a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo,
       a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto,
@@ -46,21 +50,24 @@ function buildProductsQuery({ search = '', offset = 0, pageSize = 200 } = {}) {
   `;
 }
 
-function buildProductsCountQuery({ search = '' } = {}) {
+function buildProductsCountQuery({ search = '', category = '' } = {}) {
+  const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
-        a.Art_Descripcion  LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.Art_GTIN      LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.Art_SKU       LIKE '%${search.replace(/'/g, "''")}%'
-        OR a.CodAlt_Codigo LIKE '%${search.replace(/'/g, "''")}%'
+        a.Art_Descripcion  LIKE '%${esc(search)}%'
+        OR a.Art_GTIN      LIKE '%${esc(search)}%'
+        OR a.Art_SKU       LIKE '%${esc(search)}%'
+        OR a.CodAlt_Codigo LIKE '%${esc(search)}%'
       )`
     : '';
+  const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
   return `
     SELECT COUNT(*) AS total
     FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
     WHERE a.Art_Descripcion <> ''
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
+      ${whereCategory}
   `;
 }
 
@@ -82,7 +89,7 @@ function buildDashboardLowStockCountQuery() {
         ON aa.Art_Codigo = a.Art_Codigo
       WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
       GROUP BY a.Art_Codigo
-      HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= 5
+      HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= ${LOW_STOCK_THRESHOLD}
     ) AS sub
   `;
 }

@@ -69,6 +69,10 @@ export default function ProveedoresTab({ timeFilter }: Props) {
   const [showAdd,          setShowAdd]          = useState(false);
   const [addForm,          setAddForm]          = useState<AddForm>(EMPTY_FORM);
   const [addSaving,        setAddSaving]        = useState(false);
+  const [confirmDelete,    setConfirmDelete]    = useState(false);
+  const [deleting,         setDeleting]         = useState(false);
+  const [showReasign,      setShowReasign]      = useState(false);
+  const [reasignMap,       setReasignMap]       = useState<Record<string, string>>({});
   const [notif,            setNotif]            = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
   const period = PERIOD_MAP[timeFilter as TimeFilter] ?? 'day';
@@ -103,7 +107,31 @@ export default function ProveedoresTab({ timeFilter }: Props) {
     finally { setLoadingProducts(false); }
   };
 
-  const closePanel = () => { setSelectedSupplier(null); setSupplierProducts([]); };
+  const closePanel = () => {
+    setSelectedSupplier(null);
+    setSupplierProducts([]);
+    setConfirmDelete(false);
+    setShowReasign(false);
+    setReasignMap({});
+  };
+
+  const isDiversos = (s: Supplier) =>
+    /divers/i.test(s.nombre) || /divers/i.test(s.apellidoPaterno);
+
+  const deleteSupplier = async () => {
+    if (!selectedSupplier) return;
+    setDeleting(true);
+    try {
+      const res  = await fetch(`/api/novacaja/proveedores/${selectedSupplier.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        notify(data.message || 'Proveedor eliminado');
+        closePanel();
+        fetchSuppliers();
+      } else notify(data.error || 'Error al eliminar', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setDeleting(false); }
+  };
 
   const saveNewSupplier = async () => {
     if (!addForm.nombre.trim()) { notify('El nombre es requerido', 'error'); return; }
@@ -277,6 +305,48 @@ export default function ProveedoresTab({ timeFilter }: Props) {
 
             {/* Panel body */}
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            {showReasign ? (
+              <div className="space-y-4">
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                  <p className="text-xs font-label font-bold text-amber-700 uppercase tracking-widest mb-0.5">Reasignar productos</p>
+                  <p className="text-[11px] font-body text-amber-600">
+                    Elige a qué proveedor mover cada producto de PROVEEDORES DIVERSOS.
+                  </p>
+                </div>
+
+                {loadingProducts ? (
+                  <div className="flex justify-center py-6">
+                    <div className="w-6 h-6 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+                  </div>
+                ) : supplierProducts.length === 0 ? (
+                  <p className="text-xs font-body text-stone-400 italic text-center py-6">Sin productos en este periodo</p>
+                ) : (
+                  <div className="space-y-2">
+                    {supplierProducts.map(p => (
+                      <div key={p.productCode} className="bg-surface-container-low rounded-xl p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-xs font-body text-on-surface font-semibold leading-tight">{p.name}</p>
+                          <span className="text-[9px] font-label text-stone-400 bg-surface-container px-1.5 py-0.5 rounded uppercase tracking-wider flex-shrink-0">
+                            {p.productCode}
+                          </span>
+                        </div>
+                        <select
+                          value={reasignMap[p.productCode] ?? ''}
+                          onChange={e => setReasignMap(m => ({ ...m, [p.productCode]: e.target.value }))}
+                          className="w-full px-3 py-2 bg-surface border border-outline-variant/20 focus:border-primary rounded-lg text-xs font-body outline-none">
+                          <option value="">— Sin cambio —</option>
+                          {suppliers
+                            .filter(s => selectedSupplier && s.id !== selectedSupplier.id)
+                            .map(s => (
+                              <option key={s.id} value={s.id}>{displayName(s)}</option>
+                            ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (<>
 
               {/* Sales KPIs */}
               <div className="grid grid-cols-2 gap-3">
@@ -379,13 +449,70 @@ export default function ProveedoresTab({ timeFilter }: Props) {
                   </div>
                 )}
               </div>
+            </>)}
             </div>
 
-            <div className="p-5 border-t border-outline-variant/10 flex-shrink-0">
-              <button onClick={closePanel}
-                className="w-full py-3 bg-surface-variant text-on-surface-variant rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-stone-200 transition-all">
-                Cerrar
-              </button>
+            <div className="p-5 border-t border-outline-variant/10 flex-shrink-0 space-y-3">
+              {/* Reasign mode footer */}
+              {showReasign ? (
+                <div className="flex gap-2">
+                  <button onClick={() => { setShowReasign(false); setReasignMap({}); }}
+                    className="flex-1 py-3 bg-surface-variant text-on-surface-variant rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-stone-200 transition-all">
+                    Cancelar
+                  </button>
+                  <button
+                    disabled
+                    title="Pendiente de implementar en API"
+                    className="flex-1 py-3 bg-stone-200 text-stone-400 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 cursor-not-allowed">
+                    <Icon name="shuffle" className="text-base" />
+                    Guardar cambios
+                  </button>
+                </div>
+              ) : confirmDelete ? (
+                <div className="bg-error/5 border border-error/20 rounded-xl p-4 space-y-3">
+                  <p className="text-xs font-label text-error text-center font-bold uppercase tracking-widest">
+                    ¿Eliminar permanentemente?
+                  </p>
+                  <p className="text-[11px] font-body text-stone-500 text-center">
+                    Se borrará <span className="font-bold">{displayName(selectedSupplier)}</span> de la base de datos. Esta acción no se puede deshacer.
+                  </p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setConfirmDelete(false)} disabled={deleting}
+                      className="flex-1 py-2.5 bg-surface-variant text-on-surface-variant rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-stone-200 transition-all">
+                      Cancelar
+                    </button>
+                    <button onClick={deleteSupplier} disabled={deleting}
+                      className={cn(
+                        'flex-1 py-2.5 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
+                        deleting ? 'bg-stone-200 text-stone-400' : 'bg-error text-on-error hover:opacity-90'
+                      )}>
+                      {deleting
+                        ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+                        : <Icon name="delete_forever" className="text-base" />}
+                      Eliminar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  {selectedSupplier && isDiversos(selectedSupplier) && (
+                    <button onClick={() => setShowReasign(true)}
+                      className="px-4 py-3 bg-amber-50 text-amber-700 border border-amber-200 rounded-xl text-xs font-label font-bold flex items-center gap-2 hover:bg-amber-100 transition-all">
+                      <Icon name="shuffle" className="text-base" />
+                      Reasignar
+                    </button>
+                  )}
+                  <button onClick={() => setConfirmDelete(true)}
+                    className="px-4 py-3 bg-error/10 text-error rounded-xl text-xs font-label font-bold flex items-center gap-2 hover:bg-error/20 transition-all">
+                    <Icon name="delete" className="text-base" />
+                    Eliminar
+                  </button>
+                  <button onClick={closePanel}
+                    className="flex-1 py-3 bg-surface-variant text-on-surface-variant rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-stone-200 transition-all">
+                    Cerrar
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </>

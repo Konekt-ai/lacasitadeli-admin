@@ -3,6 +3,8 @@ const { getDb } = require('../db');
 const mssql    = require('../db/mssql');
 const { buildProductsQuery, buildProductsCountQuery } = require('../config/novacaja-mapping');
 
+const DEFAULT_MIN_STOCK = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
+
 const router = express.Router();
 
 // ── In-memory TTL cache ───────────────────────────────────────────────────────
@@ -32,12 +34,12 @@ router.get('/categories', async (req, res) => {
 
 // ── GET /api/products — cached 2 min for full list, no cache for search ───────
 router.get('/', async (req, res) => {
-  const { q = '', page = 1, pageSize = 200, lowStock } = req.query;
+  const { q = '', category = '', page = 1, pageSize = 50, lowStock } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(pageSize);
 
-  // Only cache the full unfiltered list (most common call: pageSize=100000, no search)
-  const isFullList = !q && lowStock !== 'true';
-  const cacheKey   = isFullList ? `products:all:${page}:${pageSize}` : null;
+  // Cache only the fully unfiltered default page
+  const isDefaultPage = !q && !category && lowStock !== 'true' && parseInt(page) === 1 && parseInt(pageSize) <= 50;
+  const cacheKey = isDefaultPage ? `products:default` : null;
   if (cacheKey) {
     const cached = _get(cacheKey);
     if (cached) return res.json(cached);
@@ -45,8 +47,8 @@ router.get('/', async (req, res) => {
 
   try {
     const [dataRes, countRes] = await Promise.all([
-      mssql.query(buildProductsQuery({ search: q, offset, pageSize: parseInt(pageSize) })),
-      mssql.query(buildProductsCountQuery({ search: q })),
+      mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
+      mssql.query(buildProductsCountQuery({ search: q, category })),
     ]);
 
     // Merge image + min_stock overrides from SQLite
@@ -60,23 +62,18 @@ router.get('/', async (req, res) => {
         barcode:      r.barcode    ? String(r.barcode).trim() : null,
         name:         String(r.name || '').trim(),
         alias:        r.alias      ? String(r.alias).trim()   : null,
-        description:  null,
         costPrice:    parseFloat(r.costPrice)  || 0,
         salePrice:    parseFloat(r.salePrice)  || 0,
         stock:        parseFloat(r.stock)      || 0,
-        minStock:     ov.min_stock != null ? ov.min_stock : 5,
+        minStock:     ov.min_stock != null ? ov.min_stock : DEFAULT_MIN_STOCK,
         brand:        r.brand      || null,
         category:     r.category   || null,
-        categoryId:   null,
         unit:         r.unit       || null,
         sku:          r.sku        || null,
         supplierCode: r.supplierCode || null,
         lastPurchase: r.lastPurchase || null,
         lastSale:     r.lastSale     || null,
         image:        ov.image_url   || null,
-        active:       true,
-        visibleWeb:   true,
-        createdAt:    new Date().toISOString(),
       };
     });
 
@@ -93,7 +90,7 @@ router.get('/', async (req, res) => {
       pages:    Math.ceil(total / parseInt(pageSize)),
     };
 
-    if (cacheKey) _set(cacheKey, result, 120_000); // 2 min
+    if (cacheKey) _set(cacheKey, result, 120_000); // 2 min — solo primera página sin filtros
     res.json(result);
   } catch (err) {
     console.error('Error productos:', err.message);
