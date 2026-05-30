@@ -86,6 +86,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     setLoading(true);
     try {
       const res  = await fetch(`/api/novacaja/dashboard?period=${p}`);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.error) { console.error(data.error); return; }
       setKpis(data.kpis        || null);
@@ -100,6 +101,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     setTicketsLoading(true);
     try {
       const res  = await fetch('/api/novacaja/tickets/recent?limit=10');
+      if (!res.ok) return;
       const data = await res.json();
       if (Array.isArray(data)) { setRecentTickets(data); setLastRefresh(new Date()); }
     } catch (e) { console.error('Error tickets live', e); }

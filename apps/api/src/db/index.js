@@ -250,6 +250,25 @@ function getDb() {
   try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
   try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN pedido_id INTEGER`); } catch (_) {}
 
+  // Migración de nombres de áreas para coincidir con ubicaciones del TC52
+  try { _db.exec(`UPDATE ubicaciones_config SET clave='casita_1', nombre='Casita 1', color_bg='bg-blue-50', color_text='text-blue-700', icono='storefront', orden=1 WHERE clave='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE ubicaciones_config SET clave='usa', nombre='USA', color_bg='bg-amber-50', color_text='text-amber-700', icono='flight', orden=3 WHERE clave='otro'`); } catch (_) {}
+  try { _db.exec(`INSERT OR IGNORE INTO ubicaciones_config (clave, nombre, icono, color_bg, color_text, orden) VALUES ('casita_2','Casita 2','store','bg-purple-50','text-purple-700',2)`); } catch (_) {}
+  try { _db.exec(`UPDATE ubicaciones_config SET color_bg='bg-emerald-50', color_text='text-emerald-700' WHERE clave='bodega'`); } catch (_) {}
+  try { _db.exec(`UPDATE ubicaciones_config SET color_bg='bg-orange-50', color_text='text-orange-700', orden=4 WHERE clave='cocina'`); } catch (_) {}
+  try { _db.exec(`UPDATE ubicaciones_config SET orden=5 WHERE clave='refrigerador'`); } catch (_) {}
+  // Actualizar registros de datos con los nuevos claves de área
+  try { _db.exec(`UPDATE stock_ubicaciones SET area='casita_1' WHERE area='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE stock_ubicaciones SET area='usa' WHERE area='otro'`); } catch (_) {}
+  try { _db.exec(`UPDATE almacen_movimientos SET area='casita_1' WHERE area='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE almacen_movimientos SET area='usa' WHERE area='otro'`); } catch (_) {}
+  try { _db.exec(`UPDATE merma_registros SET area='casita_1' WHERE area='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE merma_registros SET area='usa' WHERE area='otro'`); } catch (_) {}
+  try { _db.exec(`UPDATE surtido_transfers SET de_area='casita_1' WHERE de_area='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE surtido_transfers SET a_area='casita_1' WHERE a_area='tienda'`); } catch (_) {}
+  try { _db.exec(`UPDATE surtido_transfers SET de_area='usa' WHERE de_area='otro'`); } catch (_) {}
+  try { _db.exec(`UPDATE surtido_transfers SET a_area='usa' WHERE a_area='otro'`); } catch (_) {}
+
   // Seed áreas por defecto si la tabla está vacía
   const areaCount = _db.prepare(`SELECT COUNT(*) AS n FROM ubicaciones_config`).get()?.n ?? 0;
   if (areaCount === 0) {
@@ -258,11 +277,12 @@ function getDb() {
       VALUES (?, ?, ?, ?, ?, ?)
     `);
     [
-      ['bodega',       'Bodega',       'warehouse',  'bg-blue-50',   'text-blue-700',  0],
-      ['cocina',       'Cocina',       'restaurant', 'bg-amber-50',  'text-amber-700', 1],
-      ['tienda',       'Tienda',       'storefront', 'bg-green-50',  'text-green-700', 2],
-      ['refrigerador', 'Refrigerador', 'ac_unit',    'bg-cyan-50',   'text-cyan-700',  3],
-      ['otro',         'Otro',         'category',   'bg-stone-100', 'text-stone-600', 4],
+      ['bodega',       'Bodega',       'warehouse',  'bg-emerald-50', 'text-emerald-700', 0],
+      ['casita_1',     'Casita 1',     'storefront', 'bg-blue-50',    'text-blue-700',    1],
+      ['casita_2',     'Casita 2',     'store',      'bg-purple-50',  'text-purple-700',  2],
+      ['usa',          'USA',          'flight',     'bg-amber-50',   'text-amber-700',   3],
+      ['cocina',       'Cocina',       'restaurant', 'bg-orange-50',  'text-orange-700',  4],
+      ['refrigerador', 'Refrigerador', 'ac_unit',    'bg-cyan-50',    'text-cyan-700',    5],
     ].forEach(a => ins.run(...a));
   }
 

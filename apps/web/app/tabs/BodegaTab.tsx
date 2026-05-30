@@ -24,11 +24,12 @@ const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] =
 
 type AreaMeta = { label: string; icon: string; color: string; bg: string };
 const DEFAULT_areaMap: Record<string, AreaMeta> = {
-  bodega:       { label: 'Bodega',       icon: 'warehouse',    color: 'text-blue-700',  bg: 'bg-blue-50' },
-  cocina:       { label: 'Cocina',       icon: 'restaurant',   color: 'text-amber-700', bg: 'bg-amber-50' },
-  tienda:       { label: 'Tienda',       icon: 'storefront',   color: 'text-green-700', bg: 'bg-green-50' },
-  refrigerador: { label: 'Refrigerador', icon: 'ac_unit',      color: 'text-cyan-700',  bg: 'bg-cyan-50' },
-  otro:         { label: 'Otro',         icon: 'category',     color: 'text-stone-600', bg: 'bg-stone-100' },
+  bodega:       { label: 'Bodega',       icon: 'warehouse',    color: 'text-emerald-700', bg: 'bg-emerald-50' },
+  casita_1:     { label: 'Casita 1',     icon: 'storefront',   color: 'text-blue-700',    bg: 'bg-blue-50' },
+  casita_2:     { label: 'Casita 2',     icon: 'store',        color: 'text-purple-700',  bg: 'bg-purple-50' },
+  usa:          { label: 'USA',          icon: 'flight',       color: 'text-amber-700',   bg: 'bg-amber-50' },
+  cocina:       { label: 'Cocina',       icon: 'restaurant',   color: 'text-orange-700',  bg: 'bg-orange-50' },
+  refrigerador: { label: 'Refrigerador', icon: 'ac_unit',      color: 'text-cyan-700',    bg: 'bg-cyan-50' },
 };
 const DEFAULT_areas = Object.keys(DEFAULT_areaMap);
 const FALLBACK_META: AreaMeta = { label: '—', icon: 'category', color: 'text-stone-500', bg: 'bg-stone-100' };

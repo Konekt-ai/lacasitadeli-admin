@@ -71,14 +71,14 @@ router.get('/areas/:area/products', async (req, res) => {
 
       const result = await mssql.query(`
         SELECT TOP 200
-          a.Art_Codigo          AS id,
-          a.Art_Descripcion1    AS name,
+          a.Art_Codigo            AS id,
+          a.Art_Descripcion       AS name,
           aa.AA_ExistenciaActualU AS stock,
-          a.Org_Descripcion     AS category
-        FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+          a.Org_Descripcion       AS category
+        FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
         JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
           ON aa.Art_Codigo = a.Art_Codigo
-        WHERE a.Art_Estatus = 'A'
+        WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> ''
           ${excludeClause}
           ${searchClause}
         ORDER BY aa.AA_ExistenciaActualU DESC
@@ -99,10 +99,10 @@ router.get('/areas/:area/products', async (req, res) => {
     const result = await mssql.query(`
       SELECT
         a.Art_Codigo            AS id,
-        a.Art_Descripcion1      AS name,
+        a.Art_Descripcion       AS name,
         aa.AA_ExistenciaActualU AS stock,
         a.Org_Descripcion       AS category
-      FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+      FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
         ON aa.Art_Codigo = a.Art_Codigo
       WHERE a.Art_Codigo IN (${codes}) ${searchClause}
