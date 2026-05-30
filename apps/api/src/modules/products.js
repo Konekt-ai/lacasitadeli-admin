@@ -46,16 +46,10 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const [dataRes, countRes] = await Promise.all([
-      mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
-      mssql.query(buildProductsCountQuery({ search: q, category })),
-    ]);
-
-    // Merge image + min_stock overrides from SQLite
     const overrides = getDb().prepare('SELECT art_codigo, image_url, min_stock FROM product_overrides').all();
     const overMap   = new Map(overrides.map(o => [String(o.art_codigo), o]));
 
-    let rows = dataRes.recordset.map(r => {
+    const toRow = r => {
       const ov = overMap.get(String(r.id)) || {};
       return {
         id:           String(r.id),
@@ -75,13 +69,26 @@ router.get('/', async (req, res) => {
         lastSale:     r.lastSale     || null,
         image:        ov.image_url   || null,
       };
-    });
+    };
+
+    let rows, total;
 
     if (lowStock === 'true') {
-      rows = rows.filter(r => r.stock <= r.minStock);
+      // Filtrado directo en SQL para no traer 10k productos al servidor
+      const dataRes = await mssql.query(
+        buildProductsQuery({ search: q, category, offset: 0, pageSize: 2000, lowStockThreshold: DEFAULT_MIN_STOCK })
+      );
+      rows  = dataRes.recordset.map(toRow);
+      total = rows.length;
+    } else {
+      const [dataRes, countRes] = await Promise.all([
+        mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
+        mssql.query(buildProductsCountQuery({ search: q, category })),
+      ]);
+      rows  = dataRes.recordset.map(toRow);
+      total = countRes.recordset[0]?.total || 0;
     }
 
-    const total  = countRes.recordset[0]?.total || 0;
     const result = {
       data:     rows,
       total,

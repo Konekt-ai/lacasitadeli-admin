@@ -133,13 +133,10 @@ function ConteoView() {
         </button>
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3 mb-5 text-sm font-body text-amber-800">
-        <Icon name="warning" className="text-amber-500 text-xl flex-shrink-0 mt-0.5" />
-        <div>
-          <strong>Advertencia:</strong> Esta operación lee <code>TicketsPS</code> y descuenta las cantidades vendidas del inventario en NovaCaja.
-          <strong> No apliques el mismo periodo dos veces</strong> — causaría doble deducción.
-        </div>
-      </div>
+      <p className="text-[10px] font-label text-stone-400 mb-5 flex items-center gap-1.5">
+        <Icon name="info" className="text-sm text-stone-300" />
+        Lee TicketsPS y descuenta del inventario en NovaCaja. No apliques el mismo periodo dos veces.
+      </p>
 
       {loadingPreview && (
         <div className="flex justify-center py-12">
@@ -292,6 +289,390 @@ function ConteoView() {
   );
 }
 
+// ── Modal de detalle de ticket ────────────────────────────────────────────────
+interface DetalleLinea {
+  codigo:       string;
+  concepto:     string;
+  cantidad:     number;
+  valorUnitario: number;
+  importe:      number;
+  descuento:    number;
+  tasaIva:      number;
+  montoIva:     number;
+}
+
+function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => void }) {
+  const [lineas,  setLineas]  = useState<DetalleLinea[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/novacaja/tickets/${folio}/detalle`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { if (Array.isArray(data)) setLineas(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [folio]);
+
+  const total = lineas.reduce((s, l) => s + Number(l.importe), 0);
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-[400] flex items-end sm:items-center justify-center p-0 sm:p-4"
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="bg-surface rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10 flex-shrink-0">
+          <div>
+            <h3 className="font-serif text-xl text-primary">Ticket #{folio}</h3>
+            <p className="text-[10px] font-label uppercase tracking-widest text-stone-400">
+              {loading ? 'Cargando...' : `${lineas.length} producto${lineas.length !== 1 ? 's' : ''}`}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full text-stone-400 transition-colors">
+            <Icon name="close" className="text-xl" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : lineas.length === 0 ? (
+            <div className="py-12 flex flex-col items-center text-stone-300">
+              <Icon name="receipt_long" className="text-5xl opacity-20 mb-3" />
+              <p className="text-sm font-label uppercase tracking-widest">Sin detalle disponible</p>
+            </div>
+          ) : (
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                <tr>
+                  <th className="px-5 py-3">Código</th>
+                  <th className="px-5 py-3">Producto</th>
+                  <th className="px-5 py-3 text-center">Cant.</th>
+                  <th className="px-5 py-3 text-right">P. Unit.</th>
+                  <th className="px-5 py-3 text-right">Importe</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {lineas.map((l, i) => (
+                  <tr key={i} className="hover:bg-background transition-colors">
+                    <td className="px-5 py-3 text-[10px] font-label text-stone-400">{l.codigo}</td>
+                    <td className="px-5 py-3 text-sm font-body text-on-surface">{l.concepto}</td>
+                    <td className="px-5 py-3 text-center font-serif text-on-surface">{l.cantidad}</td>
+                    <td className="px-5 py-3 text-right text-xs font-body text-stone-500">
+                      ${Number(l.valorUnitario).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-5 py-3 text-right font-serif font-bold text-on-surface">
+                      ${Number(l.importe).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {lineas.length > 0 && (
+          <div className="px-6 py-4 border-t border-outline-variant/10 flex items-center justify-between flex-shrink-0 bg-surface-container-low/30">
+            <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">
+              {lineas.length} producto{lineas.length !== 1 ? 's' : ''}
+            </span>
+            <span className="font-serif text-xl text-primary font-bold">
+              ${total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Vista de Salidas del almacén ──────────────────────────────────────────────
+interface SalidaRow {
+  id:            number;
+  codigo:        string;
+  nombre:        string | null;
+  cantidad:      number;
+  area:          string;
+  stock_antes:   number;
+  stock_despues: number;
+  notas:         string | null;
+  fecha:         string;
+}
+
+interface BusquedaProducto {
+  codigo: string;
+  nombre: string;
+  stock:  number;
+}
+
+function SalidaView() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [fecha,   setFecha]   = useState(today);
+  const [rows,    setRows]    = useState<SalidaRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // ── Formulario de nueva salida ─────────────────────────────────────────────
+  const [showForm,    setShowForm]    = useState(false);
+  const [query,       setQuery]       = useState('');
+  const [results,     setResults]     = useState<BusquedaProducto[]>([]);
+  const [searching,   setSearching]   = useState(false);
+  const [selected,    setSelected]    = useState<BusquedaProducto | null>(null);
+  const [cantidad,    setCantidad]    = useState('1');
+  const [notas,       setNotas]       = useState('');
+  const [saving,      setSaving]      = useState(false);
+  const [notif,       setNotif]       = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type }); setTimeout(() => setNotif(null), 3500);
+  };
+
+  const fetchSalidas = useCallback(async (f: string) => {
+    setLoading(true);
+    try {
+      const res  = await fetch(`/api/almacen/movimientos/historial?tipo=salida&fecha=${f}&limit=300`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setRows(Array.isArray(data) ? data : []);
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchSalidas(fecha); }, [fecha, fetchSalidas]);
+
+  // Buscar productos con debounce
+  const searchRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (searchRef.current) clearTimeout(searchRef.current);
+    if (query.length < 2) { setResults([]); return; }
+    searchRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res  = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(query)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setResults(Array.isArray(data) ? data.slice(0, 8) : []);
+      } catch { /* silent */ }
+      finally { setSearching(false); }
+    }, 300);
+  }, [query]);
+
+  const seleccionar = (p: BusquedaProducto) => {
+    setSelected(p);
+    setQuery(p.nombre);
+    setResults([]);
+  };
+
+  const registrar = async () => {
+    if (!selected || !cantidad || parseFloat(cantidad) <= 0) {
+      notify('Selecciona un producto y una cantidad válida', 'error'); return;
+    }
+    setSaving(true);
+    try {
+      const res  = await fetch('/api/almacen/salida', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          codigo:   selected.codigo,
+          nombre:   selected.nombre,
+          cantidad: parseFloat(cantidad),
+          area:     'bodega',
+          notas:    notas.trim() || 'Retiro autorizado',
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        notify(`Retiro registrado: ${selected.nombre} (${cantidad} uds)`);
+        setSelected(null); setQuery(''); setCantidad('1'); setNotas('');
+        fetchSalidas(today);
+      } else {
+        notify(data.mensaje || data.ok === false ? (data.mensaje || 'Error') : 'Error', 'error');
+      }
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  const totalUds = rows.reduce((s, r) => s + Number(r.cantidad), 0);
+
+  return (
+    <div>
+      {/* Notificacion */}
+      {notif && (
+        <div className={cn(
+          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
+        )}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      {/* ── Formulario de registro ────────────────────────────────────────── */}
+      <div className="mb-6">
+        <button onClick={() => setShowForm(v => !v)}
+          className="px-4 py-2.5 bg-error text-on-error rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-error/90 transition-all mb-4">
+          <Icon name={showForm ? 'close' : 'output'} className="text-base" />
+          {showForm ? 'Cancelar' : 'Registrar Retiro'}
+        </button>
+
+        {showForm && (
+          <div className="bg-surface-container-low rounded-2xl border border-outline-variant/10 p-5 space-y-4">
+            <h4 className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">Nuevo Retiro Autorizado</h4>
+
+            {/* Buscador de producto */}
+            <div className="relative">
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Producto</label>
+              <div className="relative">
+                <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xl" />
+                {searching && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+                )}
+                <input
+                  value={query}
+                  onChange={e => { setQuery(e.target.value); setSelected(null); }}
+                  placeholder="Buscar por nombre o código..."
+                  className="w-full pl-10 pr-10 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors"
+                />
+              </div>
+              {results.length > 0 && (
+                <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-surface rounded-xl border border-outline-variant/10 shadow-xl overflow-hidden">
+                  {results.map(p => (
+                    <button key={p.codigo} onClick={() => seleccionar(p)}
+                      className="w-full px-4 py-3 text-left hover:bg-surface-container-low transition-colors flex items-center justify-between gap-3 border-b border-surface-container last:border-0">
+                      <div>
+                        <p className="text-sm font-body text-on-surface">{p.nombre}</p>
+                        <p className="text-[10px] font-label text-stone-400">{p.codigo}</p>
+                      </div>
+                      <span className={cn('text-xs font-label font-bold flex-shrink-0', p.stock <= 0 ? 'text-error' : 'text-stone-500')}>
+                        {p.stock} en stock
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Producto seleccionado */}
+            {selected && (
+              <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-body text-on-surface font-bold">{selected.nombre}</p>
+                  <p className="text-[10px] font-label text-stone-400">{selected.codigo} · {selected.stock} en stock</p>
+                </div>
+                <button onClick={() => { setSelected(null); setQuery(''); }}
+                  className="p-1 text-stone-400 hover:text-stone-600 rounded-full">
+                  <Icon name="close" className="text-sm" />
+                </button>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad</label>
+                <input type="number" min="1" step="1" value={cantidad}
+                  onChange={e => setCantidad(e.target.value)}
+                  className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
+              </div>
+              <div>
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Motivo / Notas</label>
+                <input value={notas} onChange={e => setNotas(e.target.value)}
+                  placeholder="Ej: uso personal, cocina..."
+                  className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
+              </div>
+            </div>
+
+            <button onClick={registrar} disabled={saving || !selected}
+              className={cn(
+                'w-full py-3 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
+                saving || !selected
+                  ? 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                  : 'bg-error text-on-error hover:bg-error/90 shadow-md'
+              )}>
+              {saving
+                ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+                : <Icon name="output" className="text-base" />}
+              {saving ? 'Registrando...' : 'Confirmar retiro'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Historial del día ─────────────────────────────────────────────── */}
+      <div className="flex items-end gap-3 mb-4 flex-wrap">
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Ver historial del día</label>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <button onClick={() => fetchSalidas(fecha)} disabled={loading}
+          className="p-2 rounded-lg hover:bg-surface-container-low text-stone-400 hover:text-primary transition-all">
+          <Icon name="refresh" className={cn('text-base', loading && 'animate-spin')} />
+        </button>
+        {rows.length > 0 && (
+          <span className="ml-auto text-[10px] font-label text-stone-400">
+            {rows.length} movimiento{rows.length !== 1 ? 's' : ''} · {totalUds} uds
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="py-12 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl">
+          <Icon name="output" className="text-5xl opacity-20 mb-3" />
+          <p className="text-sm font-label uppercase tracking-widest">Sin retiros en esta fecha</p>
+        </div>
+      ) : (
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+          <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                <tr>
+                  <th className="px-4 py-3">Hora</th>
+                  <th className="px-4 py-3">Producto</th>
+                  <th className="px-4 py-3 text-center">Cant.</th>
+                  <th className="px-4 py-3 text-center">Stock →</th>
+                  <th className="px-4 py-3">Notas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {rows.map(r => (
+                  <tr key={r.id} className="hover:bg-background transition-colors">
+                    <td className="px-4 py-2.5 text-xs text-stone-400 font-body whitespace-nowrap">
+                      {new Date(r.fecha).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <p className="text-sm font-body text-on-surface truncate max-w-[200px]">{r.nombre || r.codigo}</p>
+                      <p className="text-[10px] font-label text-stone-400">{r.codigo}</p>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className="font-serif font-bold text-error">−{r.cantidad}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className={cn('font-serif text-sm', r.stock_despues < 0 ? 'text-error font-bold' : 'text-stone-500')}>
+                        {r.stock_antes} → {r.stock_despues}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-[11px] font-body text-stone-400 truncate max-w-[160px]">
+                      {r.notas || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30">
+            <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+              {rows.length} retiros · {totalUds} unidades
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface LiveTicket {
   folio:        number;
   fecha:        string;
@@ -313,7 +694,8 @@ interface Props {
 }
 
 export default function ReportesTab({ timeFilter }: Props) {
-  const [reportView, setReportView] = useState<'polizas' | 'conteo'>('polizas');
+  const [reportView, setReportView] = useState<'polizas' | 'conteo' | 'salida'>('polizas');
+  const [ticketModal, setTicketModal] = useState<number | null>(null);
   const [tickets,          setTickets]          = useState<PolizaTicket[]>([]);
   const [summary,          setSummary]          = useState<PolizaSummary | null>(null);
   const [totalTickets,     setTotalTickets]      = useState(0);
@@ -374,6 +756,7 @@ export default function ReportesTab({ timeFilter }: Props) {
   return (
     <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}
+      {ticketModal !== null && <TicketDetalleModal folio={ticketModal} onClose={() => setTicketModal(null)} />}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-6 lg:mb-8">
@@ -402,10 +785,11 @@ export default function ReportesTab({ timeFilter }: Props) {
       </div>
 
       {/* Toggle */}
-      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
+      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit flex-wrap">
         {([
           { id: 'polizas', label: 'Pólizas de venta', icon: 'receipt_long' },
           { id: 'conteo',  label: 'Conteo de ventas', icon: 'calculate'    },
+          { id: 'salida',  label: 'Retiro Autorizado',  icon: 'output'       },
         ] as const).map(t => (
           <button key={t.id} onClick={() => setReportView(t.id)}
             className={cn(
@@ -419,6 +803,7 @@ export default function ReportesTab({ timeFilter }: Props) {
       </div>
 
       {reportView === 'conteo' && <ConteoView />}
+      {reportView === 'salida'  && <SalidaView />}
 
       {reportView === 'polizas' && (<>
 
@@ -472,10 +857,11 @@ export default function ReportesTab({ timeFilter }: Props) {
       {/* Live tickets feed */}
       <div className="mb-6 bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden shadow-[0px_4px_12px_rgba(28,28,25,0.04)]">
         <div className="px-5 py-4 border-b border-surface-container flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="text-sm font-serif text-primary">Últimas 50 Ventas</span>
             <span className="text-[9px] font-label uppercase tracking-widest bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-full border border-emerald-200">En vivo</span>
+            <span className="text-[9px] font-label text-stone-300 hidden sm:inline">· Toca un ticket para ver el desglose</span>
           </div>
           <div className="flex items-center gap-2">
             {lastLiveRefresh && (
@@ -512,7 +898,9 @@ export default function ReportesTab({ timeFilter }: Props) {
                     </td>
                   </tr>
                 ) : liveTickets.map((t, i) => (
-                  <tr key={t.folio} className={cn('hover:bg-background transition-colors', i === 0 && 'bg-emerald-50/30')}>
+                  <tr key={t.folio}
+                    onClick={() => setTicketModal(t.folio)}
+                    className={cn('hover:bg-background transition-colors cursor-pointer', i === 0 && 'bg-emerald-50/30')}>
                     <td className="px-4 py-2.5">
                       <span className="font-label font-bold text-[10px] text-primary bg-primary-fixed/30 px-2 py-0.5 rounded">#{t.folio}</span>
                     </td>
@@ -575,7 +963,9 @@ export default function ReportesTab({ timeFilter }: Props) {
                     {tickets.map((t, i) => {
                       const margen = t.totalImporte > 0 ? (t.ganancia / t.totalImporte) * 100 : 0;
                       return (
-                        <tr key={i} className="hover:bg-background transition-colors">
+                        <tr key={i}
+                          onClick={() => setTicketModal(Number(t.ticket))}
+                          className="hover:bg-background transition-colors cursor-pointer">
                           <td className="px-5 py-3">
                             <span className="font-label font-bold text-primary text-[10px] tracking-widest bg-primary-fixed/30 px-2 py-1 rounded">
                               #{t.ticket}

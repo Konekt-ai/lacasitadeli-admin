@@ -573,8 +573,10 @@ function MermaView() {
   const fetchStats = useCallback(async (mes: string) => {
     setStatsLoading(true);
     try {
-      const data = await fetch(`/api/almacen/merma/stats?mes=${mes}`).then(r => r.json());
-      setStats(data);
+      const res  = await fetch(`/api/almacen/merma/stats?mes=${mes}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.totales) setStats(data);
     } catch { /* silent */ }
     finally { setStatsLoading(false); }
   }, []);
@@ -912,7 +914,7 @@ function MermaView() {
               <div className="flex justify-center py-8">
                 <div className="w-6 h-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
               </div>
-            ) : !stats || stats.totales.num_registros === 0 ? (
+            ) : !stats || !stats.totales || stats.totales.num_registros === 0 ? (
               <div className="py-10 flex flex-col items-center text-stone-300">
                 <Icon name="bar_chart" className="text-4xl opacity-20 mb-2" />
                 <p className="text-xs font-label uppercase tracking-widest">Sin mermas en este período</p>

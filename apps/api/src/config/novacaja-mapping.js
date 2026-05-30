@@ -1,7 +1,7 @@
 // ── Mapeo real de compucaja — vistas y tablas confirmadas
 const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 
-function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200 } = {}) {
+function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null } = {}) {
   const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
@@ -12,7 +12,10 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
         OR a.CodAlt_Codigo LIKE '%${esc(search)}%'
       )`
     : '';
-  const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  const whereCategory   = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  const havingLowStock  = lowStockThreshold !== null
+    ? `HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= ${parseInt(lowStockThreshold)}`
+    : '';
 
   return `
     SELECT
@@ -45,6 +48,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       p.LPA_PrecioVentaImp, a.Mar_Nombre, a.Org_Descripcion,
       a.UM_Codigo, a.Art_SKU, a.Art_CodProv,
       a.Art_FechaUltimaCompra, a.Art_FechaUltimaVenta
+    ${havingLowStock}
     ORDER BY a.Art_Descripcion
     OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
   `;

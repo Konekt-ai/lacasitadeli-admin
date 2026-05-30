@@ -39,7 +39,14 @@ cron.schedule('0 8 1 * *', async () => {
   }
 }, { timezone: 'America/Mexico_City' });
 
-// Implementación para aceptar conexiones externas a través de Tailscale
+// Atrapar errores no manejados para que no tumben el proceso
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason);
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);
 });

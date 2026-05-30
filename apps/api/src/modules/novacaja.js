@@ -593,6 +593,32 @@ router.get('/tickets/kpis', async (req, res) => {
   }
 });
 
+// ── GET /api/novacaja/tickets/:folio/detalle — productos de un ticket ─────────
+router.get('/tickets/:folio/detalle', async (req, res) => {
+  const folio = parseInt(req.params.folio);
+  if (!folio) return res.status(400).json({ error: 'Folio inválido' });
+  try {
+    const result = await mssql.query(`
+      SELECT
+        [Codigo]           AS codigo,
+        [Concepto]         AS concepto,
+        [Cantidad]         AS cantidad,
+        [ValorUnitario]    AS valorUnitario,
+        [Importe]          AS importe,
+        ISNULL([ImporteDescuento], 0) AS descuento,
+        ISNULL([TasaIvaLinea], 0)     AS tasaIva,
+        ISNULL([MontoIva], 0)         AS montoIva
+      FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
+      WHERE [FolConsecutivo] = ${folio}
+      ORDER BY [DT_Consecutivo]
+    `);
+    res.json(result.recordset || []);
+  } catch (err) {
+    console.error('Error ticket detalle:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Debug endpoints ───────────────────────────────────────────────────────────
 router.get('/tables', async (req, res) => {
   try {

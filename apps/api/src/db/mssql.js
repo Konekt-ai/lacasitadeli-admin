@@ -26,8 +26,13 @@ let pool = null;
 
 async function getPool() {
   if (pool && pool.connected && !pool._destroyed) return pool;
-  pool = await sql.connect(config);
-  return pool;
+  try {
+    pool = await sql.connect(config);
+    return pool;
+  } catch (err) {
+    pool = null; // reset para que el proximo intento cree conexion fresca
+    throw err;
+  }
 }
 
 async function query(queryStr, params = {}) {

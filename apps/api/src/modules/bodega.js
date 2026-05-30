@@ -57,7 +57,7 @@ router.get('/areas/:area/products', async (req, res) => {
     const validAreas = getValidAreas(db);
     if (!validAreas.includes(area)) return res.status(400).json({ error: 'Área inválida' });
     const searchClause = search
-      ? `AND (a.Art_Descripcion1 LIKE '%${esc(search)}%' OR a.Art_Codigo LIKE '%${esc(search)}%')`
+      ? `AND (a.Art_Descripcion LIKE '%${esc(search)}%' OR a.Art_Codigo LIKE '%${esc(search)}%')`
       : '';
 
     if (area === 'bodega') {
