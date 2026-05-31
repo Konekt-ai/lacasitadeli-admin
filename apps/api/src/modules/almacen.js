@@ -655,10 +655,10 @@ router.post('/pedidos', (req, res) => {
   const { proveedor, fecha_esperada, notas, items = [] } = req.body;
   if (!items.length) return res.status(400).json({ error: 'Se requiere al menos un producto' });
 
-  const db    = getDb();
   const folio = genFolio();
   try {
-    const r = db.prepare(`
+    const db = getDb();
+    const r  = db.prepare(`
       INSERT INTO pedidos_recepcion (folio, proveedor, fecha_esperada, notas)
       VALUES (?, ?, ?, ?)
     `).run(folio, proveedor?.trim() || null, fecha_esperada || null, notas?.trim() || null);
@@ -1012,6 +1012,50 @@ router.get('/inventario', async (_req, res) => {
 
 // ── POST /api/almacen/producto-ubicacion (stub) ───────────────────────────────
 router.post('/producto-ubicacion', (_req, res) => res.json({ ok: true }));
+
+// ── GET /api/almacen/tc52/pedidos — órdenes activas para seleccionar en TC52 ───
+router.get('/tc52/pedidos', (req, res) => {
+  try {
+    const db     = getDb();
+    const pedidos = db.prepare(`
+      SELECT pr.id, pr.folio, pr.proveedor, pr.fecha_esperada, pr.estado, pr.notas, pr.created_at,
+             COUNT(pd.id)              AS num_items,
+             SUM(pd.cantidad_esperada) AS total_esperado
+      FROM pedidos_recepcion pr
+      LEFT JOIN pedidos_recepcion_detalle pd ON pd.pedido_id = pr.id
+      WHERE pr.estado IN ('pendiente', 'en_recepcion')
+      GROUP BY pr.id
+      ORDER BY pr.created_at DESC
+    `).all();
+    res.json(pedidos);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/almacen/tc52/pedidos/:id — detalle del pedido para el TC52 ────────
+router.get('/tc52/pedidos/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  try {
+    const db     = getDb();
+    const pedido = db.prepare(`SELECT * FROM pedidos_recepcion WHERE id = ?`).get(id);
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+
+    const items = db.prepare(`
+      SELECT pd.*,
+             COALESCE(
+               (SELECT SUM(am.cantidad) FROM almacen_movimientos am
+                WHERE am.pedido_id = pd.pedido_id AND am.art_codigo = pd.art_codigo AND am.tipo = 'entrada'), 0
+             ) AS cantidad_recibida
+      FROM pedidos_recepcion_detalle pd
+      WHERE pd.pedido_id = ?
+    `).all(id);
+
+    res.json({ ...pedido, items });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── GET /api/almacen/tc52/stock — inventario del TC52 por ubicación ────────────
 router.get('/tc52/stock', async (req, res) => {

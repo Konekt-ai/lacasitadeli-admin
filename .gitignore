@@ -11,6 +11,7 @@ pks.sql
 dist/
 build/
 out/
+.next/
 
 # Environment variables
 .env

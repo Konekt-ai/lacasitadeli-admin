@@ -2329,8 +2329,17 @@ function RecepcionView() {
 
   useEffect(() => { fetchPedidos(); }, [fetchPedidos]);
 
+  // Auto-refresh del detalle cada 8s mientras el pedido está en recepción activa
+  useEffect(() => {
+    if (!selected || selected.estado === 'cerrado' || selected.estado === 'cancelado') return;
+    const id = setInterval(() => fetchDetalle(selected.id), 8000);
+    return () => clearInterval(id);
+  }, [selected?.id, selected?.estado, fetchDetalle]);
+
   const buscarProducto = async (idx: number, q: string) => {
     setBusqueda(p => ({ ...p, [idx]: q }));
+    // Si el usuario escribe de nuevo, limpiar el código seleccionado previamente
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, art_codigo: '', nombre: '' } : it));
     if (q.length < 2) { setSugerencias(p => ({ ...p, [idx]: [] })); return; }
     try {
       const res = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(q)}`).then(r => r.json());
@@ -2452,12 +2461,25 @@ function RecepcionView() {
                 <div key={idx} className="flex gap-2 items-start">
                   {/* Buscador de producto */}
                   <div className="flex-1 relative">
-                    <input
-                      value={busqueda[idx] ?? item.nombre}
-                      onChange={e => buscarProducto(idx, e.target.value)}
-                      placeholder="Buscar producto por nombre o código…"
-                      className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors"
-                    />
+                    <div className="relative">
+                      <input
+                        value={busqueda[idx] ?? item.nombre}
+                        onChange={e => buscarProducto(idx, e.target.value)}
+                        placeholder="Buscar producto por nombre o código…"
+                        className={cn(
+                          'w-full px-3 py-2 bg-background border rounded-lg text-sm font-body outline-none focus:border-primary transition-colors pr-8',
+                          item.art_codigo ? 'border-emerald-400 bg-emerald-50/40' : 'border-outline-variant/20'
+                        )}
+                      />
+                      {item.art_codigo && (
+                        <Icon name="check_circle" className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-base pointer-events-none" />
+                      )}
+                    </div>
+                    {item.art_codigo && (
+                      <p className="text-[9px] font-mono text-emerald-600 mt-0.5 ml-1">
+                        {item.art_codigo}
+                      </p>
+                    )}
                     {(sugerencias[idx] || []).length > 0 && (
                       <div className="absolute top-full left-0 right-0 z-50 bg-surface-container-lowest border border-outline-variant/20 rounded-xl shadow-xl mt-1 overflow-hidden">
                         {sugerencias[idx].map(s => (
@@ -2522,6 +2544,17 @@ function RecepcionView() {
               {selected.notas && <p className="text-xs font-body text-stone-400 mt-0.5 italic">{selected.notas}</p>}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {selected.estado === 'en_recepcion' && (
+                <span className="flex items-center gap-1.5 text-[9px] font-label uppercase tracking-widest text-blue-600 bg-blue-50 border border-blue-200 px-2 py-1 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />
+                  TC52 activo · live
+                </span>
+              )}
+              <button onClick={() => fetchDetalle(selected.id)}
+                className="p-1.5 rounded-lg text-stone-400 hover:text-primary hover:bg-surface-container transition-all"
+                title="Actualizar">
+                <Icon name="refresh" className="text-base" />
+              </button>
               {selected.estado !== 'cerrado' && selected.estado !== 'cancelado' && (
                 <button onClick={() => cambiarEstado(selected.id, 'cerrado')}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-emerald-100 transition-all border border-emerald-200">

@@ -711,23 +711,23 @@ export default function ReportesTab({ timeFilter }: Props) {
   const fetchData = useCallback(async (period: string) => {
     setLoading(true);
     try {
-      const [polizaRes, tkpis] = await Promise.all([
+      const [polizaRes, dashRes] = await Promise.all([
         fetch(`/api/novacaja/poliza-ventas?period=${period}`).then(r => r.json()),
-        fetch(`/api/novacaja/tickets/kpis?period=${period}`).then(r => r.json()).catch(() => null),
+        fetch(`/api/novacaja/dashboard?period=${period}`).then(r => r.json()).catch(() => null),
       ]);
       if (polizaRes.error) { console.error(polizaRes.error); return; }
-      setTickets(polizaRes.tickets      || []);
+      setTickets(polizaRes.tickets   || []);
       setTotalTickets(polizaRes.totalTickets ?? 0);
-      const base = polizaRes.summary as PolizaSummary | null;
-      if (base && tkpis && !tkpis.error) {
+      // Usar los mismos KPIs que Dashboard para garantizar cifras idénticas
+      if (dashRes?.kpis) {
         setSummary({
-          totalImporte:  tkpis.totalVentas  ?? base.totalImporte,
-          numTickets:    tkpis.totalTickets ?? base.numTickets,
-          totalCosto:    base.totalCosto,
-          totalGanancia: (tkpis.totalVentas ?? base.totalImporte) - base.totalCosto,
+          totalImporte:  dashRes.kpis.totalVentas,
+          numTickets:    dashRes.kpis.totalTickets,
+          totalCosto:    dashRes.kpis.totalCosto,
+          totalGanancia: dashRes.kpis.ganancia,
         });
       } else {
-        setSummary(base);
+        setSummary(polizaRes.summary ?? null);
       }
     } catch (e) { console.error('Error cargando reporte', e); }
     finally { setLoading(false); }

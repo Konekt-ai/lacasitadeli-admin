@@ -107,16 +107,18 @@ function getDb() {
       created_at       TEXT DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS almacen_movimientos (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      art_codigo   TEXT NOT NULL,
-      nombre       TEXT,
-      tipo         TEXT NOT NULL CHECK(tipo IN ('entrada','salida')),
-      cantidad     REAL NOT NULL,
-      stock_antes  REAL DEFAULT 0,
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      art_codigo    TEXT NOT NULL,
+      nombre        TEXT,
+      tipo          TEXT NOT NULL CHECK(tipo IN ('entrada','salida')),
+      cantidad      REAL NOT NULL,
+      stock_antes   REAL DEFAULT 0,
       stock_despues REAL DEFAULT 0,
-      usuario      TEXT DEFAULT 'TC52',
-      notas        TEXT,
-      created_at   TEXT DEFAULT (datetime('now'))
+      usuario       TEXT DEFAULT 'TC52',
+      notas         TEXT,
+      area          TEXT DEFAULT 'bodega',
+      pedido_id     INTEGER,
+      created_at    TEXT DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS merma_registros (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +226,10 @@ function getDb() {
     );
   `);
 
+  // Migraciones de columnas — deben ir ANTES de los índices que las referencian
+  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
+  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN pedido_id INTEGER`); } catch (_) {}
+
   // Indexes — created once, skipped if already exist
   _db.exec(`
     CREATE INDEX IF NOT EXISTS idx_expiry_fecha     ON product_expiry(fecha_caducidad);
@@ -245,10 +251,6 @@ function getDb() {
     CREATE INDEX IF NOT EXISTS idx_recuentos_created ON recuentos(created_at);
     CREATE INDEX IF NOT EXISTS idx_alertas_tipo     ON alertas_descartadas(tipo);
   `);
-
-  // Migraciones de columnas
-  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
-  try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN pedido_id INTEGER`); } catch (_) {}
 
   // Migración de nombres de áreas para coincidir con ubicaciones del TC52
   try { _db.exec(`UPDATE ubicaciones_config SET clave='casita_1', nombre='Casita 1', color_bg='bg-blue-50', color_text='text-blue-700', icono='storefront', orden=1 WHERE clave='tienda'`); } catch (_) {}

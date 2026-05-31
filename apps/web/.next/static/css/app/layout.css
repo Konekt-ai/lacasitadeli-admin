@@ -785,6 +785,9 @@ input:where([type='file']):focus {
 .right-2 {
   right: 0.5rem;
 }
+.right-2\.5 {
+  right: 0.625rem;
+}
 .right-3 {
   right: 0.75rem;
 }
@@ -841,6 +844,10 @@ input:where([type='file']):focus {
 }
 .col-span-2 {
   grid-column: span 2 / span 2;
+}
+.mx-3 {
+  margin-left: 0.75rem;
+  margin-right: 0.75rem;
 }
 .mx-auto {
   margin-left: auto;
@@ -1460,6 +1467,10 @@ input:where([type='file']):focus {
   --tw-border-opacity: 1;
   border-color: rgb(167 243 208 / var(--tw-border-opacity, 1));
 }
+.border-emerald-400 {
+  --tw-border-opacity: 1;
+  border-color: rgb(52 211 153 / var(--tw-border-opacity, 1));
+}
 .border-error-container {
   --tw-border-opacity: 1;
   border-color: rgb(255 218 214 / var(--tw-border-opacity, 1));
@@ -1551,6 +1562,10 @@ input:where([type='file']):focus {
   --tw-border-opacity: 1;
   border-color: rgb(68 64 60 / var(--tw-border-opacity, 1));
 }
+.border-stone-800 {
+  --tw-border-opacity: 1;
+  border-color: rgb(41 37 36 / var(--tw-border-opacity, 1));
+}
 .border-surface-container {
   --tw-border-opacity: 1;
   border-color: rgb(240 237 232 / var(--tw-border-opacity, 1));
@@ -1584,6 +1599,10 @@ input:where([type='file']):focus {
 .border-t-white {
   --tw-border-opacity: 1;
   border-top-color: rgb(255 255 255 / var(--tw-border-opacity, 1));
+}
+.bg-\[\#1a3d2b\] {
+  --tw-bg-opacity: 1;
+  background-color: rgb(26 61 43 / var(--tw-bg-opacity, 1));
 }
 .bg-amber-100 {
   --tw-bg-opacity: 1;
@@ -1806,6 +1825,10 @@ input:where([type='file']):focus {
   --tw-bg-opacity: 1;
   background-color: rgb(250 250 249 / var(--tw-bg-opacity, 1));
 }
+.bg-stone-950 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(12 10 9 / var(--tw-bg-opacity, 1));
+}
 .bg-surface {
   --tw-bg-opacity: 1;
   background-color: rgb(252 249 244 / var(--tw-bg-opacity, 1));
@@ -1859,6 +1882,9 @@ input:where([type='file']):focus {
   --tw-bg-opacity: 1;
   background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
 }
+.bg-white\/20 {
+  background-color: rgb(255 255 255 / 0.2);
+}
 .bg-yellow-100 {
   --tw-bg-opacity: 1;
   background-color: rgb(254 249 195 / var(--tw-bg-opacity, 1));
@@ -1872,6 +1898,10 @@ input:where([type='file']):focus {
 }
 .bg-opacity-15 {
   --tw-bg-opacity: 0.15;
+}
+.object-contain {
+  -o-object-fit: contain;
+     object-fit: contain;
 }
 .object-cover {
   -o-object-fit: cover;
@@ -2070,6 +2100,9 @@ input:where([type='file']):focus {
 .pr-4 {
   padding-right: 1rem;
 }
+.pr-8 {
+  padding-right: 2rem;
+}
 .pt-1 {
   padding-top: 0.25rem;
 }
@@ -2237,6 +2270,10 @@ input:where([type='file']):focus {
   --tw-text-opacity: 1;
   color: rgb(14 116 144 / var(--tw-text-opacity, 1));
 }
+.text-emerald-400 {
+  --tw-text-opacity: 1;
+  color: rgb(52 211 153 / var(--tw-text-opacity, 1));
+}
 .text-emerald-500 {
   --tw-text-opacity: 1;
   color: rgb(16 185 129 / var(--tw-text-opacity, 1));
@@ -2369,6 +2406,10 @@ input:where([type='file']):focus {
   --tw-text-opacity: 1;
   color: rgb(87 83 78 / var(--tw-text-opacity, 1));
 }
+.text-stone-700 {
+  --tw-text-opacity: 1;
+  color: rgb(68 64 60 / var(--tw-text-opacity, 1));
+}
 .text-teal-700 {
   --tw-text-opacity: 1;
   color: rgb(15 118 110 / var(--tw-text-opacity, 1));
@@ -2380,6 +2421,9 @@ input:where([type='file']):focus {
 .text-white {
   --tw-text-opacity: 1;
   color: rgb(255 255 255 / var(--tw-text-opacity, 1));
+}
+.text-white\/50 {
+  color: rgb(255 255 255 / 0.5);
 }
 .text-yellow-700 {
   --tw-text-opacity: 1;

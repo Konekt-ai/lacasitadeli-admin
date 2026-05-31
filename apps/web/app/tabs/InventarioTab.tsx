@@ -86,12 +86,20 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         page:     String(pg),
         pageSize: String(PAGE_SIZE),
       });
-      const data = await fetch(`/api/products?${params}`).then(r => r.json());
+      const res  = await fetch(`/api/products?${params}`);
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        notify(data.error || 'Error al cargar productos', 'error');
+        return;
+      }
       setProducts(data.data ?? []);
       setTotal(data.total ?? 0);
       setTotalPages(data.pages ?? 1);
-    } catch (e) { console.error('Error inventario:', e); }
-    finally     { setLoading(false); }
+    } catch (e) {
+      notify('Error de conexión con la API', 'error');
+      console.error('Error inventario:', e);
+    }
+    finally { setLoading(false); }
   }, []);
 
   // Search/category change → debounce 300ms, reset to page 1

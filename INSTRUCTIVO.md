@@ -164,6 +164,89 @@ Antes de configurar el inicio automático, verifica que todo funciona:
 
 ---
 
+## ACTUALIZACIONES AUTOMÁTICAS DESDE GITHUB
+
+El sistema puede actualizarse solo cada hora sin que el cliente tenga que hacer nada.
+Cuando publiques código nuevo en GitHub, la computadora del cliente lo descarga e instala automáticamente.
+
+---
+
+### Paso A — Instalar Git en la computadora del cliente
+
+1. Ve a **https://git-scm.com/download/win**
+2. Descarga el instalador y ejecútalo
+3. Deja todas las opciones por defecto y termina la instalación
+4. Para verificar: abre `cmd` y escribe `git --version`
+
+---
+
+### Paso B — Clonar el repositorio (primera vez)
+
+En la computadora del cliente, abre `cmd` y ejecuta:
+
+```
+cd C:\Users\TU_USUARIO\Desktop
+git clone https://github.com/TU_USUARIO/lacasitadeli-admin.git
+```
+
+Cuando pida usuario y contraseña de GitHub, introduce las credenciales de la cuenta que creaste para el cliente.
+Windows las guardará automáticamente y no las pedirá de nuevo.
+
+> Si ya tienes la carpeta copiada (no clonada), necesitas clonarla de nuevo desde GitHub
+> para que git sepa a qué repositorio apuntar.
+
+---
+
+### Paso C — Configurar el Programador de Tareas (actualización automática)
+
+Esto hace que el sistema revise GitHub cada hora y se actualice solo si hay cambios nuevos.
+El cliente no ve nada — todo ocurre en segundo plano.
+
+1. Presiona **Win** → escribe **Programador de Tareas** → ábrelo
+2. En el panel derecho, clic en **Crear tarea...** (NO "tarea básica")
+
+**Pestaña General:**
+- Nombre: `LaCasitaDeli-AutoUpdate`
+- Marca: **Ejecutar tanto si el usuario inició sesión como si no**
+- Marca: **Ejecutar con los privilegios más altos**
+
+**Pestaña Desencadenadores:**
+- Clic en **Nuevo...**
+- Iniciar tarea: **Según una programación**
+- Configuración: **Diariamente** (fecha de hoy)
+- En **Configuración avanzada**: marca **Repetir cada:** → `1 hora` → durante: **Indefinidamente**
+- Clic en Aceptar
+
+**Pestaña Acciones:**
+- Clic en **Nueva...**
+- Acción: **Iniciar un programa**
+- Programa o script: busca y selecciona **`actualizar-silencioso.vbs`** (en la carpeta `lacasitadeli-admin`)
+- **Iniciar en (opcional):** pega la ruta completa de la carpeta del proyecto, por ejemplo:
+  `C:\Users\TU_USUARIO\Desktop\lacasitadeli-admin`
+- Clic en Aceptar → Aceptar
+- Introduce la contraseña del usuario de Windows cuando la pida
+
+**Para probar que funciona:**
+- En el Programador de Tareas, clic derecho sobre `LaCasitaDeli-AutoUpdate` → **Ejecutar**
+- Abre el archivo `logs\actualizaciones.log` para ver el resultado
+
+---
+
+### Cómo funciona el proceso de actualización
+
+Cada hora, el sistema hace esto de forma invisible:
+
+1. Consulta GitHub si hay código nuevo (`git fetch`)
+2. Si no hay cambios → no hace nada (el log dice "Ya está en la última versión")
+3. Si hay cambios → descarga el código (`git pull`)
+4. Reinstala dependencias si cambiaron (`npm install`)
+5. Reconstruye la bodega TC52 si hubo cambios en ella
+6. Reinicia todos los servicios automáticamente
+
+El cliente no ve nada en pantalla. Puedes revisar `logs\actualizaciones.log` para ver el historial completo.
+
+---
+
 ## Uso diario
 
 Para el día a día **no uses el bat**. El sistema arranca solo con Windows gracias al VBS.

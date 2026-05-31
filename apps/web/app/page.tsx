@@ -15,16 +15,18 @@ const VentasTab     = dynamic(() => import('./tabs/VentasTab'),     { ssr: false
 const ReportesTab   = dynamic(() => import('./tabs/ReportesTab'),   { ssr: false });
 const AlertasTab      = dynamic(() => import('./tabs/AlertasTab'),      { ssr: false });
 const ProveedoresTab  = dynamic(() => import('./tabs/ProveedoresTab'),  { ssr: false });
-const BodegaTab       = dynamic(() => import('./tabs/BodegaTab'),       { ssr: false });
+const BodegaTab        = dynamic(() => import('./tabs/BodegaTab'),        { ssr: false });
+const AdminConsoleTab  = dynamic(() => import('./tabs/AdminConsoleTab'),  { ssr: false });
 
 const TABS = [
-  { id: 'Dashboard',  label: 'Dashboard',  icon: 'dashboard' },
-  { id: 'Inventario', label: 'Inventario', icon: 'inventory_2' },
-  { id: 'Ventas',     label: 'Análisis',   icon: 'bar_chart' },
-  { id: 'Reportes',   label: 'Reportes',   icon: 'receipt_long' },
-  { id: 'Alertas',     label: 'Alertas',     icon: 'notifications' },
-  { id: 'Proveedores', label: 'Proveedores', icon: 'local_shipping' },
-  { id: 'Bodega',      label: 'Bodega',      icon: 'warehouse' },
+  { id: 'Dashboard',     label: 'Dashboard',  icon: 'dashboard' },
+  { id: 'Inventario',    label: 'Inventario', icon: 'inventory_2' },
+  { id: 'Ventas',        label: 'Análisis',   icon: 'bar_chart' },
+  { id: 'Reportes',      label: 'Reportes',   icon: 'receipt_long' },
+  { id: 'Alertas',       label: 'Alertas',    icon: 'notifications' },
+  { id: 'Proveedores',   label: 'Proveedores', icon: 'local_shipping' },
+  { id: 'Bodega',        label: 'Bodega',     icon: 'warehouse' },
+  { id: 'AdminConsole',  label: 'Consola',    icon: 'terminal' },
 ] as const;
 
 const TabSpinner = () => (
@@ -85,7 +87,8 @@ export default function Dashboard() {
         {activeTab === 'Reportes'   && <ReportesTab timeFilter={timeFilter} />}
         {activeTab === 'Alertas'     && <AlertasTab     lowStockProducts={lowStockProducts} onRefresh={fetchData} />}
         {activeTab === 'Proveedores' && <ProveedoresTab timeFilter={timeFilter} />}
-        {activeTab === 'Bodega'      && <BodegaTab />}
+        {activeTab === 'Bodega'       && <BodegaTab />}
+        {activeTab === 'AdminConsole' && <AdminConsoleTab />}
       </Suspense>
     );
   };
@@ -98,12 +101,18 @@ export default function Dashboard() {
 
       {/* ── Desktop sidebar ─────────────────────────────────────────────────── */}
       <aside className="hidden lg:flex h-screen w-64 bg-stone-50 dark:bg-stone-950 border-r border-stone-200/50 flex-col py-6 sticky top-0 flex-shrink-0">
-        <div className="px-6 mb-8">
-          <h1 className="text-2xl font-serif text-primary">La Casita Deli</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <div className={cn('w-1.5 h-1.5 rounded-full', dbStatus === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-error')} />
-            <p className="font-label text-[10px] tracking-widest uppercase text-stone-500">Admin Terminal</p>
+        {/* ── Brand header ────────────────────────────────────────────────── */}
+        <div className="mx-3 mb-6 rounded-xl bg-[#1a3d2b] px-4 py-3 flex items-center gap-3">
+          <img src="/logo.png" alt="La Casita Deli" className="h-10 w-10 object-contain flex-shrink-0" />
+          <div className="w-px h-8 bg-white/20 flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="text-white font-bold text-base leading-tight tracking-tight">La Casita</p>
+            <p className="text-white/50 text-[10px] font-label tracking-[0.2em] uppercase leading-tight">Delicatessen</p>
           </div>
+        </div>
+        <div className="px-6 mb-3 flex items-center gap-2">
+          <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', dbStatus === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-error')} />
+          <p className="font-label text-[10px] tracking-widest uppercase text-stone-500">Admin Terminal</p>
         </div>
 
         <nav className="flex-1 px-2 space-y-1">
@@ -133,7 +142,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center px-4 lg:px-8 py-3 lg:py-4">
             <div className="flex items-center gap-3 min-w-0">
               <h2 className="text-xl lg:text-2xl font-serif italic tracking-tight text-primary uppercase truncate">
-                {activeTab === 'Ventas' ? 'Análisis' : activeTab}
+                {activeTab === 'Ventas' ? 'Análisis' : activeTab === 'AdminConsole' ? 'Admin Console' : activeTab}
               </h2>
               <div className="hidden lg:block px-3 py-1 bg-secondary-fixed text-on-secondary-fixed text-[10px] font-label uppercase tracking-widest rounded-full flex-shrink-0">
                 Live Dashboard

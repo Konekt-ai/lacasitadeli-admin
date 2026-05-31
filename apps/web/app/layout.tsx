@@ -4,6 +4,10 @@ import './globals.css'
 export const metadata: Metadata = {
   title: 'La Casita Deli | Admin Terminal',
   description: 'Panel de inventario y ventas para La Casita Deli',
+  icons: {
+    icon: '/logo.png',
+    apple: '/logo.png',
+  },
 }
 
 export default function RootLayout({

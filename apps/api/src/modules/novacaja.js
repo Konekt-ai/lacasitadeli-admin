@@ -165,28 +165,27 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes, ticketKpiRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery()),
-      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    const polizaKPIs     = kpiRes.recordset[0]      || {};
-    const ticketKPIs     = ticketKpiRes.recordset[0] || {};
+    const polizaKPIs     = kpiRes.recordset[0] || {};
 
+    // Una sola fuente (VBasePolizaVentas) para que Dashboard = Reportes
     const kpisFull = {
-      totalTickets:     ticketKPIs.totalTickets     || polizaKPIs.totalTickets     || 0,
-      totalVentas:      ticketKPIs.totalVentas      || polizaKPIs.totalVentas      || 0,
-      ticketPromedio:   ticketKPIs.ticketPromedio   || polizaKPIs.ticketPromedio   || 0,
+      totalTickets:     polizaKPIs.totalTickets     || 0,
+      totalVentas:      polizaKPIs.totalVentas      || 0,
+      ticketPromedio:   polizaKPIs.ticketPromedio   || 0,
       totalCosto:       polizaKPIs.totalCosto       || 0,
       unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
-      ganancia:         (ticketKPIs.totalVentas || 0) - (polizaKPIs.totalCosto || 0),
+      ganancia:         polizaKPIs.ganancia         || 0,
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
@@ -478,12 +477,12 @@ router.get('/poliza-ventas', async (req, res) => {
       mssql.query(`
         SELECT TOP ${topLimit}
           ticket,
-          MAX(Fecha)                    AS fecha,
-          MAX(factura)                  AS factura,
-          SUM(importe)                  AS totalImporte,
-          SUM(CostoImp)                 AS totalCosto,
-          SUM(importe) - SUM(CostoImp)  AS ganancia,
-          COUNT(*)                      AS numProductos
+          MAX(Fecha)                AS fecha,
+          MAX(factura)              AS factura,
+          SUM(importe)              AS totalImporte,
+          SUM(Costo)                AS totalCosto,
+          SUM(importe) - SUM(Costo) AS ganancia,
+          COUNT(*)                  AS numProductos
         FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
         ${whereClause}
         GROUP BY ticket
@@ -546,8 +545,8 @@ router.get('/poliza-ventas/export', async (req, res) => {
         MAX(factura)                            AS factura,
         SUM(cantidad)                           AS totalArticulos,
         SUM(importe)                            AS totalImporte,
-        SUM(CostoImp)                           AS totalCosto,
-        SUM(importe) - SUM(CostoImp)            AS ganancia,
+        SUM(Costo)                              AS totalCosto,
+        SUM(importe) - SUM(Costo)               AS ganancia,
         COUNT(*)                                AS numLineas
       FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
       ${whereClause}
@@ -600,17 +599,18 @@ router.get('/tickets/:folio/detalle', async (req, res) => {
   try {
     const result = await mssql.query(`
       SELECT
-        [Codigo]           AS codigo,
-        [Concepto]         AS concepto,
-        [Cantidad]         AS cantidad,
-        [ValorUnitario]    AS valorUnitario,
-        [Importe]          AS importe,
-        ISNULL([ImporteDescuento], 0) AS descuento,
-        ISNULL([TasaIvaLinea], 0)     AS tasaIva,
-        ISNULL([MontoIva], 0)         AS montoIva
+        [Codigo]                           AS codigo,
+        [Concepto]                         AS concepto,
+        SUM([Cantidad])                    AS cantidad,
+        [ValorUnitario]                    AS valorUnitario,
+        SUM([Importe])                     AS importe,
+        SUM(ISNULL([ImporteDescuento], 0)) AS descuento,
+        MAX(ISNULL([TasaIvaLinea], 0))     AS tasaIva,
+        SUM(ISNULL([MontoIva], 0))         AS montoIva
       FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
       WHERE [FolConsecutivo] = ${folio}
-      ORDER BY [DT_Consecutivo]
+      GROUP BY [Codigo], [Concepto], [ValorUnitario]
+      ORDER BY SUM([Importe]) DESC
     `);
     res.json(result.recordset || []);
   } catch (err) {

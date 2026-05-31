@@ -684,40 +684,51 @@ export default function ProveedoresTab({ timeFilter }: Props) {
 
       {/* ── Summary KPI strip ───────────────────────────────────────────────── */}
       {!loading && suppliers.length > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          {[
-            {
-              label: 'Ventas totales',
-              value: `$${Number(totalPeriod).toLocaleString('es-MX', { minimumFractionDigits: 0 })}`,
-              icon: 'payments', color: 'text-amber-700', bg: 'bg-amber-50',
-            },
-            {
-              label: 'Ganancia total',
-              value: `$${Number(suppliers.reduce((s, p) => s + p.ganancia, 0)).toLocaleString('es-MX', { minimumFractionDigits: 0 })}`,
-              icon: 'trending_up', color: 'text-emerald-700', bg: 'bg-emerald-50',
-            },
-            {
-              label: 'Proveedores activos',
-              value: suppliers.filter(s => s.totalVentas > 0).length.toString(),
-              icon: 'local_shipping', color: 'text-primary', bg: 'bg-primary/5',
-            },
-            {
-              label: 'Sin ventas',
-              value: suppliers.filter(s => s.totalVentas === 0).length.toString(),
-              icon: 'warning', color: 'text-stone-500', bg: 'bg-stone-100',
-            },
-          ].map(card => (
-            <div key={card.label} className="bg-surface-container-lowest rounded-xl p-4 border border-outline-variant/10">
-              <div className="flex justify-between items-start mb-3">
-                <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">{card.label}</span>
-                <div className={cn('w-7 h-7 rounded-full flex items-center justify-center', card.bg)}>
-                  <Icon name={card.icon} className={cn('text-sm', card.color)} />
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-2">
+            {[
+              {
+                label: 'Ventas',
+                sub:   `${suppliers.length} proveedores mostrados`,
+                value: `$${Number(totalPeriod).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`,
+                icon: 'payments', color: 'text-amber-700', bg: 'bg-amber-50',
+              },
+              {
+                label: 'Ganancia',
+                sub:   `${suppliers.length} proveedores mostrados`,
+                value: `$${Number(suppliers.reduce((s, p) => s + p.ganancia, 0)).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`,
+                icon: 'trending_up', color: 'text-emerald-700', bg: 'bg-emerald-50',
+              },
+              {
+                label: 'Proveedores activos',
+                sub:   `de ${suppliers.length} mostrados`,
+                value: suppliers.filter(s => s.totalVentas > 0).length.toString(),
+                icon: 'local_shipping', color: 'text-primary', bg: 'bg-primary/5',
+              },
+              {
+                label: 'Sin ventas',
+                sub:   `de ${suppliers.length} mostrados`,
+                value: suppliers.filter(s => s.totalVentas === 0).length.toString(),
+                icon: 'warning', color: 'text-stone-500', bg: 'bg-stone-100',
+              },
+            ].map(card => (
+              <div key={card.label} className="bg-surface-container-lowest rounded-xl p-4 border border-outline-variant/10">
+                <div className="flex justify-between items-start mb-3">
+                  <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">{card.label}</span>
+                  <div className={cn('w-7 h-7 rounded-full flex items-center justify-center', card.bg)}>
+                    <Icon name={card.icon} className={cn('text-sm', card.color)} />
+                  </div>
                 </div>
+                <p className={cn('text-2xl font-serif', card.color)}>{card.value}</p>
+                <p className="text-[9px] font-label text-stone-400 mt-1 uppercase tracking-widest">{card.sub}</p>
               </div>
-              <p className={cn('text-2xl font-serif', card.color)}>{card.value}</p>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          <p className="text-[10px] font-label text-stone-400 mb-5 flex items-center gap-1.5">
+            <Icon name="info" className="text-sm text-stone-300" />
+            Subtotal de los proveedores listados. No incluye productos sin proveedor asignado ni proveedores fuera del límite seleccionado.
+          </p>
+        </>
       )}
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
