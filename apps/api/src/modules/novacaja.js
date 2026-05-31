@@ -11,9 +11,10 @@ const {
   buildDashboardKPIsQuery,
   buildTopProductsQuery,
   buildSalesByHourQuery,
-  buildTopProductsByHourQuery,
   buildSalesByMonthQuery,
-  buildTopProductsByMonthQuery,
+  buildSalesByWeekdayQuery,
+  buildSalesByCategoryQuery,
+  buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
 } = require('../config/novacaja-mapping');
@@ -131,18 +132,20 @@ router.get('/analytics', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [byHour, byMonth, productsByHour, productsByMonth] = await Promise.all([
+    const [byHour, byMonth, byWeekday, byCategory, topProducts] = await Promise.all([
       mssql.query(buildSalesByHourQuery({ months: m, maxDate })),
       mssql.query(buildSalesByMonthQuery({ months: m, maxDate })),
-      mssql.query(buildTopProductsByHourQuery({ months: m, limit: 10, maxDate })),
-      mssql.query(buildTopProductsByMonthQuery({ months: m, limit: 8, maxDate })),
+      mssql.query(buildSalesByWeekdayQuery({ months: m, maxDate })),
+      mssql.query(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate })),
+      mssql.query(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate })),
     ]);
 
     const result = {
-      byHour:          byHour.recordset          || [],
-      byMonth:         byMonth.recordset         || [],
-      productsByHour:  productsByHour.recordset  || [],
-      productsByMonth: productsByMonth.recordset || [],
+      byHour:      byHour.recordset      || [],
+      byMonth:     byMonth.recordset     || [],
+      byWeekday:   byWeekday.recordset   || [],
+      byCategory:  byCategory.recordset  || [],
+      topProducts: topProducts.recordset || [],
     };
 
     _set(cacheKey, result, 300_000); // 5 min

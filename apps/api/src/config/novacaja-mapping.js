@@ -257,7 +257,7 @@ function buildTopProductsByMonthQuery({ months = 6, limit = 8, maxDate } = {}) {
       YEAR(v.Fecha)                           AS anio,
       MONTH(v.Fecha)                          AS mes,
       SUM(v.cantidad)                         AS unidades,
-      SUM(v.importe)                          AS ingresos
+      SUM(v.importe)                         AS ingresos
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = v.producto
@@ -265,6 +265,61 @@ function buildTopProductsByMonthQuery({ months = 6, limit = 8, maxDate } = {}) {
       AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
     GROUP BY v.producto, a.Art_Descripcion, YEAR(v.Fecha), MONTH(v.Fecha)
     ORDER BY SUM(v.cantidad) DESC
+  `;
+}
+
+// ── VENTAS por DÍA DE LA SEMANA ──────────────────────────────────────────────
+// DATEDIFF(DAY, 0, fecha) % 7  →  0=Lunes … 6=Domingo (independiente de DATEFIRST)
+function buildSalesByWeekdayQuery({ months = 3, maxDate } = {}) {
+  return `
+    SELECT
+      (DATEDIFF(DAY, 0, v.Fecha) % 7)  AS diaSemana,
+      COUNT(DISTINCT v.ticket)         AS numTickets,
+      SUM(v.cantidad)                  AS unidadesVendidas,
+      SUM(v.importe)                   AS totalVentas,
+      SUM(v.Costo)                     AS totalCosto
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
+    GROUP BY (DATEDIFF(DAY, 0, v.Fecha) % 7)
+    ORDER BY (DATEDIFF(DAY, 0, v.Fecha) % 7) ASC
+  `;
+}
+
+// ── VENTAS por CATEGORÍA ─────────────────────────────────────────────────────
+function buildSalesByCategoryQuery({ months = 3, limit = 12, maxDate } = {}) {
+  return `
+    SELECT TOP ${limit}
+      ISNULL(NULLIF(LTRIM(RTRIM(a.Org_Descripcion)), ''), 'Sin categoría') AS categoria,
+      COUNT(DISTINCT v.ticket)                                             AS numTickets,
+      SUM(v.cantidad)                                                      AS unidadesVendidas,
+      SUM(v.importe)                                                       AS totalVentas,
+      SUM(v.Costo)                                                         AS totalCosto
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      ON a.Art_Codigo = v.producto
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
+    GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(a.Org_Descripcion)), ''), 'Sin categoría')
+    ORDER BY SUM(v.importe) DESC
+  `;
+}
+
+// ── TOP PRODUCTOS del periodo (ranking por ingresos / ganancia) ──────────────
+function buildTopProductsPeriodQuery({ months = 3, limit = 30, maxDate } = {}) {
+  return `
+    SELECT TOP ${limit}
+      ISNULL(a.Art_Descripcion, v.producto)  AS nombre,
+      ISNULL(a.Org_Descripcion, '')          AS categoria,
+      SUM(v.cantidad)                        AS unidades,
+      SUM(v.importe)                         AS ingresos,
+      SUM(v.Costo)                           AS costo,
+      SUM(v.importe) - SUM(v.Costo)          AS ganancia
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      ON a.Art_Codigo = v.producto
+    WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
+      AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
+    GROUP BY v.producto, a.Art_Descripcion, a.Org_Descripcion
+    ORDER BY SUM(v.importe) DESC
   `;
 }
 
@@ -316,6 +371,9 @@ module.exports = {
   buildTopProductsByHourQuery,
   buildSalesByMonthQuery,
   buildTopProductsByMonthQuery,
+  buildSalesByWeekdayQuery,
+  buildSalesByCategoryQuery,
+  buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
 };

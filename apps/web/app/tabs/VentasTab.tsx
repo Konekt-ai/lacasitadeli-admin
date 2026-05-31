@@ -2,16 +2,26 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Cell, Legend,
+  ResponsiveContainer, BarChart, Bar, Cell, LabelList,
+  PieChart, Pie,
 } from 'recharts';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
-import type { AnalyticsData, ProdHour } from '../lib/types';
+import type { AnalyticsData } from '../lib/types';
 
 const PROD_COLORS = [
-  '#012d1d','#1b4332','#2d6a4f','#40916c','#52b788',
-  '#7b5819','#a47a23','#c9a843','#eebf76','#ffdeae',
+  '#012d1d','#2d6a4f','#40916c','#52b788','#74c69d',
+  '#7b5819','#a47a23','#c9a843','#eebf76','#b08968',
+  '#1b4332','#95d5b2',
 ];
+
+const DIAS       = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+const DIAS_CORTO = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+const MESES      = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+const fmtNum   = (v: number) => Number(v || 0).toLocaleString('es-MX');
+const fmtMoney = (v: number) => `$${Number(v || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtMoneyShort = (v: number) => `$${(Number(v || 0) / 1000).toFixed(0)}k`;
 
 const HourTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload?.length) return null;
@@ -21,7 +31,7 @@ const HourTooltip = ({ active, payload, label }: any) => {
       {payload.map((p: any, i: number) => (
         <div key={i} className="flex justify-between gap-4 text-xs font-label">
           <span style={{ color: p.color }} className="truncate max-w-[100px]">{p.dataKey === 'unidades' ? 'Total' : p.name}</span>
-          <span className="font-bold text-on-surface">{Number(p.value).toLocaleString('es-MX')}</span>
+          <span className="font-bold text-on-surface">{fmtNum(p.value)}</span>
         </div>
       ))}
     </div>
@@ -32,8 +42,9 @@ export default function VentasTab() {
   const [analytics,        setAnalytics]        = useState<AnalyticsData | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsMonths,  setAnalyticsMonths]  = useState(3);
-  const [analyticsMetric,  setAnalyticsMetric]  = useState<'unidadesVendidas' | 'totalVentas'>('unidadesVendidas');
-  const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
+  const [analyticsMetric,  setAnalyticsMetric]  = useState<'unidadesVendidas' | 'totalVentas'>('totalVentas');
+
+  const isMoney = analyticsMetric === 'totalVentas';
 
   const fetchAnalytics = useCallback(async (months: number) => {
     setAnalyticsLoading(true);
@@ -42,31 +53,23 @@ export default function VentasTab() {
       const data = await res.json();
       if (data.error) { console.error(data.error); return; }
       setAnalytics(data);
-      const topN = [...new Set((data.productsByHour as ProdHour[]).map(r => r.nombre))].slice(0, 5);
-      setSelectedProducts(topN);
     } catch (e) { console.error('Error analytics', e); }
     finally { setAnalyticsLoading(false); }
   }, []);
 
   useEffect(() => { fetchAnalytics(analyticsMonths); }, [analyticsMonths, fetchAnalytics]);
 
-  const allProductNames = useMemo(() => {
-    if (!analytics) return [];
-    return [...new Set(analytics.productsByHour.map(r => r.nombre))].slice(0, 20);
-  }, [analytics]);
+  // ── Detección de móvil (≤ 640px, ej. iPhone 15 = 393px) ──
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)');
+    const onChange = () => setIsMobile(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
-  const heatmapData = useMemo(() => {
-    if (!analytics) return [];
-    return Array.from({ length: 24 }, (_, h) => {
-      const row: Record<string, any> = { hora: h, label: `${h}:00` };
-      selectedProducts.forEach(nombre => {
-        const found = analytics.productsByHour.find(r => r.nombre === nombre && r.hora === h);
-        row[nombre] = found ? found.unidades : 0;
-      });
-      return row;
-    });
-  }, [analytics, selectedProducts]);
-
+  // ── Volumen por hora ──
   const hourLineData = useMemo(() => {
     if (!analytics) return [];
     return Array.from({ length: 24 }, (_, h) => {
@@ -75,8 +78,26 @@ export default function VentasTab() {
     });
   }, [analytics]);
 
-  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  // ── Ventas por día de la semana ──
+  const weekdayData = useMemo(() => {
+    if (!analytics) return [];
+    return Array.from({ length: 7 }, (_, d) => {
+      const found = analytics.byWeekday.find(r => r.diaSemana === d);
+      return {
+        dia: d, label: DIAS_CORTO[d], full: DIAS[d],
+        tickets: found?.numTickets || 0,
+        unidades: found?.unidadesVendidas || 0,
+        ventas: found?.totalVentas || 0,
+      };
+    });
+  }, [analytics]);
 
+  const topWeekday = useMemo(() => {
+    if (!weekdayData.length) return null;
+    return [...weekdayData].sort((a, b) => b.ventas - a.ventas)[0];
+  }, [weekdayData]);
+
+  // ── Volumen mensual ──
   const monthChartData = useMemo(() => {
     if (!analytics) return [];
     return analytics.byMonth.map(r => ({
@@ -87,58 +108,88 @@ export default function VentasTab() {
     }));
   }, [analytics]);
 
-  const productMonthData = useMemo(() => {
-    if (!analytics || !selectedProducts.length) return [];
-    const monthKeys = [...new Set(analytics.productsByMonth.map(r => `${r.anio}-${r.mes}`))].sort();
-    return monthKeys.map(key => {
-      const [anio, mes] = key.split('-').map(Number);
-      const row: Record<string, any> = { label: `${MESES[mes-1]} ${anio}` };
-      selectedProducts.forEach(nombre => {
-        const found = analytics.productsByMonth.find(r => r.nombre === nombre && r.anio === anio && r.mes === mes);
-        row[nombre] = found ? (analyticsMetric === 'unidadesVendidas' ? found.unidades : found.ingresos) : 0;
-      });
-      return row;
-    });
-  }, [analytics, selectedProducts, analyticsMetric]);
+  // ── Mezcla por categoría ──
+  const categoryData = useMemo(() => {
+    if (!analytics) return [];
+    const rows = analytics.byCategory.map(r => ({
+      name: r.categoria,
+      value: isMoney ? r.totalVentas : r.unidadesVendidas,
+    })).filter(r => r.value > 0);
+    const total = rows.reduce((s, r) => s + r.value, 0) || 1;
+    return rows.map(r => ({ ...r, pct: (r.value / total) * 100 }));
+  }, [analytics, isMoney]);
 
-  const heatmapMax = useMemo(() => {
-    let max = 0;
-    heatmapData.forEach(row => { selectedProducts.forEach(p => { if (row[p] > max) max = row[p]; }); });
-    return max || 1;
-  }, [heatmapData, selectedProducts]);
+  const categoryTotal = useMemo(() => categoryData.reduce((s, r) => s + r.value, 0), [categoryData]);
+
+  // ── Top productos ──
+  const topProductsData = useMemo(() => {
+    if (!analytics) return [];
+    const key = isMoney ? 'ingresos' : 'unidades';
+    return [...analytics.topProducts]
+      .sort((a, b) => (b[key] as number) - (a[key] as number))
+      .slice(0, 10)
+      .map(p => ({
+        nombre: p.nombre,
+        corto: p.nombre.length > 26 ? p.nombre.slice(0, 25) + '…' : p.nombre,
+        unidades: p.unidades,
+        ingresos: p.ingresos,
+        ganancia: p.ganancia,
+        margen: p.ingresos > 0 ? (p.ganancia / p.ingresos) * 100 : 0,
+        valor: isMoney ? p.ingresos : p.unidades,
+      }));
+  }, [analytics, isMoney]);
+
+  const fmtMetric = (v: number) => isMoney ? fmtMoney(v) : fmtNum(v);
+  const fmtMetricAxis = (v: number) => isMoney ? fmtMoneyShort(v) : fmtNum(v);
 
   return (
     <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-6 lg:space-y-8">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
         <div>
-          <h2 className="text-3xl font-serif italic text-primary">Análisis de Ventas</h2>
+          <h2 className="text-2xl sm:text-3xl font-serif italic text-primary">Análisis de Ventas</h2>
           <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
-            Volumen histórico por hora · por mes · por producto
+            Cuándo vendes · qué vendes · de dónde sale el dinero
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] font-label uppercase tracking-widest text-stone-500">Periodo:</span>
-          {[
-            { label: '1 mes',   value: 1  },
-            { label: '3 meses', value: 3  },
-            { label: '6 meses', value: 6  },
-            { label: '1 año',   value: 12 },
-          ].map(opt => (
-            <button key={opt.value}
-              onClick={() => setAnalyticsMonths(opt.value)}
-              className={cn(
-                'px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
-                analyticsMonths === opt.value ? 'bg-primary text-on-primary shadow-md' : 'bg-surface-container-low text-stone-500 hover:bg-stone-200'
-              )}>
-              {opt.label}
+        <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
+          {/* Métrica global */}
+          <div className="flex gap-1 bg-surface-container-low rounded-lg p-1">
+            <button onClick={() => setAnalyticsMetric('totalVentas')}
+              className={cn('flex-1 sm:flex-none px-3 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
+                isMoney ? 'bg-primary text-on-primary shadow-sm' : 'text-stone-500 hover:text-primary')}>
+              Ingresos $
             </button>
-          ))}
-          <button
-            onClick={() => fetchAnalytics(analyticsMonths)}
-            className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', analyticsLoading && 'animate-spin')}>
-            <Icon name="refresh" />
-          </button>
+            <button onClick={() => setAnalyticsMetric('unidadesVendidas')}
+              className={cn('flex-1 sm:flex-none px-3 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
+                !isMoney ? 'bg-primary text-on-primary shadow-sm' : 'text-stone-500 hover:text-primary')}>
+              Unidades
+            </button>
+          </div>
+          {/* Periodo */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="hidden sm:inline text-[10px] font-label uppercase tracking-widest text-stone-500">Periodo:</span>
+            {[
+              { label: '1 mes',   value: 1  },
+              { label: '3 meses', value: 3  },
+              { label: '6 meses', value: 6  },
+              { label: '1 año',   value: 12 },
+            ].map(opt => (
+              <button key={opt.value}
+                onClick={() => setAnalyticsMonths(opt.value)}
+                className={cn(
+                  'flex-1 sm:flex-none px-2 sm:px-3 py-2 rounded-lg text-[10px] sm:text-[11px] font-label font-bold uppercase tracking-widest transition-all whitespace-nowrap',
+                  analyticsMonths === opt.value ? 'bg-primary text-on-primary shadow-md' : 'bg-surface-container-low text-stone-500 hover:bg-stone-200'
+                )}>
+                {opt.label}
+              </button>
+            ))}
+            <button
+              onClick={() => fetchAnalytics(analyticsMonths)}
+              className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary flex-shrink-0', analyticsLoading && 'animate-spin')}>
+              <Icon name="refresh" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -154,47 +205,13 @@ export default function VentasTab() {
         </div>
       ) : (
         <>
-          {/* Selección de productos */}
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-label font-bold uppercase tracking-widest text-stone-500">
-                Productos visualizados <span className="text-primary ml-2">{selectedProducts.length} / {allProductNames.length}</span>
-              </h3>
-              <div className="flex gap-2">
-                <button onClick={() => setSelectedProducts(allProductNames.slice(0, 5))}
-                  className="text-[10px] font-label uppercase tracking-widest text-primary border border-primary/20 px-3 py-1 rounded-lg hover:bg-primary/5 transition-all">Top 5</button>
-                <button onClick={() => setSelectedProducts(allProductNames.slice(0, 10))}
-                  className="text-[10px] font-label uppercase tracking-widest text-primary border border-primary/20 px-3 py-1 rounded-lg hover:bg-primary/5 transition-all">Top 10</button>
-                <button onClick={() => setSelectedProducts([])}
-                  className="text-[10px] font-label uppercase tracking-widest text-stone-400 border border-stone-200 px-3 py-1 rounded-lg hover:bg-stone-100 transition-all">Limpiar</button>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {allProductNames.map((nombre, i) => {
-                const isSelected = selectedProducts.includes(nombre);
-                const color = PROD_COLORS[i % PROD_COLORS.length];
-                return (
-                  <button key={nombre}
-                    onClick={() => setSelectedProducts(prev => isSelected ? prev.filter(n => n !== nombre) : [...prev, nombre])}
-                    className={cn(
-                      'px-3 py-1.5 rounded-full text-[11px] font-label font-bold transition-all border truncate max-w-[220px]',
-                      isSelected ? 'text-white border-transparent shadow-sm' : 'bg-transparent text-stone-500 border-stone-200 hover:border-stone-300'
-                    )}
-                    style={isSelected ? { backgroundColor: color, borderColor: color } : {}}>
-                    {nombre}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* Gráfica 1: Volumen por hora */}
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-8">
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-baseline mb-6">
               <div>
-                <h3 className="text-2xl font-serif italic text-primary">Volumen por Hora del Día</h3>
+                <h3 className="text-xl sm:text-2xl font-serif italic text-primary">Volumen por Hora del Día</h3>
                 <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">
-                  Promedio acumulado — últimos {analyticsMonths} {analyticsMonths === 1 ? 'mes' : 'meses'}
+                  Acumulado — últimos {analyticsMonths} {analyticsMonths === 1 ? 'mes' : 'meses'}
                 </p>
               </div>
             </div>
@@ -212,7 +229,7 @@ export default function VentasTab() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} interval={1} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} interval={isMobile ? 3 : 1} />
                   <YAxis tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={40} />
                   <Tooltip content={<HourTooltip />} />
                   <Area type="monotone" dataKey="unidades" name="Unidades" stroke="#012d1d" strokeWidth={2} fill="url(#gradUnidades)" dot={false} />
@@ -228,7 +245,7 @@ export default function VentasTab() {
                     <div key={i} className="flex items-center gap-3 bg-surface-container-low rounded-lg px-4 py-2">
                       <div className={cn('w-2 h-2 rounded-full', i === 0 ? 'bg-primary' : i === 1 ? 'bg-secondary' : 'bg-stone-300')} />
                       <span className="font-serif text-xl text-on-surface">{h.label}</span>
-                      <span className="text-[10px] font-label text-stone-500 uppercase tracking-widest">{h.unidades.toLocaleString('es-MX')} uds · {h.tickets} tickets</span>
+                      <span className="text-[10px] font-label text-stone-500 uppercase tracking-widest">{fmtNum(h.unidades)} uds · {h.tickets} tickets</span>
                     </div>
                   ))}
                   <div className="ml-auto flex items-center gap-2 text-stone-400">
@@ -240,74 +257,53 @@ export default function VentasTab() {
             })()}
           </div>
 
-          {/* Gráfica 2: Heatmap */}
-          {selectedProducts.length > 0 && (
-            <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-8">
-              <div className="mb-6">
-                <h3 className="text-2xl font-serif italic text-primary">Mapa de Calor · Producto × Hora</h3>
-                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">Intensidad = unidades vendidas en ese rango horario</p>
+          {/* Gráfica 2: Ventas por día de la semana */}
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 sm:p-6 lg:p-8">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-baseline gap-3 mb-6">
+              <div>
+                <h3 className="text-xl sm:text-2xl font-serif italic text-primary">Ventas por Día de la Semana</h3>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">
+                  {isMoney ? 'Ingresos' : 'Unidades'} acumulados por día — útil para compras y personal
+                </p>
               </div>
-              <div className="overflow-x-auto">
-                <div style={{ minWidth: `${24 * 38 + 180}px` }}>
-                  <div className="flex mb-1" style={{ paddingLeft: '180px' }}>
-                    {Array.from({ length: 24 }, (_, h) => (
-                      <div key={h} className="text-[9px] font-label text-stone-400 text-center" style={{ width: '38px', flexShrink: 0 }}>{h}</div>
-                    ))}
-                  </div>
-                  {selectedProducts.map((nombre, pi) => {
-                    const color = PROD_COLORS[pi % PROD_COLORS.length];
-                    return (
-                      <div key={nombre} className="flex items-center mb-1">
-                        <div className="text-[10px] font-label text-stone-600 truncate pr-2 text-right" style={{ width: '180px', flexShrink: 0 }}>{nombre}</div>
-                        {Array.from({ length: 24 }, (_, h) => {
-                          const val = heatmapData[h]?.[nombre] || 0;
-                          const pct = val / heatmapMax;
-                          const opacity = val === 0 ? 0.04 : 0.1 + pct * 0.85;
-                          return (
-                            <div key={h} title={`${nombre} · ${h}:00 — ${val} uds`}
-                              className="rounded-sm cursor-pointer transition-all hover:scale-110 hover:z-10 relative"
-                              style={{ width: '34px', height: '28px', flexShrink: 0, margin: '0 2px', backgroundColor: color, opacity }}>
-                              {val > 0 && pct > 0.5 && (
-                                <span className="absolute inset-0 flex items-center justify-center text-[7px] font-bold text-white">{val}</span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+              {topWeekday && (
+                <div className="flex items-center gap-3 bg-surface-container-low rounded-lg px-4 py-2 self-start sm:self-auto flex-shrink-0">
+                  <span className="text-[10px] font-label text-stone-500 uppercase tracking-widest">Día más fuerte</span>
+                  <span className="font-serif text-xl text-primary">{topWeekday.full}</span>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 mt-4 justify-end">
-                <span className="text-[9px] font-label text-stone-400 uppercase">Sin ventas</span>
-                <div className="flex gap-1">
-                  {[0.1, 0.3, 0.5, 0.7, 0.9].map((o, i) => (
-                    <div key={i} className="w-5 h-3 rounded-sm" style={{ backgroundColor: '#012d1d', opacity: o }} />
-                  ))}
-                </div>
-                <span className="text-[9px] font-label text-stone-400 uppercase">Mayor volumen</span>
-              </div>
+              )}
             </div>
-          )}
+            <div className="h-64 w-full" style={{ minWidth: 0, minHeight: 0 }}>
+              <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+                <BarChart data={weekdayData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11, fontFamily: 'Inter', fill: '#78716c' }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={50}
+                    tickFormatter={fmtMetricAxis} />
+                  <Tooltip
+                    cursor={{ fill: '#012d1d', fillOpacity: 0.04 }}
+                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    labelFormatter={(_: any, p: any) => p?.[0]?.payload?.full || ''}
+                    formatter={(v: any) => [fmtMetric(Number(v)), isMoney ? 'Ingresos' : 'Unidades']}
+                  />
+                  <Bar dataKey={isMoney ? 'ventas' : 'unidades'} radius={[6, 6, 0, 0]}>
+                    {weekdayData.map((row, i) => (
+                      <Cell key={i} fill={topWeekday && row.dia === topWeekday.dia ? '#012d1d' : '#52b788'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
 
-          {/* Gráfica 3: Ventas por mes */}
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-8">
+          {/* Gráfica 3: Volumen mensual */}
+          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-baseline mb-6">
               <div>
-                <h3 className="text-2xl font-serif italic text-primary">Volumen Mensual</h3>
-                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">Unidades · Ingresos · Ganancia</p>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setAnalyticsMetric('unidadesVendidas')}
-                  className={cn('px-4 py-1.5 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest transition-all',
-                    analyticsMetric === 'unidadesVendidas' ? 'bg-primary text-on-primary' : 'bg-surface-container-low text-stone-400 hover:bg-stone-200')}>
-                  Unidades
-                </button>
-                <button onClick={() => setAnalyticsMetric('totalVentas')}
-                  className={cn('px-4 py-1.5 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest transition-all',
-                    analyticsMetric === 'totalVentas' ? 'bg-secondary text-on-primary' : 'bg-surface-container-low text-stone-400 hover:bg-stone-200')}>
-                  Ingresos $
-                </button>
+                <h3 className="text-xl sm:text-2xl font-serif italic text-primary">Tendencia Mensual</h3>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">
+                  {isMoney ? 'Ingresos por mes' : 'Unidades vendidas por mes'}
+                </p>
               </div>
             </div>
             <div className="h-72 w-full" style={{ minWidth: 0, minHeight: 0 }}>
@@ -316,17 +312,15 @@ export default function VentasTab() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={50}
-                    tickFormatter={v => analyticsMetric === 'totalVentas' ? `$${(v/1000).toFixed(0)}k` : v.toLocaleString()} />
+                    tickFormatter={fmtMetricAxis} />
                   <Tooltip
-                    formatter={(v: number, name: string) => [
-                      analyticsMetric === 'totalVentas' ? `$${v.toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : v.toLocaleString('es-MX'),
-                      name
-                    ]}
+                    cursor={{ fill: '#012d1d', fillOpacity: 0.04 }}
+                    formatter={(v: any) => [fmtMetric(Number(v)), isMoney ? 'Ingresos' : 'Unidades']}
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                   />
-                  <Bar dataKey={analyticsMetric === 'unidadesVendidas' ? 'unidades' : 'ventas'} name={analyticsMetric === 'unidadesVendidas' ? 'Unidades' : 'Ingresos'} radius={[4, 4, 0, 0]}>
+                  <Bar dataKey={isMoney ? 'ventas' : 'unidades'} radius={[4, 4, 0, 0]}>
                     {monthChartData.map((_, i) => (
-                      <Cell key={i} fill={i === monthChartData.length - 1 ? '#012d1d' : '#40916c'} opacity={0.7 + (i / monthChartData.length) * 0.3} />
+                      <Cell key={i} fill={i === monthChartData.length - 1 ? '#012d1d' : '#40916c'} opacity={0.7 + (i / Math.max(monthChartData.length, 1)) * 0.3} />
                     ))}
                   </Bar>
                 </BarChart>
@@ -334,37 +328,98 @@ export default function VentasTab() {
             </div>
           </div>
 
-          {/* Gráfica 4: Productos por mes (stacked) */}
-          {selectedProducts.length > 0 && productMonthData.length > 0 && (
-            <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-8">
+          {/* Gráficas 4 y 5: Categoría + Top productos */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+            {/* Mezcla por categoría */}
+            <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 sm:p-6 lg:p-8">
               <div className="mb-6">
-                <h3 className="text-2xl font-serif italic text-primary">Productos por Mes</h3>
+                <h3 className="text-xl sm:text-2xl font-serif italic text-primary">Mezcla por Categoría</h3>
                 <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">
-                  {analyticsMetric === 'unidadesVendidas' ? 'Unidades vendidas' : 'Ingresos $'} — productos seleccionados
+                  Participación en {isMoney ? 'ingresos' : 'unidades'}
                 </p>
               </div>
-              <div className="h-72 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-                <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
-                  <BarChart data={productMonthData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} />
-                    <YAxis tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={50}
-                      tickFormatter={v => analyticsMetric === 'totalVentas' ? `$${(v/1000).toFixed(0)}k` : String(v)} />
-                    <Tooltip
-                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                      formatter={(v: number) => [
-                        analyticsMetric === 'totalVentas' ? `$${v.toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : v.toLocaleString('es-MX')
-                      ]}
-                    />
-                    <Legend wrapperStyle={{ fontSize: '10px', fontFamily: 'Inter' }} />
-                    {selectedProducts.map((nombre, i) => (
-                      <Bar key={nombre} dataKey={nombre} stackId="stack" fill={PROD_COLORS[i % PROD_COLORS.length]} radius={i === selectedProducts.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]} />
+              {categoryData.length === 0 ? (
+                <div className="flex items-center justify-center h-64 text-stone-300 text-sm font-label uppercase tracking-widest">Sin datos de categoría</div>
+              ) : (
+                <div className="flex flex-col sm:flex-row items-center gap-6">
+                  <div className="relative h-56 w-56 flex-shrink-0">
+                    <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+                      <PieChart>
+                        <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%"
+                          innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">
+                          {categoryData.map((_, i) => (
+                            <Cell key={i} fill={PROD_COLORS[i % PROD_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                          formatter={(v: any, n: any) => [`${fmtMetric(Number(v))} · ${((Number(v) / (categoryTotal || 1)) * 100).toFixed(1)}%`, n]}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                      <span className="text-[9px] font-label uppercase tracking-widest text-stone-400">Total</span>
+                      <span className="font-serif text-lg text-primary">{isMoney ? fmtMoneyShort(categoryTotal) : fmtNum(categoryTotal)}</span>
+                    </div>
+                  </div>
+                  <div className="flex-1 w-full space-y-1.5 sm:max-h-56 sm:overflow-y-auto">
+                    {categoryData.map((c, i) => (
+                      <div key={c.name} className="flex items-center gap-2 text-xs">
+                        <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: PROD_COLORS[i % PROD_COLORS.length] }} />
+                        <span className="font-label text-stone-600 truncate flex-1">{c.name}</span>
+                        <span className="font-label text-stone-400 tabular-nums">{c.pct.toFixed(1)}%</span>
+                        <span className="font-bold text-on-surface tabular-nums w-20 text-right">{isMoney ? fmtMoneyShort(c.value) : fmtNum(c.value)}</span>
+                      </div>
                     ))}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Top productos */}
+            <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 p-4 sm:p-6 lg:p-8">
+              <div className="mb-6">
+                <h3 className="text-xl sm:text-2xl font-serif italic text-primary">Top 10 Productos</h3>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-1">
+                  Ranking por {isMoney ? 'ingresos' : 'unidades'}
+                </p>
+              </div>
+              {topProductsData.length === 0 ? (
+                <div className="flex items-center justify-center h-72 text-stone-300 text-sm font-label uppercase tracking-widest">Sin datos de productos</div>
+              ) : (
+                <div style={{ height: `${Math.max(topProductsData.length * 34, 120)}px`, minWidth: 0 }}>
+                  <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+                    <BarChart data={topProductsData} layout="vertical" margin={{ top: 0, right: isMobile ? 42 : 56, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" horizontal={false} />
+                      <XAxis type="number" hide tickFormatter={fmtMetricAxis} />
+                      <YAxis type="category" dataKey="corto" width={isMobile ? 96 : 170}
+                        tickFormatter={(v: any) => { const s = String(v); const max = isMobile ? 13 : 28; return s.length > max ? s.slice(0, max - 1) + '…' : s; }}
+                        tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#57534e' }} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        cursor={{ fill: '#012d1d', fillOpacity: 0.04 }}
+                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                        labelFormatter={(_: any, p: any) => p?.[0]?.payload?.nombre || ''}
+                        formatter={(v: any, _n: any, p: any) => {
+                          const d = p?.payload || {};
+                          return isMoney
+                            ? [`${fmtMoney(Number(v))}  ·  margen ${d.margen?.toFixed(0)}%`, 'Ingresos']
+                            : [`${fmtNum(Number(v))} uds`, 'Unidades'];
+                        }}
+                      />
+                      <Bar dataKey="valor" radius={[0, 6, 6, 0]} barSize={18}>
+                        {topProductsData.map((_, i) => (
+                          <Cell key={i} fill={PROD_COLORS[i % PROD_COLORS.length]} />
+                        ))}
+                        <LabelList dataKey="valor" position="right"
+                          formatter={(v: any) => isMoney ? fmtMoneyShort(Number(v)) : fmtNum(Number(v))}
+                          style={{ fontSize: 10, fontFamily: 'Inter', fill: '#78716c', fontWeight: 700 }} />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </div>
         </>
       )}
     </section>

@@ -38,14 +38,22 @@ export interface MonthRow {
   anio: number; mes: number; numTickets: number; unidadesVendidas: number; totalVentas: number; totalCosto: number;
 }
 
-export interface ProdHour  { nombre: string; hora: number; unidades: number; ingresos: number; }
-export interface ProdMonth { nombre: string; anio: number; mes: number; unidades: number; ingresos: number; }
+export interface WeekdayRow {
+  diaSemana: number; numTickets: number; unidadesVendidas: number; totalVentas: number; totalCosto: number;
+}
+export interface CategoryRow {
+  categoria: string; numTickets: number; unidadesVendidas: number; totalVentas: number; totalCosto: number;
+}
+export interface TopProduct {
+  nombre: string; categoria: string; unidades: number; ingresos: number; costo: number; ganancia: number;
+}
 
 export interface AnalyticsData {
-  byHour:          HourRow[];
-  byMonth:         MonthRow[];
-  productsByHour:  ProdHour[];
-  productsByMonth: ProdMonth[];
+  byHour:      HourRow[];
+  byMonth:     MonthRow[];
+  byWeekday:   WeekdayRow[];
+  byCategory:  CategoryRow[];
+  topProducts: TopProduct[];
 }
 
 // ── Bodega / Control Interno ──────────────────────────────────────────────────
