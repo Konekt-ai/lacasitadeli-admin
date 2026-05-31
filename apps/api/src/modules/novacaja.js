@@ -165,27 +165,31 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes, ticketKpiRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery()),
+      // Tickets en tiempo real (GETDATE) — VBasePolizaVentas tiene retraso y no muestra hoy
+      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    const polizaKPIs     = kpiRes.recordset[0] || {};
+    const polizaKPIs     = kpiRes.recordset[0]       || {};
+    const ticketKPIs     = ticketKpiRes.recordset[0] || {};
 
-    // Una sola fuente (VBasePolizaVentas) para que Dashboard = Reportes
     const kpisFull = {
-      totalTickets:     polizaKPIs.totalTickets     || 0,
-      totalVentas:      polizaKPIs.totalVentas      || 0,
-      ticketPromedio:   polizaKPIs.ticketPromedio   || 0,
+      // Tickets, ventas y promedio: tabla Tickets (tiempo real, incluye hoy)
+      totalTickets:     ticketKPIs.totalTickets   || 0,
+      totalVentas:      ticketKPIs.totalVentas    || 0,
+      ticketPromedio:   ticketKPIs.ticketPromedio || 0,
+      // Costo y unidades: VBasePolizaVentas (única fuente con datos de costo)
       totalCosto:       polizaKPIs.totalCosto       || 0,
       unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
-      ganancia:         polizaKPIs.ganancia         || 0,
+      ganancia:         (ticketKPIs.totalVentas || 0) - (polizaKPIs.totalCosto || 0),
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
