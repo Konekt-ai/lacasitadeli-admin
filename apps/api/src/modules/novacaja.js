@@ -622,26 +622,28 @@ router.get('/tickets/:folio/detalle', async (req, res) => {
     // Paso 2: traer productos de TicketsPS usando los 4 campos exactos de ESE registro
     const lineasRes = await mssql.query(`
       SELECT
-        [Codigo]                           AS codigo,
-        [Concepto]                         AS concepto,
-        SUM([Cantidad])                    AS cantidad,
-        [ValorUnitario]                    AS valorUnitario,
-        SUM([Importe])                     AS importe
+        [Codigo]                                          AS codigo,
+        [Concepto]                                        AS concepto,
+        SUM([Cantidad])                                   AS cantidad,
+        [ValorUnitario]                                   AS valorUnitario,
+        SUM([Importe] + ISNULL([MontoIva], 0))            AS importe,
+        MAX(ISNULL([TasaIvaLinea], 0))                    AS tasaIva
       FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
       WHERE FolTda_Codigo  = ${t.FolTda_Codigo}
         AND FolEst_Codigo  = ${t.FolEst_Codigo}
         AND FolDoc_Codigo  = ${t.FolDoc_Codigo}
         AND FolConsecutivo = ${t.FolConsecutivo}
       GROUP BY [Codigo], [Concepto], [ValorUnitario]
-      ORDER BY SUM([Importe]) DESC
+      ORDER BY SUM([Importe] + ISNULL([MontoIva], 0)) DESC
     `);
 
     const lineas     = lineasRes.recordset || [];
+    // Importe ya incluye MontoIva → suma = lo que realmente pagó el cliente
     const sumaLineas = lineas.reduce((s, l) => s + Number(l.importe || 0), 0);
 
     res.json({
       lineas,
-      importeTotal: sumaLineas,   // suma real de las líneas mostradas
+      importeTotal: sumaLineas,
       sumaPoliza:   sumaLineas,
       fecha:        t.fecha  ?? null,
       cajero:       t.cajero ?? null,
