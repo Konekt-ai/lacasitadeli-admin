@@ -304,6 +304,7 @@ interface DetalleLinea {
 function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => void }) {
   const [lineas,       setLineas]       = useState<DetalleLinea[]>([]);
   const [importeTotal, setImporteTotal] = useState<number | null>(null);
+  const [sumaPoliza,   setSumaPoliza]   = useState<number | null>(null);
   const [loading,      setLoading]      = useState(true);
 
   useEffect(() => {
@@ -311,21 +312,21 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
       .then(r => r.ok ? r.json() : {})
       .then(data => {
         if (Array.isArray(data)) {
-          // compatibilidad con respuesta antigua (array plano)
           setLineas(data);
         } else if (data?.lineas) {
           setLineas(data.lineas);
           if (data.importeTotal != null) setImporteTotal(Number(data.importeTotal));
+          if (data.sumaPoliza   != null) setSumaPoliza(Number(data.sumaPoliza));
         }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [folio]);
 
-  const sumaLineas = lineas.reduce((s, l) => s + Number(l.importe), 0);
-  // Usar T_ImporteTotal como total oficial; si no viene, usar suma de líneas
-  const totalMostrado = importeTotal ?? sumaLineas;
-  const hayDiferencia = importeTotal != null && Math.abs(importeTotal - sumaLineas) > 0.01;
+  const sumaLineas    = lineas.reduce((s, l) => s + Number(l.importe), 0);
+  const totalMostrado = importeTotal ?? sumaPoliza ?? sumaLineas;
+  const hayDiferencia = importeTotal != null && sumaPoliza != null
+    && Math.abs(importeTotal - sumaPoliza) > 0.01;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[400] flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -395,7 +396,7 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
             </div>
             {hayDiferencia && (
               <p className="text-[10px] font-label text-stone-400 text-right mt-1">
-                Suma líneas: ${sumaLineas.toLocaleString('es-MX', { minimumFractionDigits: 2 })} · Total POS: ${importeTotal!.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                Poliza: ${sumaPoliza!.toLocaleString('es-MX', { minimumFractionDigits: 2 })} · Caja: ${importeTotal!.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
               </p>
             )}
           </div>
