@@ -7,6 +7,12 @@ set LOG=%~dp0logs\actualizaciones.log
 echo [%date% %time%] =============================== >> "%LOG%"
 echo [%date% %time%] Iniciando actualizacion... >> "%LOG%"
 
+:: 0. Cerrar procesos anteriores antes de tocar archivos
+echo [%date% %time%] Cerrando procesos anteriores... >> "%LOG%"
+taskkill /F /IM node.exe    >> "%LOG%" 2>&1
+taskkill /F /IM pythonw.exe >> "%LOG%" 2>&1
+timeout /t 3 /nobreak >nul
+
 :: Verificar git
 where git >nul 2>&1
 if errorlevel 1 (
