@@ -165,8 +165,10 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+    const [kpiRes, ticketCountRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
+      // Conteo real de tickets desde Tickets con GETDATE() — se actualiza en vivo
+      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
@@ -176,16 +178,18 @@ router.get('/dashboard', async (req, res) => {
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    // Una sola fuente: VBasePolizaVentas → ventas, costo y ganancia siempre consistentes
-    const kpis = kpiRes.recordset[0] || {};
+    const polizaKPIs     = kpiRes.recordset[0]           || {};
+    const ticketKPIs     = ticketCountRes.recordset[0]   || {};
 
     const kpisFull = {
-      totalTickets:     kpis.totalTickets     || 0,
-      totalVentas:      kpis.totalVentas      || 0,
-      ticketPromedio:   kpis.ticketPromedio   || 0,
-      totalCosto:       kpis.totalCosto       || 0,
-      unidadesVendidas: kpis.unidadesVendidas || 0,
-      ganancia:         kpis.ganancia         || 0,  // importe - Costo, misma fuente
+      // Ticket count: tabla Tickets en tiempo real (GETDATE)
+      totalTickets:     ticketKPIs.totalTickets              || polizaKPIs.totalTickets || 0,
+      ticketPromedio:   ticketKPIs.ticketPromedio            || polizaKPIs.ticketPromedio || 0,
+      // Ventas, costo y ganancia: VBasePolizaVentas — misma fuente, números consistentes
+      totalVentas:      polizaKPIs.totalVentas      || 0,
+      totalCosto:       polizaKPIs.totalCosto       || 0,
+      unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
+      ganancia:         polizaKPIs.ganancia         || 0,
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
