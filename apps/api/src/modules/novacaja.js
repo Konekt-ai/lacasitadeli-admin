@@ -165,31 +165,27 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes, ticketKpiRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery()),
-      // Tickets anclado a maxDate — mismo día que VBasePolizaVentas → números consistentes
-      mssql.query(buildTicketKPIsQuery({ period, maxDate })).catch(() => ({ recordset: [{}] })),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    const polizaKPIs     = kpiRes.recordset[0]       || {};
-    const ticketKPIs     = ticketKpiRes.recordset[0] || {};
+    // Una sola fuente: VBasePolizaVentas → ventas, costo y ganancia siempre consistentes
+    const kpis = kpiRes.recordset[0] || {};
 
     const kpisFull = {
-      // Tickets, ventas y promedio: tabla Tickets (tiempo real, incluye hoy)
-      totalTickets:     ticketKPIs.totalTickets   || 0,
-      totalVentas:      ticketKPIs.totalVentas    || 0,
-      ticketPromedio:   ticketKPIs.ticketPromedio || 0,
-      // Costo y unidades: VBasePolizaVentas (única fuente con datos de costo)
-      totalCosto:       polizaKPIs.totalCosto       || 0,
-      unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
-      ganancia:         (ticketKPIs.totalVentas || 0) - (polizaKPIs.totalCosto || 0),
+      totalTickets:     kpis.totalTickets     || 0,
+      totalVentas:      kpis.totalVentas      || 0,
+      ticketPromedio:   kpis.ticketPromedio   || 0,
+      totalCosto:       kpis.totalCosto       || 0,
+      unidadesVendidas: kpis.unidadesVendidas || 0,
+      ganancia:         kpis.ganancia         || 0,  // importe - Costo, misma fuente
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
