@@ -205,7 +205,7 @@ router.get('/dashboard', async (req, res) => {
       bySupplier:   bySupplierRes.recordset || [],
     };
 
-    _set(cacheKey, result, 45_000); // 45 s
+    _set(cacheKey, result, 20_000); // 20 s
     res.json(result);
   } catch (err) {
     console.error('Error dashboard:', err.message);

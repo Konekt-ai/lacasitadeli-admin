@@ -95,7 +95,12 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchDash(period); }, [period, fetchDash]);
+  // Carga inicial + auto-refresh cada 60 s mientras el tab está abierto
+  useEffect(() => {
+    fetchDash(period);
+    const id = setInterval(() => fetchDash(period), 60_000);
+    return () => clearInterval(id);
+  }, [period, fetchDash]);
 
   const fetchRecentTickets = useCallback(async () => {
     setTicketsLoading(true);

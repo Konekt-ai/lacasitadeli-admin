@@ -45,6 +45,7 @@ export default function Dashboard() {
   const [dbStatus,         setDbStatus]         = useState<'unknown' | 'ok' | 'error'>('unknown');
   const [notification,     setNotification]     = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [timeFilter,       setTimeFilter]       = useState('Hoy');
+  const [dashRefreshKey,   setDashRefreshKey]   = useState(0);
 
   const notify = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -81,7 +82,7 @@ export default function Dashboard() {
     );
     return (
       <Suspense fallback={<TabSpinner />}>
-        {activeTab === 'Dashboard'  && <DashboardTab  timeFilter={timeFilter} lowStockProducts={lowStockProducts} dbStatus={dbStatus} setActiveTab={setActiveTab} />}
+        {activeTab === 'Dashboard'  && <DashboardTab  key={dashRefreshKey} timeFilter={timeFilter} lowStockProducts={lowStockProducts} dbStatus={dbStatus} setActiveTab={setActiveTab} />}
         {activeTab === 'Inventario' && <InventarioTab lowStockProducts={lowStockProducts} categories={categories} onRefresh={fetchData} />}
         {activeTab === 'Ventas'     && <VentasTab />}
         {activeTab === 'Reportes'   && <ReportesTab timeFilter={timeFilter} />}
@@ -167,7 +168,7 @@ export default function Dashboard() {
               <div className={cn('lg:hidden w-2 h-2 rounded-full flex-shrink-0',
                 dbStatus === 'ok' ? 'bg-emerald-500 animate-pulse' : 'bg-error')} />
 
-              <button onClick={fetchData}
+              <button onClick={() => { fetchData(); setDashRefreshKey(k => k + 1); }}
                 className={cn('p-2 hover:bg-stone-100 rounded-full transition-all text-primary', loading && 'animate-spin')}>
                 <Icon name="refresh" className="text-xl" />
               </button>
