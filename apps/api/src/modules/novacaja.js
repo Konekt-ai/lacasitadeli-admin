@@ -597,22 +597,38 @@ router.get('/tickets/:folio/detalle', async (req, res) => {
   const folio = parseInt(req.params.folio);
   if (!folio) return res.status(400).json({ error: 'Folio inválido' });
   try {
-    const result = await mssql.query(`
-      SELECT
-        [Codigo]                           AS codigo,
-        [Concepto]                         AS concepto,
-        SUM([Cantidad])                    AS cantidad,
-        [ValorUnitario]                    AS valorUnitario,
-        SUM([Importe])                     AS importe,
-        SUM(ISNULL([ImporteDescuento], 0)) AS descuento,
-        MAX(ISNULL([TasaIvaLinea], 0))     AS tasaIva,
-        SUM(ISNULL([MontoIva], 0))         AS montoIva
-      FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
-      WHERE [FolConsecutivo] = ${folio}
-      GROUP BY [Codigo], [Concepto], [ValorUnitario]
-      ORDER BY SUM([Importe]) DESC
-    `);
-    res.json(result.recordset || []);
+    const [lineasRes, ticketRes] = await Promise.all([
+      mssql.query(`
+        SELECT
+          [Codigo]                           AS codigo,
+          [Concepto]                         AS concepto,
+          SUM([Cantidad])                    AS cantidad,
+          [ValorUnitario]                    AS valorUnitario,
+          SUM([Importe])                     AS importe,
+          SUM(ISNULL([ImporteDescuento], 0)) AS descuento,
+          MAX(ISNULL([TasaIvaLinea], 0))     AS tasaIva,
+          SUM(ISNULL([MontoIva], 0))         AS montoIva
+        FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
+        WHERE [FolConsecutivo] = ${folio}
+        GROUP BY [Codigo], [Concepto], [ValorUnitario]
+        ORDER BY SUM([Importe]) DESC
+      `),
+      mssql.query(`
+        SELECT TOP 1
+          ISNULL(T_ImporteTotal, 0) AS importeTotal,
+          CONVERT(varchar(19), T_Fecha, 120) AS fecha,
+          T_Cajero AS cajero
+        FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+        WHERE FolConsecutivo = ${folio}
+      `),
+    ]);
+
+    res.json({
+      lineas:       lineasRes.recordset  || [],
+      importeTotal: ticketRes.recordset[0]?.importeTotal ?? null,
+      fecha:        ticketRes.recordset[0]?.fecha        ?? null,
+      cajero:       ticketRes.recordset[0]?.cajero       ?? null,
+    });
   } catch (err) {
     console.error('Error ticket detalle:', err.message);
     res.status(500).json({ error: err.message });

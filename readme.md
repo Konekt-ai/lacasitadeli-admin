@@ -76,11 +76,11 @@ cd ..\..\lacasitadeli-almacen\pwa-bodega && npm install
 Crear el archivo **`apps/api/.env`** con las credenciales de NovaCaja:
 
 ```env
-# SQL Server (NovaCaja) — requerido
-MSSQL_SERVER=192.168.x.x
-MSSQL_DATABASE=compucaja
-MSSQL_USER=sa
-MSSQL_PASSWORD=contraseña
+# SQL Server — requerido
+MSSQL_SERVER=<IP del servidor>
+MSSQL_DATABASE=<nombre de la base de datos>
+MSSQL_USER=<usuario SQL>
+MSSQL_PASSWORD=<contraseña SQL>
 MSSQL_PORT=1433
 
 # Puerto de la API (opcional, default: 3002)
@@ -91,11 +91,11 @@ LOW_STOCK_THRESHOLD=5
 
 # Correo para reportes mensuales automáticos (opcional)
 # Opción A — Gmail con contraseña de aplicación
-EMAIL_USER=correo@gmail.com
-EMAIL_PASS=xxxx-xxxx-xxxx-xxxx
+EMAIL_USER=<correo@gmail.com>
+EMAIL_PASS=<contraseña de aplicación Gmail>
 
 # Opción B — Resend.dev (alternativa a Gmail)
-RESEND_API_KEY=re_xxxxxxxxxxxx
+RESEND_API_KEY=<tu API key de Resend>
 ```
 
 > Si no existe el `.env`, al ejecutar `iniciar.bat` se abre el asistente de configuración automáticamente.

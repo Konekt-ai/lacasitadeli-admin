@@ -76,15 +76,19 @@ El sistema necesita saber cómo conectarse a SQL Server. Este archivo se crea a 
 4. Ábrelo con Notepad y escribe exactamente esto (cambiando los datos del SQL Server):
 
 ```
-MSSQL_SERVER=192.168.1.XX
-MSSQL_DATABASE=compucaja
-MSSQL_USER=sa
-MSSQL_PASSWORD=TuContraseña
+MSSQL_SERVER=<IP del servidor SQL>
+MSSQL_DATABASE=<nombre de la base de datos>
+MSSQL_USER=<usuario SQL>
+MSSQL_PASSWORD=<contraseña SQL>
 MSSQL_PORT=1433
 ```
 
 - `MSSQL_SERVER` → la IP de la computadora donde está SQL Server (ej. `192.168.1.68` o `localhost` si es la misma máquina)
-- `MSSQL_PASSWORD` → la contraseña del usuario `sa` de SQL Server
+- `MSSQL_DATABASE` → el nombre de la base de datos del sistema de punto de venta
+- `MSSQL_USER` → el usuario de SQL Server con permisos de lectura/escritura
+- `MSSQL_PASSWORD` → la contraseña de ese usuario SQL
+
+> Los valores exactos los proporciona el administrador del sistema. Este archivo **nunca** se sube a GitHub.
 
 5. Guarda y cierra el archivo
 
@@ -95,7 +99,7 @@ MSSQL_PORT=1433
 Solo se hace una vez por instalación.
 
 1. Abre **SQL Server Management Studio (SSMS)**
-2. Conéctate al servidor `compucaja`
+2. Conéctate al servidor SQL
 3. En el menú: **Archivo → Abrir → Archivo...**
 4. Navega a la carpeta del proyecto y abre: `crear_tablas.sql`
 5. Presiona **F5** o el botón **Ejecutar**

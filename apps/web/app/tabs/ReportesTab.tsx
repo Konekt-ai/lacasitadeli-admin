@@ -302,18 +302,30 @@ interface DetalleLinea {
 }
 
 function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => void }) {
-  const [lineas,  setLineas]  = useState<DetalleLinea[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [lineas,       setLineas]       = useState<DetalleLinea[]>([]);
+  const [importeTotal, setImporteTotal] = useState<number | null>(null);
+  const [loading,      setLoading]      = useState(true);
 
   useEffect(() => {
     fetch(`/api/novacaja/tickets/${folio}/detalle`)
-      .then(r => r.ok ? r.json() : [])
-      .then(data => { if (Array.isArray(data)) setLineas(data); })
+      .then(r => r.ok ? r.json() : {})
+      .then(data => {
+        if (Array.isArray(data)) {
+          // compatibilidad con respuesta antigua (array plano)
+          setLineas(data);
+        } else if (data?.lineas) {
+          setLineas(data.lineas);
+          if (data.importeTotal != null) setImporteTotal(Number(data.importeTotal));
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [folio]);
 
-  const total = lineas.reduce((s, l) => s + Number(l.importe), 0);
+  const sumaLineas = lineas.reduce((s, l) => s + Number(l.importe), 0);
+  // Usar T_ImporteTotal como total oficial; si no viene, usar suma de líneas
+  const totalMostrado = importeTotal ?? sumaLineas;
+  const hayDiferencia = importeTotal != null && Math.abs(importeTotal - sumaLineas) > 0.01;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[400] flex items-end sm:items-center justify-center p-0 sm:p-4"
@@ -372,13 +384,20 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
         </div>
 
         {lineas.length > 0 && (
-          <div className="px-6 py-4 border-t border-outline-variant/10 flex items-center justify-between flex-shrink-0 bg-surface-container-low/30">
-            <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">
-              {lineas.length} producto{lineas.length !== 1 ? 's' : ''}
-            </span>
-            <span className="font-serif text-xl text-primary font-bold">
-              ${total.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
-            </span>
+          <div className="px-6 py-4 border-t border-outline-variant/10 flex-shrink-0 bg-surface-container-low/30">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">
+                {lineas.length} producto{lineas.length !== 1 ? 's' : ''}
+              </span>
+              <span className="font-serif text-xl text-primary font-bold">
+                ${totalMostrado.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+              </span>
+            </div>
+            {hayDiferencia && (
+              <p className="text-[10px] font-label text-stone-400 text-right mt-1">
+                Suma líneas: ${sumaLineas.toLocaleString('es-MX', { minimumFractionDigits: 2 })} · Total POS: ${importeTotal!.toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+              </p>
+            )}
           </div>
         )}
       </div>
