@@ -324,9 +324,8 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
   }, [folio]);
 
   const sumaLineas    = lineas.reduce((s, l) => s + Number(l.importe), 0);
-  const totalMostrado = importeTotal ?? sumaPoliza ?? sumaLineas;
-  const hayDiferencia = importeTotal != null && sumaPoliza != null
-    && Math.abs(importeTotal - sumaPoliza) > 0.01;
+  const totalMostrado = sumaLineas;
+  const hayDiferencia = false;
 
   return (
     <div className="fixed inset-0 bg-black/50 z-[400] flex items-end sm:items-center justify-center p-0 sm:p-4"

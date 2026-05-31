@@ -1,23 +1,26 @@
 @echo off
-title La Casita Deli — Prueba (cierra para detener)
+title La Casita Deli - Prueba
 color 0A
 cd /d "%~dp0"
 
 echo.
 echo  ============================================================
-echo    LA CASITA DELI — MODO PRUEBA
+echo    LA CASITA DELI - MODO PRUEBA
 echo    Para uso diario usa  iniciar-silencioso.vbs
 echo  ============================================================
 echo.
 
 :: Verificar .env
-if not exist "apps\api\.env" (
-  color 0C
-  echo  ERROR: No existe apps\api\.env
-  echo  Ejecuta configurar.bat para crearlo.
-  echo.
-  pause & exit /b 1
-)
+if not exist "apps\api\.env" goto :NoEnv
+goto :EnvOk
+:NoEnv
+color 0C
+echo  ERROR: No existe apps\api\.env
+echo  Ejecuta configurar.bat para crearlo.
+echo.
+pause
+exit /b 1
+:EnvOk
 
 :: Carpeta de logs
 if not exist "logs" mkdir logs
@@ -29,36 +32,35 @@ for /f "tokens=5" %%p in ('netstat -aon 2^>nul ^| findstr ":3003 " ^| findstr "L
 
 :: [1/3] API
 echo  [1/3] API (puerto 3002)...
-start "La Casita — API" cmd /k "cd /d "%~dp0apps\api" && node src\index.js"
+start /D "%~dp0apps\api" "La Casita - API" cmd /k "node src\index.js"
 timeout /t 3 /nobreak >nul
-echo         OK — http://localhost:3002/api/health
+echo         OK - http://localhost:3002/api/health
 echo.
 
 :: [2/3] Bodega PWA para TC52
 set "BODEGA=%~dp0..\lacasitadeli-almacen\pwa-bodega"
-if exist "%BODEGA%\server.js" (
-    echo  [2/3] TC52 Bodega (puerto 3003)...
-    start "La Casita — TC52 Bodega" cmd /k "cd /d "%BODEGA%" && node server.js"
-    timeout /t 2 /nobreak >nul
-    echo         OK — usa la IP local de esta PC en el TC52
-) else (
-    echo  [2/3] TC52 Bodega — no encontrado, omitiendo
-)
+if not exist "%BODEGA%\server.js" goto :NoBodega
+echo  [2/3] TC52 Bodega (puerto 3003)...
+start /D "%BODEGA%" "La Casita - TC52 Bodega" cmd /k "node server.js"
+timeout /t 2 /nobreak >nul
+echo         OK - usa la IP local de esta PC en el TC52
+goto :FinBodega
+:NoBodega
+echo  [2/3] TC52 Bodega - no encontrado, omitiendo
+:FinBodega
 echo.
 
 :: Abrir navegador cuando compile (~25 seg)
 start /B cmd /c "timeout /t 25 /nobreak >nul && start http://localhost:3001"
 
-:: [3/3] Next.js en ESTA ventana — cerrar aqui = detiene todo
-echo  [3/3] Panel web (puerto 3001) — espera 20-30 seg hasta "Ready"...
+:: [3/3] Next.js en ESTA ventana - cerrar aqui detiene todo
+echo  [3/3] Panel web (puerto 3001) - espera 20-30 seg hasta "Ready"...
 echo.
-echo  ─────────────────────────────────────────────────────────
-echo   Panel admin :  http://localhost:3001
-echo   API         :  http://localhost:3002/api/health
-echo   TC52 Bodega :  http://[IP-de-esta-PC]:3003
+echo  Panel admin :  http://localhost:3001
+echo  API         :  http://localhost:3002/api/health
+echo  TC52 Bodega :  http://[IP-de-esta-PC]:3003
 echo.
-echo   Cierra ESTA ventana para detener el sistema.
-echo  ─────────────────────────────────────────────────────────
+echo  Cierra ESTA ventana para detener el sistema.
 echo.
 
 cd /d "%~dp0apps\web"

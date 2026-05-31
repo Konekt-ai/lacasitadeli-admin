@@ -597,48 +597,50 @@ router.get('/tickets/:folio/detalle', async (req, res) => {
   const folio = parseInt(req.params.folio);
   if (!folio) return res.status(400).json({ error: 'Folio inválido' });
   try {
-    // VBasePolizaVentas usa v.ticket = folio del POS (no TicketsPS que usa folio CFDI)
-    const [lineasRes, totalRes, ticketRes] = await Promise.all([
-      mssql.query(`
-        SELECT
-          v.producto                              AS codigo,
-          ISNULL(a.Art_Descripcion, v.producto)   AS concepto,
-          SUM(v.cantidad)                         AS cantidad,
-          v.pu                                    AS valorUnitario,
-          SUM(v.importe)                          AS importe,
-          SUM(ISNULL(v.Costo, 0))                 AS costo
-        FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-        LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
-          ON a.Art_Codigo = v.producto
-        WHERE v.ticket = ${folio}
-        GROUP BY v.producto, a.Art_Descripcion, v.pu
-        ORDER BY SUM(v.importe) DESC
-      `),
-      mssql.query(`
-        SELECT SUM(importe) AS totalImporte
-        FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-        WHERE ticket = ${folio}
-      `),
-      mssql.query(`
-        SELECT TOP 1
-          ISNULL(T_ImporteTotal, 0)          AS importeTotal,
-          CONVERT(varchar(19), T_Fecha, 120) AS fecha,
-          T_Cajero                           AS cajero
-        FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
-        WHERE FolConsecutivo = ${folio}
-      `),
-    ]);
+    // Paso 1: obtener el registro exacto de Tickets (igual que la lista: el más reciente)
+    const ticketRes = await mssql.query(`
+      SELECT TOP 1
+        FolTda_Codigo,
+        FolEst_Codigo,
+        FolDoc_Codigo,
+        FolConsecutivo,
+        ISNULL(T_ImporteTotal, 0)          AS importeTotal,
+        CONVERT(varchar(19), T_Fecha, 120) AS fecha,
+        T_Cajero                           AS cajero
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE FolConsecutivo = ${folio}
+      ORDER BY T_Fecha DESC
+    `);
 
-    const sumaPoliza   = Number(totalRes.recordset[0]?.totalImporte  || 0);
-    const totalTickets = Number(ticketRes.recordset[0]?.importeTotal || 0);
+    const t = ticketRes.recordset[0];
+    if (!t) return res.json({ lineas: [], importeTotal: 0, sumaPoliza: 0, fecha: null, cajero: null });
+
+    // Paso 2: traer productos de TicketsPS usando los 4 campos exactos de ESE registro
+    const lineasRes = await mssql.query(`
+      SELECT
+        [Codigo]                           AS codigo,
+        [Concepto]                         AS concepto,
+        SUM([Cantidad])                    AS cantidad,
+        [ValorUnitario]                    AS valorUnitario,
+        SUM([Importe])                     AS importe
+      FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
+      WHERE FolTda_Codigo  = ${t.FolTda_Codigo}
+        AND FolEst_Codigo  = ${t.FolEst_Codigo}
+        AND FolDoc_Codigo  = ${t.FolDoc_Codigo}
+        AND FolConsecutivo = ${t.FolConsecutivo}
+      GROUP BY [Codigo], [Concepto], [ValorUnitario]
+      ORDER BY SUM([Importe]) DESC
+    `);
+
+    const lineas     = lineasRes.recordset || [];
+    const sumaLineas = lineas.reduce((s, l) => s + Number(l.importe || 0), 0);
 
     res.json({
-      lineas:       lineasRes.recordset || [],
-      // Prioridad: T_ImporteTotal del registro Tickets; si difiere mucho usar suma de poliza
-      importeTotal: totalTickets > 0 ? totalTickets : sumaPoliza,
-      sumaPoliza,
-      fecha:        ticketRes.recordset[0]?.fecha  ?? null,
-      cajero:       ticketRes.recordset[0]?.cajero ?? null,
+      lineas,
+      importeTotal: sumaLineas,   // suma real de las líneas mostradas
+      sumaPoliza:   sumaLineas,
+      fecha:        t.fecha  ?? null,
+      cajero:       t.cajero ?? null,
     });
   } catch (err) {
     console.error('Error ticket detalle:', err.message);
