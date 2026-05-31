@@ -283,11 +283,14 @@ function buildRecentTicketsQuery({ limit = 50 } = {}) {
   `;
 }
 
-function buildTicketKPIsQuery({ period = 'day' } = {}) {
+function buildTicketKPIsQuery({ period = 'day', maxDate = null } = {}) {
   let whereClause;
-  if (period === 'week')       whereClause = `WHERE T_Fecha >= DATEADD(DAY, -7, GETDATE())`;
-  else if (period === 'month') whereClause = `WHERE T_Fecha >= DATEADD(DAY, -30, GETDATE())`;
-  else                         whereClause = `WHERE CAST(T_Fecha AS DATE) = CAST(GETDATE() AS DATE)`;
+  // Usar maxDate como ancla si está disponible (consistente con VBasePolizaVentas)
+  // Si no hay maxDate (endpoint independiente), usar GETDATE()
+  const anchor = maxDate ? `'${maxDate}'` : 'GETDATE()';
+  if (period === 'week')       whereClause = `WHERE T_Fecha >= DATEADD(DAY, -7, ${anchor})`;
+  else if (period === 'month') whereClause = `WHERE T_Fecha >= DATEADD(DAY, -30, ${anchor})`;
+  else                         whereClause = `WHERE CAST(T_Fecha AS DATE) = CAST(${anchor} AS DATE)`;
 
   return `
     SELECT

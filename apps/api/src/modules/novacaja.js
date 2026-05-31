@@ -172,8 +172,8 @@ router.get('/dashboard', async (req, res) => {
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
       mssql.query(buildDashboardLowStockCountQuery()),
-      // Tickets en tiempo real (GETDATE) — VBasePolizaVentas tiene retraso y no muestra hoy
-      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
+      // Tickets anclado a maxDate — mismo día que VBasePolizaVentas → números consistentes
+      mssql.query(buildTicketKPIsQuery({ period, maxDate })).catch(() => ({ recordset: [{}] })),
     ]);
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
