@@ -626,15 +626,15 @@ router.get('/tickets/:folio/detalle', async (req, res) => {
         [Concepto]                                        AS concepto,
         SUM([Cantidad])                                   AS cantidad,
         [ValorUnitario]                                   AS valorUnitario,
-        SUM([Importe] + ISNULL([MontoIva], 0))            AS importe,
-        MAX(ISNULL([TasaIvaLinea], 0))                    AS tasaIva
+        SUM([Importe] + ISNULL([MontoIva], 0) + ISNULL([MontoIeps], 0)) AS importe,
+        MAX(ISNULL([TasaIvaLinea], 0))                                  AS tasaIva
       FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
       WHERE FolTda_Codigo  = ${t.FolTda_Codigo}
         AND FolEst_Codigo  = ${t.FolEst_Codigo}
         AND FolDoc_Codigo  = ${t.FolDoc_Codigo}
         AND FolConsecutivo = ${t.FolConsecutivo}
       GROUP BY [Codigo], [Concepto], [ValorUnitario]
-      ORDER BY SUM([Importe] + ISNULL([MontoIva], 0)) DESC
+      ORDER BY SUM([Importe] + ISNULL([MontoIva], 0) + ISNULL([MontoIeps], 0)) DESC
     `);
 
     const lineas     = lineasRes.recordset || [];
