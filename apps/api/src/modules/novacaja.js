@@ -185,8 +185,9 @@ router.get('/dashboard', async (req, res) => {
       // Ticket count: tabla Tickets en tiempo real (GETDATE)
       totalTickets:     ticketKPIs.totalTickets              || polizaKPIs.totalTickets || 0,
       ticketPromedio:   ticketKPIs.ticketPromedio            || polizaKPIs.ticketPromedio || 0,
-      // Ventas, costo y ganancia: VBasePolizaVentas — misma fuente, números consistentes
-      totalVentas:      polizaKPIs.totalVentas      || 0,
+      // Ventas: SUMA de T_ImporteTotal de la tabla Tickets (total real de caja por periodo)
+      totalVentas:      ticketKPIs.totalVentas ?? polizaKPIs.totalVentas ?? 0,
+      // Costo, unidades y ganancia: VBasePolizaVentas (Tickets no trae costo)
       totalCosto:       polizaKPIs.totalCosto       || 0,
       unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
       ganancia:         polizaKPIs.ganancia         || 0,
