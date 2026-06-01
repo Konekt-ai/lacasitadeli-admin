@@ -687,6 +687,167 @@ router.get('/buscar', async (req, res) => {
   }
 });
 
+// ── GET /api/almacen/buscar-coincidencias?desc=... ───────────────────────────
+// Auto-sugerencias por NOMBRE: tokeniza la descripción del proveedor y casa por
+// varias palabras (AND). Degrada (3→2→1 palabras) si no encuentra, para no
+// quedarse vacío. Usado por el lector de facturas para enlazar rápido.
+const STOPWORDS = new Set(['PK','CT','OZ','LB','ML','GR','PACK','THE','AND','CON','PARA','DEL','LOS','LAS','SIN','POR']);
+function tokensDeDescripcion(desc) {
+  const limpio = String(desc || '').toUpperCase().replace(/[-/.,()&]/g, ' ');
+  const toks = limpio.split(/\s+/).filter(t =>
+    t.length >= 3 && !/^\d/.test(t) && !STOPWORDS.has(t) && !/^\d+(CT|OZ|LB|ML|PK|G)$/.test(t)
+  );
+  return [...new Set(toks)].slice(0, 4);
+}
+async function coincidenciasPorTokens(tokens) {
+  for (let n = Math.min(tokens.length, 3); n >= 1; n--) {
+    const sub   = tokens.slice(0, n);
+    const where = sub.map(t => `a.Art_Descripcion LIKE '%${esc(t)}%'`).join(' AND ');
+    const r = await mssql.query(`
+      SELECT TOP 8
+        a.Art_Codigo                            AS codigo,
+        a.Art_Descripcion                       AS nombre,
+        ISNULL(SUM(aa.AA_ExistenciaActualU), 0) AS stock
+      FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK) ON aa.Art_Codigo = a.Art_Codigo
+      WHERE (${where}) AND a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+      GROUP BY a.Art_Codigo, a.Art_Descripcion
+      ORDER BY stock DESC`);
+    if ((r.recordset || []).length) return { palabras: sub, items: r.recordset };
+  }
+  return { palabras: [], items: [] };
+}
+router.get('/buscar-coincidencias', async (req, res) => {
+  const desc = (req.query.desc || '').trim();
+  if (desc.length < 3) return res.json({ palabras: [], items: [] });
+  try {
+    res.json(await coincidenciasPorTokens(tokensDeDescripcion(desc)));
+  } catch (err) {
+    console.error('buscar-coincidencias:', err.message);
+    res.status(500).json({ palabras: [], items: [], error: err.message });
+  }
+});
+
+// ── PRODUCTOS PENDIENTES (staging local — NO toca NovaCaja) ───────────────────
+// Productos nuevos detectados (en factura PDF o TC52) que aún no existen en el
+// catálogo de NovaCaja. Se registran aquí y se les asigna su código de barras
+// real al llegar a bodega (TC52 o panel). No se escribe en compucaja hasta resolver.
+
+// POST /api/almacen/productos-pendientes — registrar un producto nuevo
+router.post('/productos-pendientes', (req, res) => {
+  const b = req.body || {};
+  const desc = String(b.descripcion_proveedor || '').trim();
+  if (!desc) return res.status(400).json({ error: 'descripcion_proveedor es requerida' });
+  const db = getDb();
+  try {
+    // Evita duplicados: mismo proveedor + sku que siga pendiente
+    if (b.sku_proveedor) {
+      const ya = db.prepare(
+        `SELECT * FROM productos_pendientes WHERE IFNULL(proveedor,'') = IFNULL(?, '') AND sku_proveedor = ? AND estado='pendiente'`
+      ).get(b.proveedor || null, String(b.sku_proveedor));
+      if (ya) return res.json({ ok: true, id: ya.id, yaExistia: true, pendiente: ya });
+    }
+    const info = db.prepare(`
+      INSERT INTO productos_pendientes
+        (proveedor, sku_proveedor, descripcion_proveedor, unidad, piezas_por_caja, cajas, precio_unitario, origen, notas)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      b.proveedor || null,
+      b.sku_proveedor ? String(b.sku_proveedor) : null,
+      desc,
+      b.unidad || null,
+      parseInt(b.piezas_por_caja) || 1,
+      parseInt(b.cajas) || 0,
+      b.precio_unitario != null ? parseFloat(b.precio_unitario) : null,
+      b.origen || 'pdf',
+      b.notas || null
+    );
+    const pendiente = db.prepare(`SELECT * FROM productos_pendientes WHERE id=?`).get(info.lastInsertRowid);
+    res.status(201).json({ ok: true, id: info.lastInsertRowid, pendiente });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/almacen/productos-pendientes?estado=pendiente — listar
+router.get('/productos-pendientes', (req, res) => {
+  const estado = (req.query.estado || 'pendiente').trim();
+  const db = getDb();
+  try {
+    let sql = `SELECT * FROM productos_pendientes`;
+    const params = [];
+    if (estado && estado !== 'todos') { sql += ` WHERE estado = ?`; params.push(estado); }
+    sql += ` ORDER BY created_at DESC`;
+    res.json(db.prepare(sql).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/almacen/productos-pendientes/buscar?q=... — para TC52/panel
+router.get('/productos-pendientes/buscar', (req, res) => {
+  const q = (req.query.q || '').trim();
+  const db = getDb();
+  try {
+    if (!q) return res.json(db.prepare(`SELECT * FROM productos_pendientes WHERE estado='pendiente' ORDER BY created_at DESC`).all());
+    const like = `%${q}%`;
+    res.json(db.prepare(
+      `SELECT * FROM productos_pendientes WHERE estado='pendiente' AND (descripcion_proveedor LIKE ? OR sku_proveedor LIKE ?) ORDER BY created_at DESC`
+    ).all(like, like));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/almacen/productos-pendientes/:id/resolver — asignar código de barras real
+// Marca el pendiente como resuelto y (best-effort) crea la equivalencia en
+// productos_compra para que la próxima factura del proveedor lo enlace solo.
+// NO crea el producto en NovaCaja (eso lo hace el cliente en su POS).
+router.post('/productos-pendientes/:id/resolver', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  const b = req.body || {};
+  const codigo_barras = String(b.codigo_barras || '').trim();
+  if (!codigo_barras) return res.status(400).json({ error: 'codigo_barras es requerido' });
+  const db = getDb();
+  try {
+    const p = db.prepare(`SELECT * FROM productos_pendientes WHERE id=?`).get(id);
+    if (!p) return res.status(404).json({ error: 'Pendiente no encontrado' });
+
+    const ppc = parseInt(b.piezas_por_caja) || p.piezas_por_caja || 1;
+    db.prepare(`
+      UPDATE productos_pendientes
+      SET estado='resuelto', codigo_barras=?, art_codigo=?, piezas_por_caja=?, resolved_at=datetime('now')
+      WHERE id=?
+    `).run(codigo_barras, b.art_codigo || codigo_barras, ppc, id);
+
+    // Best-effort: equivalencia para auto-mapear futuras facturas (no bloquea la resolución)
+    let equivalencia = false;
+    if (p.proveedor && p.sku_proveedor) {
+      try {
+        await mssql.query(`
+          MERGE productos_compra AS t
+          USING (SELECT '${esc(p.proveedor)}' AS p, '${esc(p.sku_proveedor)}' AS s) AS src
+            ON t.proveedor = src.p AND t.sku_proveedor = src.s
+          WHEN MATCHED THEN UPDATE SET codigo_barras='${esc(codigo_barras)}', piezas_por_caja=${ppc}, activo=1
+          WHEN NOT MATCHED THEN
+            INSERT (proveedor, sku_proveedor, descripcion_proveedor, unidad_compra, piezas_por_caja, codigo_barras)
+            VALUES ('${esc(p.proveedor)}', '${esc(p.sku_proveedor)}', '${esc(p.descripcion_proveedor)}', '${esc(p.unidad || 'Caja')}', ${ppc}, '${esc(codigo_barras)}');
+        `);
+        equivalencia = true;
+      } catch (e) { console.error('resolver equivalencia:', e.message); }
+    }
+    res.json({ ok: true, id, codigo_barras, equivalencia });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/almacen/productos-pendientes/:id — descartar (soft)
+router.delete('/productos-pendientes/:id', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  const db = getDb();
+  try {
+    const p = db.prepare(`SELECT id FROM productos_pendientes WHERE id=?`).get(id);
+    if (!p) return res.status(404).json({ error: 'Pendiente no encontrado' });
+    db.prepare(`UPDATE productos_pendientes SET estado='descartado' WHERE id=?`).run(id);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── Pedidos de recepción ──────────────────────────────────────────────────────
 
 function genFolio() {

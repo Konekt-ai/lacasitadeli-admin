@@ -13,7 +13,7 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'caducidades' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'caducidades' | 'discrepancias' | 'facturas' | 'pendientes' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'stock-surtido',  label: 'Stock & Surtido',   icon: 'inventory_2'    },
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
@@ -22,6 +22,7 @@ const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] =
   { id: 'caducidades',    label: 'Caducidades',        icon: 'hourglass_bottom'},
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
+  { id: 'pendientes',     label: 'Productos nuevos',   icon: 'pending_actions'},
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
 ];
 
@@ -3044,6 +3045,555 @@ const ESTADO_FACTURA_META: Record<EstadoFactura, { label: string; color: string;
 interface FacturaItemForm { art_codigo: string; nombre: string; cantidad: string; precio_unitario: string }
 const ITEM_VACIO: FacturaItemForm = { art_codigo: '', nombre: '', cantidad: '', precio_unitario: '' };
 
+// ── Lector de facturas PDF → orden de recepción ───────────────────────────────
+type PdfMapeo = { codigo_barras: string; nombre_interno: string | null; piezas_por_caja: number };
+type PdfItem = {
+  sku_proveedor: string; descripcion_proveedor: string; unidad: string;
+  cajas_esperadas: number; cajas_ordenadas: number | null;
+  precio_unitario: number | null; importe: number | null; mapeo: PdfMapeo | null;
+  pendiente?: boolean; // registrado como producto nuevo (aún sin código en NovaCaja)
+};
+type PdfData = {
+  ok: boolean; proveedor: string; referencia: string | null; fecha: string | null;
+  total_items: number; mapeados: number; sin_mapear: number; items: PdfItem[];
+};
+
+// Sub-fila para enlazar un SKU del proveedor con un producto interno
+type Cand = { codigo: string; nombre: string; stock?: number };
+
+function EnlazarSku({ item, proveedor, onLinked, onPending, onCancel, onNotify }: {
+  item: PdfItem; proveedor: string;
+  onLinked: (m: PdfMapeo) => void; onPending: () => void; onCancel: () => void;
+  onNotify: (m: string, t?: 'success' | 'error') => void;
+}) {
+  const [q,   setQ]   = useState('');
+  const [sug, setSug] = useState<Cand[]>([]);
+  const [sel, setSel] = useState<Cand | null>(null);
+  const [ppc, setPpc] = useState('1');
+  const [saving,   setSaving]   = useState(false);
+  const [regNuevo, setRegNuevo] = useState(false);
+  const [cargando, setCargando] = useState(true);
+  const [auto,     setAuto]     = useState(true); // sugerencias por nombre (no manual)
+
+  // Al abrir: auto-sugerir por NOMBRE (sin teclear) usando la descripción del proveedor
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/almacen/buscar-coincidencias?desc=${encodeURIComponent(item.descripcion_proveedor)}`).then(r => r.json());
+        if (vivo) setSug(Array.isArray(r.items) ? r.items : []);
+      } catch { /* silent */ }
+      finally { if (vivo) setCargando(false); }
+    })();
+    return () => { vivo = false; };
+  }, [item.descripcion_proveedor]);
+
+  const buscarManual = async (text: string) => {
+    setQ(text); setSel(null); setAuto(false);
+    if (text.trim().length < 2) { setSug([]); return; }
+    setCargando(true);
+    try {
+      const r = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(text)}`).then(r => r.json());
+      setSug((Array.isArray(r) ? r : []).slice(0, 8).map((x: any) => ({ codigo: x.codigo, nombre: x.nombre, stock: x.stock })));
+    } catch { /* silent */ }
+    finally { setCargando(false); }
+  };
+
+  const guardar = async () => {
+    if (!sel) { onNotify('Elige el producto interno', 'error'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch('/api/recepcion/equivalencias', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proveedor, sku_proveedor: item.sku_proveedor,
+          descripcion_proveedor: item.descripcion_proveedor, unidad_compra: item.unidad,
+          piezas_por_caja: parseInt(ppc) || 1, codigo_barras: sel.codigo,
+        }),
+      });
+      const j = await res.json();
+      if (res.ok) onLinked({ codigo_barras: sel.codigo, nombre_interno: j.nombre_interno || sel.nombre, piezas_por_caja: parseInt(ppc) || 1 });
+      else onNotify(j.error || 'Error al enlazar', 'error');
+    } catch { onNotify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  // Registrar como producto NUEVO (no está en NovaCaja). Queda pendiente: se le
+  // asignará su código de barras al llegar a la bodega (TC52 o panel).
+  const registrarNuevo = async () => {
+    setRegNuevo(true);
+    try {
+      const res = await fetch('/api/almacen/productos-pendientes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proveedor, sku_proveedor: item.sku_proveedor,
+          descripcion_proveedor: item.descripcion_proveedor, unidad: item.unidad,
+          piezas_por_caja: parseInt(ppc) || 1, cajas: item.cajas_esperadas || 0,
+          precio_unitario: item.precio_unitario, origen: 'pdf',
+        }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) {
+        onNotify(j.yaExistia ? 'Ya estaba registrado como pendiente' : 'Registrado como producto nuevo (pendiente)');
+        onPending();
+      } else onNotify(j.error || 'Error al registrar', 'error');
+    } catch { onNotify('Error de conexión', 'error'); }
+    finally { setRegNuevo(false); }
+  };
+
+  return (
+    <div className="bg-amber-50/60 border border-amber-200 rounded-lg p-3 mt-1">
+      <p className="text-[10px] font-label uppercase tracking-widest text-amber-700 mb-2">
+        Enlazar “{item.descripcion_proveedor}” (SKU {item.sku_proveedor})
+      </p>
+      <div className="flex flex-col sm:flex-row gap-2 mb-2">
+        <input value={q} onChange={e => buscarManual(e.target.value)}
+          placeholder="¿No es ninguna de abajo? Busca por nombre o código…"
+          className={cn('flex-1 px-3 py-2 bg-background border rounded-lg text-sm font-body outline-none focus:border-primary',
+            sel ? 'border-emerald-400 bg-emerald-50/40' : 'border-outline-variant/20')} />
+        <div className="w-28 flex-shrink-0">
+          <input type="number" min="1" value={ppc} onChange={e => setPpc(e.target.value)} placeholder="Pzas/caja"
+            title="Piezas por caja"
+            className="w-full px-2 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body text-center outline-none focus:border-primary" />
+        </div>
+        <button onClick={guardar} disabled={saving || !sel}
+          className={cn('px-3 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest',
+            saving || !sel ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary')}>
+          {saving ? '...' : 'Enlazar'}
+        </button>
+        <button onClick={onCancel} className="px-2 py-2 text-stone-400 hover:text-stone-600 rounded-lg">
+          <Icon name="close" className="text-base" />
+        </button>
+      </div>
+
+      {/* Coincidencias (auto por nombre, o resultados de búsqueda) */}
+      <p className="text-[9px] font-label uppercase tracking-widest text-stone-400 mb-1">
+        {auto ? 'Coincidencias en el inventario por nombre' : 'Resultados'}
+      </p>
+      {cargando ? (
+        <p className="text-[11px] font-body text-stone-400 py-1">Buscando…</p>
+      ) : sug.length === 0 ? (
+        <p className="text-[11px] font-body text-stone-400 py-1">
+          Sin coincidencias. Escribe arriba para buscar manualmente.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+          {sug.map(s => (
+            <button key={s.codigo} onClick={() => { setSel(s); setQ(s.nombre); }}
+              className={cn('w-full text-left px-3 py-1.5 rounded-lg text-sm font-body flex items-center gap-2 border transition-all',
+                sel?.codigo === s.codigo ? 'border-emerald-400 bg-emerald-50' : 'border-outline-variant/10 bg-surface hover:bg-primary/5')}>
+              {sel?.codigo === s.codigo && <Icon name="check_circle" className="text-emerald-500 text-sm flex-shrink-0" />}
+              <span className="flex-1 min-w-0 truncate">{s.nombre}</span>
+              {typeof s.stock === 'number' && <span className="text-[10px] font-label text-stone-400 flex-shrink-0">stock {s.stock}</span>}
+              <span className="text-[10px] font-mono text-stone-400 flex-shrink-0">{s.codigo}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* ¿De plano no está en la DB? Registrarlo como producto nuevo (pendiente) */}
+      <div className="mt-2 pt-2 border-t border-amber-200/60 flex items-center justify-between gap-2">
+        <span className="text-[10px] font-body text-stone-500">
+          ¿No está en el inventario? Regístralo y asígnale su código al llegar a bodega.
+        </span>
+        <button onClick={registrarNuevo} disabled={regNuevo}
+          className="px-3 py-1.5 bg-amber-500 text-white rounded-lg text-[10px] font-label font-bold uppercase tracking-widest hover:bg-amber-600 transition-all flex items-center gap-1 disabled:opacity-50 flex-shrink-0">
+          <Icon name="add_circle" className="text-sm" /> {regNuevo ? '...' : 'Registrar como nuevo'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FacturaPdfModal({ onClose, onNotify, onCreated }: {
+  onClose: () => void; onNotify: (m: string, t?: 'success' | 'error') => void; onCreated: () => void;
+}) {
+  const [loading,  setLoading]  = useState(false);
+  const [data,     setData]     = useState<PdfData | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [linkIdx,  setLinkIdx]  = useState<number | null>(null);
+
+  const subir = async (file: File) => {
+    setLoading(true); setData(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const res = await fetch('/api/facturas/leer-pdf', {
+        method: 'POST', headers: { 'Content-Type': 'application/pdf' }, body: buf,
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) onNotify(j.error || 'No se pudo leer el PDF', 'error');
+      else setData(j);
+    } catch { onNotify('Error al leer el PDF', 'error'); }
+    finally { setLoading(false); }
+  };
+
+  const aplicarMapeo = (idx: number, mapeo: PdfMapeo) => {
+    setData(d => d ? { ...d, items: d.items.map((it, i) => i === idx ? { ...it, mapeo, pendiente: false } : it) } : d);
+    setLinkIdx(null);
+  };
+
+  const marcarPendiente = (idx: number) => {
+    setData(d => d ? { ...d, items: d.items.map((it, i) => i === idx ? { ...it, pendiente: true, mapeo: null } : it) } : d);
+    setLinkIdx(null);
+  };
+
+  const items      = data?.items ?? [];
+  const mapeados   = items.filter(i => i.mapeo).length;
+  const pendientes = items.filter(i => i.pendiente).length;
+  const listos     = items.filter(i => i.mapeo && i.cajas_esperadas > 0).length;
+
+  const crearOrden = async () => {
+    if (!data) return;
+    const itemsOrden = items.filter(i => i.mapeo && i.cajas_esperadas > 0).map(i => ({
+      codigo_barras:   i.mapeo!.codigo_barras,
+      cajas_esperadas: i.cajas_esperadas,
+      piezas_por_caja: i.mapeo!.piezas_por_caja || 1,
+    }));
+    if (!itemsOrden.length) { onNotify('No hay productos enlazados con cajas para crear la orden', 'error'); return; }
+    setCreating(true);
+    try {
+      const res = await fetch('/api/recepcion/esperadas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          proveedor: data.proveedor, fecha_esperada: null,
+          notas: `Importado de factura ${data.referencia || ''} (PDF)`.trim(),
+          items: itemsOrden,
+        }),
+      });
+      const j = await res.json();
+      if (res.ok) { onNotify(`Orden ${j.folio} creada con ${itemsOrden.length} productos`); onCreated(); onClose(); }
+      else onNotify(j.error || 'Error al crear la orden', 'error');
+    } catch { onNotify('Error de conexión', 'error'); }
+    finally { setCreating(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-surface w-full max-w-5xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="p-5 border-b border-outline-variant/10 flex items-center justify-between">
+          <div>
+            <h3 className="font-serif text-xl text-primary">Leer factura PDF</h3>
+            <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
+              Sube el PDF → enlaza los productos → crea la orden de recepción
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-surface-container">
+            <Icon name="close" className="text-xl" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {!data ? (
+            <div className="flex flex-col items-center justify-center py-16">
+              {loading ? (
+                <>
+                  <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
+                  <p className="font-serif italic text-primary">Leyendo el PDF…</p>
+                </>
+              ) : (
+                <>
+                  <Icon name="picture_as_pdf" className="text-6xl text-stone-300 mb-4" />
+                  <label className="px-5 py-2.5 bg-primary text-on-primary rounded-xl text-xs font-label font-bold uppercase tracking-widest cursor-pointer hover:bg-primary-container transition-all flex items-center gap-2">
+                    <Icon name="upload_file" className="text-base" /> Seleccionar PDF
+                    <input type="file" accept="application/pdf" className="hidden"
+                      onChange={e => { const f = e.target.files?.[0]; if (f) subir(f); }} />
+                  </label>
+                  <p className="text-[11px] font-body text-stone-400 mt-3 text-center max-w-xs">
+                    Proveedores soportados: Nassau Candy. Otros formatos se reconocen y avisan si no hay plantilla.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
+              {/* Resumen */}
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <span className="font-serif text-lg text-primary">{data.proveedor}</span>
+                {data.referencia && <span className="text-xs font-mono text-stone-500">Factura {data.referencia}</span>}
+                {data.fecha && <span className="text-xs font-label text-stone-400">{data.fecha}</span>}
+                <span className="ml-auto text-[10px] font-label uppercase tracking-widest text-stone-500">
+                  {items.length} renglones · <span className="text-emerald-600">{mapeados} enlazados</span>
+                  {pendientes > 0 && <> · <span className="text-purple-600">{pendientes} nuevos</span></>}
+                  {' · '}<span className="text-amber-600">{items.length - mapeados - pendientes} por enlazar</span>
+                </span>
+              </div>
+
+              {/* Tabla */}
+              <div className="border border-outline-variant/10 rounded-xl overflow-hidden">
+                <div className="max-h-[48vh] overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-surface-container-low sticky top-0">
+                      <tr>
+                        <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">SKU</th>
+                        <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Descripción (proveedor)</th>
+                        <th className="text-right px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Cajas</th>
+                        <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Producto interno</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-container">
+                      {items.map((it, idx) => (
+                        <React.Fragment key={`${it.sku_proveedor}-${idx}`}>
+                          <tr className="hover:bg-background">
+                            <td className="px-3 py-2 font-mono text-[11px] text-stone-500 align-top">{it.sku_proveedor}</td>
+                            <td className="px-3 py-2 font-body text-on-surface align-top">{it.descripcion_proveedor}</td>
+                            <td className="px-3 py-2 text-right font-serif font-bold align-top">
+                              <span className={it.cajas_esperadas > 0 ? 'text-on-surface' : 'text-stone-300'}>{it.cajas_esperadas}</span>
+                            </td>
+                            <td className="px-3 py-2 align-top">
+                              {it.mapeo ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-label text-emerald-700">
+                                  <Icon name="check_circle" className="text-sm" />
+                                  {it.mapeo.nombre_interno || it.mapeo.codigo_barras}
+                                  <span className="text-stone-400 ml-1">×{it.mapeo.piezas_por_caja}</span>
+                                </span>
+                              ) : it.pendiente ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-label text-purple-700">
+                                  <Icon name="schedule" className="text-sm" /> Producto nuevo (pendiente)
+                                  <button onClick={() => setLinkIdx(idx)} className="ml-1 text-stone-400 hover:text-stone-600 underline text-[10px]">cambiar</button>
+                                </span>
+                              ) : linkIdx === idx ? null : (
+                                <button onClick={() => setLinkIdx(idx)}
+                                  className="px-2.5 py-1 bg-amber-100 text-amber-700 rounded-lg text-[10px] font-label font-bold uppercase tracking-wider hover:bg-amber-200 transition-all flex items-center gap-1">
+                                  <Icon name="link" className="text-sm" /> Enlazar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {linkIdx === idx && (
+                            <tr><td colSpan={4} className="px-3 pb-2">
+                              <EnlazarSku item={it} proveedor={data.proveedor} onNotify={onNotify}
+                                onCancel={() => setLinkIdx(null)} onLinked={(m) => aplicarMapeo(idx, m)}
+                                onPending={() => marcarPendiente(idx)} />
+                            </td></tr>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer */}
+        {data && (
+          <div className="p-4 border-t border-outline-variant/10 flex items-center justify-between gap-3">
+            <p className="text-[11px] font-label text-stone-400">
+              Se crearán <span className="text-primary font-bold">{listos}</span> productos (solo los enlazados con cajas &gt; 0).
+              {pendientes > 0 && <> Los <span className="text-purple-600 font-bold">{pendientes} nuevos</span> quedan pendientes hasta tener código.</>}
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setData(null)} className="px-4 py-2 bg-surface-container text-stone-500 rounded-lg text-xs font-label uppercase tracking-widest">
+                Otro PDF
+              </button>
+              <button onClick={crearOrden} disabled={creating || listos === 0}
+                className={cn('px-4 py-2 rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 transition-all',
+                  creating || listos === 0 ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary-container')}>
+                {creating ? <div className="w-3 h-3 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" /> : <Icon name="local_shipping" className="text-base" />}
+                Crear orden de recepción
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Productos nuevos pendientes de código ────────────────────────────────────
+type Pendiente = {
+  id: number; proveedor: string | null; sku_proveedor: string | null;
+  descripcion_proveedor: string; unidad: string | null; piezas_por_caja: number;
+  cajas: number; precio_unitario: number | null; estado: string;
+  codigo_barras: string | null; origen: string; created_at: string;
+};
+
+function PendientesView() {
+  const [lista,   setLista]   = useState<Pendiente[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [estado,  setEstado]  = useState<'pendiente' | 'resuelto' | 'todos'>('pendiente');
+  const [resolIdx, setResolIdx] = useState<number | null>(null);
+  const [notif,   setNotif]   = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type }); setTimeout(() => setNotif(null), 3500);
+  };
+
+  const fetchLista = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/almacen/productos-pendientes?estado=${estado}`).then(r => r.json());
+      setLista(Array.isArray(r) ? r : []);
+    } catch { notify('Error al cargar pendientes', 'error'); }
+    finally { setLoading(false); }
+  }, [estado]);
+
+  useEffect(() => { fetchLista(); }, [fetchLista]);
+
+  const descartar = async (id: number) => {
+    if (!confirm('¿Descartar este producto pendiente?')) return;
+    try {
+      const res = await fetch(`/api/almacen/productos-pendientes/${id}`, { method: 'DELETE' });
+      if (res.ok) { notify('Descartado'); fetchLista(); }
+      else notify('No se pudo descartar', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+  };
+
+  return (
+    <div className="space-y-4">
+      {notif && (
+        <div className={cn('fixed top-6 right-6 z-[300] px-4 py-2.5 rounded-xl shadow-lg text-sm font-label',
+          notif.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white')}>
+          {notif.msg}
+        </div>
+      )}
+
+      {/* Header + filtro */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-serif text-xl text-primary">Productos nuevos (pendientes de código)</h3>
+          <p className="text-[11px] font-body text-stone-400 mt-0.5">
+            Productos detectados en facturas/TC52 que aún no existen en NovaCaja. Asígnales su código de barras al llegar a la bodega.
+          </p>
+        </div>
+        <div className="flex bg-surface-container rounded-xl p-1">
+          {(['pendiente', 'resuelto', 'todos'] as const).map(e => (
+            <button key={e} onClick={() => setEstado(e)}
+              className={cn('px-3 py-1.5 rounded-lg text-[11px] font-label uppercase tracking-widest transition-all',
+                estado === e ? 'bg-primary text-on-primary' : 'text-stone-500 hover:text-stone-700')}>
+              {e === 'pendiente' ? 'Pendientes' : e === 'resuelto' ? 'Resueltos' : 'Todos'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>
+      ) : lista.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-stone-300">
+          <Icon name="check_circle" className="text-5xl mb-3" />
+          <p className="font-body text-stone-400">No hay productos {estado === 'pendiente' ? 'pendientes' : estado === 'resuelto' ? 'resueltos' : ''}.</p>
+        </div>
+      ) : (
+        <div className="border border-outline-variant/10 rounded-xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-surface-container-low">
+              <tr>
+                <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Descripción</th>
+                <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Proveedor / SKU</th>
+                <th className="text-right px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Pzas/caja</th>
+                <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Estado</th>
+                <th className="text-right px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Acción</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-surface-container">
+              {lista.map((p, idx) => (
+                <React.Fragment key={p.id}>
+                  <tr className="hover:bg-background">
+                    <td className="px-3 py-2 font-body text-on-surface align-top">{p.descripcion_proveedor}</td>
+                    <td className="px-3 py-2 align-top text-[11px]">
+                      <span className="font-label text-stone-600">{p.proveedor || '—'}</span>
+                      {p.sku_proveedor && <span className="font-mono text-stone-400 ml-1">· {p.sku_proveedor}</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right font-serif align-top">{p.piezas_por_caja}</td>
+                    <td className="px-3 py-2 align-top">
+                      {p.estado === 'resuelto' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-label text-emerald-700">
+                          <Icon name="check_circle" className="text-sm" /> {p.codigo_barras}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-label text-purple-700">
+                          <Icon name="schedule" className="text-sm" /> Pendiente
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right align-top">
+                      {p.estado === 'pendiente' && (
+                        <div className="inline-flex gap-1">
+                          <button onClick={() => setResolIdx(resolIdx === idx ? null : idx)}
+                            className="px-2.5 py-1 bg-primary text-on-primary rounded-lg text-[10px] font-label font-bold uppercase tracking-wider hover:bg-primary-container transition-all flex items-center gap-1">
+                            <Icon name="barcode_scanner" className="text-sm" /> Asignar código
+                          </button>
+                          <button onClick={() => descartar(p.id)}
+                            className="px-2 py-1 text-stone-400 hover:text-rose-600 rounded-lg">
+                            <Icon name="delete" className="text-base" />
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  {resolIdx === idx && p.estado === 'pendiente' && (
+                    <tr><td colSpan={5} className="px-3 pb-2">
+                      <ResolverPendiente pendiente={p} onNotify={notify}
+                        onCancel={() => setResolIdx(null)}
+                        onResolved={() => { setResolIdx(null); fetchLista(); }} />
+                    </td></tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Sub-fila para asignar el código de barras real a un producto pendiente
+function ResolverPendiente({ pendiente, onResolved, onCancel, onNotify }: {
+  pendiente: Pendiente; onResolved: () => void; onCancel: () => void;
+  onNotify: (m: string, t?: 'success' | 'error') => void;
+}) {
+  const [codigo, setCodigo] = useState('');
+  const [ppc,    setPpc]    = useState(String(pendiente.piezas_por_caja || 1));
+  const [saving, setSaving] = useState(false);
+
+  const resolver = async () => {
+    const cb = codigo.trim();
+    if (!cb) { onNotify('Escribe o escanea el código de barras', 'error'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/almacen/productos-pendientes/${pendiente.id}/resolver`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo_barras: cb, piezas_por_caja: parseInt(ppc) || 1 }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) {
+        onNotify(j.equivalencia ? 'Código asignado y enlace creado para futuras facturas' : 'Código asignado');
+        onResolved();
+      } else onNotify(j.error || 'Error al asignar', 'error');
+    } catch { onNotify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 mt-1 flex flex-col sm:flex-row items-stretch sm:items-end gap-2">
+      <div className="flex-1">
+        <label className="text-[9px] font-label uppercase tracking-widest text-stone-400">Código de barras real</label>
+        <input autoFocus value={codigo} onChange={e => setCodigo(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') resolver(); }}
+          placeholder="Escanea o escribe el código…"
+          className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-mono outline-none focus:border-primary" />
+      </div>
+      <div className="w-28 flex-shrink-0">
+        <label className="text-[9px] font-label uppercase tracking-widest text-stone-400">Pzas/caja</label>
+        <input type="number" min="1" value={ppc} onChange={e => setPpc(e.target.value)}
+          className="w-full px-2 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body text-center outline-none focus:border-primary" />
+      </div>
+      <button onClick={resolver} disabled={saving}
+        className="px-3 py-2 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest disabled:opacity-50">
+        {saving ? '...' : 'Guardar'}
+      </button>
+      <button onClick={onCancel} className="px-2 py-2 text-stone-400 hover:text-stone-600 rounded-lg">
+        <Icon name="close" className="text-base" />
+      </button>
+    </div>
+  );
+}
+
 function FacturasView() {
   const [facturas,     setFacturas]     = useState<FacturaCompra[]>([]);
   const [loading,      setLoading]      = useState(false);
@@ -3054,6 +3604,7 @@ function FacturasView() {
   const [detalleLoad,  setDetalleLoad]  = useState(false);
   const [showForm,     setShowForm]     = useState(false);
   const [saving,       setSaving]       = useState(false);
+  const [pdfOpen,      setPdfOpen]      = useState(false);
   const [notif,        setNotif]        = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
   const [form, setForm] = useState({
@@ -3338,12 +3889,22 @@ function FacturasView() {
             );
           })}
         </div>
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-primary-container transition-all flex-shrink-0">
-          <Icon name={showForm ? 'close' : 'add'} className="text-base" />
-          {showForm ? 'Cancelar' : 'Nueva Factura'}
-        </button>
+        <div className="flex gap-2 flex-shrink-0">
+          <button onClick={() => setPdfOpen(true)}
+            className="px-4 py-2 bg-secondary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:opacity-90 transition-all">
+            <Icon name="picture_as_pdf" className="text-base" /> Leer PDF
+          </button>
+          <button onClick={() => setShowForm(v => !v)}
+            className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-primary-container transition-all">
+            <Icon name={showForm ? 'close' : 'add'} className="text-base" />
+            {showForm ? 'Cancelar' : 'Nueva Factura'}
+          </button>
+        </div>
       </div>
+
+      {pdfOpen && (
+        <FacturaPdfModal onClose={() => setPdfOpen(false)} onNotify={notify} onCreated={fetchFacturas} />
+      )}
 
       {/* Búsqueda */}
       <div className="relative mb-5">
@@ -3843,6 +4404,7 @@ export default function BodegaTab() {
         {view === 'caducidades'    && <CaducidadesView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
+        {view === 'pendientes'     && <PendientesView />}
         {view === 'zebra'          && <ZebraView />}
       </div>
     </section>

@@ -224,6 +224,27 @@ function getDb() {
       subtotal         REAL    NOT NULL,
       created_at       TEXT    DEFAULT (datetime('now'))
     );
+
+    -- Productos nuevos detectados (en factura PDF o TC52) que aún NO existen en NovaCaja.
+    -- Staging local: NO toca compucaja/ArticulosAlmacen. Se les asigna código de barras
+    -- real al llegar a bodega (TC52) o desde el panel; entonces se marcan 'resuelto'.
+    CREATE TABLE IF NOT EXISTS productos_pendientes (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      proveedor             TEXT,
+      sku_proveedor         TEXT,
+      descripcion_proveedor TEXT    NOT NULL,
+      unidad                TEXT,
+      piezas_por_caja       INTEGER DEFAULT 1,
+      cajas                 INTEGER DEFAULT 0,
+      precio_unitario       REAL,
+      estado                TEXT    DEFAULT 'pendiente',  -- pendiente | resuelto | descartado
+      codigo_barras         TEXT,                          -- se asigna al resolver
+      art_codigo            TEXT,                          -- código interno resuelto (si aplica)
+      origen                TEXT    DEFAULT 'pdf',         -- pdf | tc52 | manual
+      notas                 TEXT,
+      created_at            TEXT    DEFAULT (datetime('now')),
+      resolved_at           TEXT
+    );
   `);
 
   // Migraciones de columnas — deben ir ANTES de los índices que las referencian
@@ -250,6 +271,8 @@ function getDb() {
     CREATE INDEX IF NOT EXISTS idx_consumo_created  ON consumo_area(created_at);
     CREATE INDEX IF NOT EXISTS idx_recuentos_created ON recuentos(created_at);
     CREATE INDEX IF NOT EXISTS idx_alertas_tipo     ON alertas_descartadas(tipo);
+    CREATE INDEX IF NOT EXISTS idx_pend_estado      ON productos_pendientes(estado);
+    CREATE INDEX IF NOT EXISTS idx_pend_sku         ON productos_pendientes(sku_proveedor);
   `);
 
   // Migración de nombres de áreas para coincidir con ubicaciones del TC52

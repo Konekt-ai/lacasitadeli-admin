@@ -1,5 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
+const mssql = require('../db/mssql');
+const { parseInvoice } = require('./facturas-pdf');
 
 const router = express.Router();
 
@@ -17,6 +19,68 @@ function nextFolio(db) {
   }
   return `FAC-${ymd}-${String(seq).padStart(4, '0')}`;
 }
+
+// ── POST /api/facturas/leer-pdf — lee una factura PDF y la mapea contra el catálogo ─
+// Recibe el PDF crudo (Content-Type application/pdf). Devuelve los renglones con su
+// mapeo a producto interno (vía productos_compra). NO crea nada: es vista previa.
+router.post('/leer-pdf',
+  express.raw({ type: ['application/pdf', 'application/octet-stream'], limit: '30mb' }),
+  async (req, res) => {
+    try {
+      if (!req.body || !req.body.length) return res.status(400).json({ error: 'PDF vacío o no recibido' });
+
+      const parsed = await parseInvoice(req.body);
+      if (!parsed.ok) return res.status(422).json(parsed); // proveedor sin plantilla
+
+      // Mapear SKUs del proveedor contra productos_compra (MSSQL)
+      const skus = [...new Set(parsed.items.map(i => i.sku_proveedor).filter(Boolean))];
+      const mapa = {};
+      if (skus.length) {
+        const inList = skus.map(s => `'${esc(s)}'`).join(',');
+        const r = await mssql.query(`
+          SELECT pc.sku_proveedor, pc.codigo_barras, pc.piezas_por_caja,
+                 v.Art_Descripcion AS nombre_interno
+          FROM productos_compra pc
+          LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] v ON v.Art_GTIN = pc.codigo_barras
+          WHERE pc.activo = 1 AND pc.sku_proveedor IN (${inList})
+        `);
+        for (const row of r.recordset || []) mapa[row.sku_proveedor] = row;
+      }
+
+      const items = parsed.items.map(it => {
+        const m = mapa[it.sku_proveedor];
+        return {
+          sku_proveedor:         it.sku_proveedor,
+          descripcion_proveedor: it.descripcion_proveedor,
+          unidad:                it.unidad,
+          cajas_esperadas:       it.cajas_enviadas,   // ← cajas ENVIADAS (lo que viene en el trailer)
+          cajas_ordenadas:       it.cajas_ordenadas,
+          precio_unitario:       it.precio_unitario,
+          importe:               it.importe,
+          mapeo: m ? {
+            codigo_barras:   m.codigo_barras,
+            nombre_interno:  m.nombre_interno,
+            piezas_por_caja: m.piezas_por_caja,
+          } : null,
+        };
+      });
+
+      const mapeados = items.filter(i => i.mapeo).length;
+      res.json({
+        ok: true,
+        proveedor:   parsed.proveedor,
+        referencia:  parsed.referencia,
+        fecha:       parsed.fecha,
+        total_items: items.length,
+        mapeados,
+        sin_mapear:  items.length - mapeados,
+        items,
+      });
+    } catch (e) {
+      console.error('leer-pdf:', e.message);
+      res.status(500).json({ error: e.message });
+    }
+  });
 
 // ── GET /api/facturas ─────────────────────────────────────────────────────────
 router.get('/', (req, res) => {
