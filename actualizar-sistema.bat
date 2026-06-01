@@ -4,123 +4,143 @@ cd /d "%~dp0"
 if not exist "logs" mkdir logs
 set LOG=%~dp0logs\actualizaciones.log
 
-echo [%date% %time%] =============================== >> "%LOG%"
-echo [%date% %time%] Iniciando actualizacion... >> "%LOG%"
+set ADMIN_EST=sin cambios
+set BODEGA_EST=sin cambios
+set ADMIN_VER=?
+set BODEGA_VER=?
 
-:: 0. Cerrar procesos anteriores antes de tocar archivos
-echo [%date% %time%] Cerrando procesos anteriores... >> "%LOG%"
+echo.
+echo  ============================================================
+echo    LA CASITA DELI - ACTUALIZADOR DE SISTEMA
+echo  ============================================================
+echo.
+>>"%LOG%" echo [%date% %time%] ===============================
+>>"%LOG%" echo [%date% %time%] Iniciando actualizacion...
+
+call :say "Cerrando procesos anteriores..."
 taskkill /F /IM node.exe    >> "%LOG%" 2>&1
 taskkill /F /IM pythonw.exe >> "%LOG%" 2>&1
 timeout /t 3 /nobreak >nul
 
-:: Verificar git
 where git >nul 2>&1
 if errorlevel 1 (
-    echo [%date% %time%] ERROR: Git no esta instalado. >> "%LOG%"
-    exit /b 1
+    call :say "ERROR: Git no esta instalado."
+    goto :Fin
 )
 
-:: ── REPO ADMIN ───────────────────────────────────────────────────────────────
-
-:: 1. Traer cambios de GitHub
+:: ── ADMIN (panel + API) ──────────────────────────────────────────────────────
+echo.
+call :say "[ADMIN] Panel y API"
 git fetch origin main >> "%LOG%" 2>&1
 if errorlevel 1 (
-    echo [%date% %time%] ERROR: No se pudo conectar a GitHub. >> "%LOG%"
-    exit /b 1
+    call :say "  ERROR: No se pudo conectar a GitHub (admin)."
+    goto :Fin
 )
-
-:: 2. Comparar hashes
 for /f "tokens=*" %%i in ('git rev-parse HEAD') do set LOCAL_HASH=%%i
 for /f "tokens=*" %%i in ('git rev-parse origin/main') do set REMOTE_HASH=%%i
-
 if "!LOCAL_HASH!"=="!REMOTE_HASH!" (
-    echo [%date% %time%] Admin: ya en la ultima version. >> "%LOG%"
-    goto :SaltarInstallAdmin
+    call :say "  Ya esta en la ultima version."
+    goto :AdminVer
 )
-
-echo [%date% %time%] Admin: cambios detectados. Sincronizando... >> "%LOG%"
-
-:: 3. Sincronizar exacto con GitHub (descarta cambios locales sin preguntar)
+call :say "  Cambios detectados. Sincronizando..."
 git reset --hard origin/main >> "%LOG%" 2>&1
 git clean -fd --exclude=logs/ --exclude=apps/api/.env --exclude=apps/api/lacasita.db --exclude=apps/api/lacasita.db-wal --exclude=apps/api/lacasita.db-shm >> "%LOG%" 2>&1
 if errorlevel 1 (
-    echo [%date% %time%] ERROR: Fallo al sincronizar admin. >> "%LOG%"
-    exit /b 1
+    call :say "  ERROR: Fallo al sincronizar admin."
+    goto :Fin
 )
-echo [%date% %time%] Admin: sincronizado correctamente. >> "%LOG%"
-
-:: 4. Reinstalar dependencias
-echo [%date% %time%] Instalando dependencias API... >> "%LOG%"
+call :say "  Instalando dependencias API..."
 cd /d "%~dp0apps\api"
 call npm install --omit=dev >> "%LOG%" 2>&1
-cd /d "%~dp0"
-
-echo [%date% %time%] Instalando dependencias Web... >> "%LOG%"
+call :say "  Instalando dependencias Web..."
 cd /d "%~dp0apps\web"
 call npm install --omit=dev >> "%LOG%" 2>&1
 cd /d "%~dp0"
-
-:SaltarInstallAdmin
+set ADMIN_EST=ACTUALIZADO
+call :say "  Admin actualizado."
+:AdminVer
+for /f %%i in ('git rev-parse --short HEAD') do set ADMIN_VER=%%i
 
 :: ── MIGRACION DE BASE DE DATOS (idempotente) ─────────────────────────────────
-:: Crea/actualiza las tablas de recepcion en MSSQL si faltan. Seguro repetir.
-echo [%date% %time%] Ejecutando migracion de BD (recepcion)... >> "%LOG%"
+call :say "Ejecutando migracion de BD (recepcion)..."
 node "%~dp0apps\api\migrate.js" >> "%LOG%" 2>&1
 
-:: ── REPO ALMACEN ─────────────────────────────────────────────────────────────
-
+:: ── BODEGA (repo almacen + PWA del TC52) ──────────────────────────────────────
+echo.
+call :say "[BODEGA] Almacen y PWA del TC52"
 set ALMACEN=%~dp0..\lacasitadeli-almacen
 if not exist "%ALMACEN%\.git" goto :ClonAlmacen
 
-echo [%date% %time%] Almacen: revisando actualizaciones... >> "%LOG%"
 cd /d "%ALMACEN%"
 git fetch origin main >> "%LOG%" 2>&1
 if errorlevel 1 (
-    echo [%date% %time%] AVISO: No se pudo conectar a GitHub para almacen. >> "%LOG%"
+    call :say "  AVISO: No se pudo conectar a GitHub (bodega)."
     cd /d "%~dp0"
-    goto :FinAlmacen
+    goto :FinBodega
 )
-for /f "tokens=*" %%i in ('git rev-parse HEAD') do set ALMACEN_LOCAL=%%i
-for /f "tokens=*" %%i in ('git rev-parse origin/main') do set ALMACEN_REMOTE=%%i
-if "!ALMACEN_LOCAL!"=="!ALMACEN_REMOTE!" (
-    echo [%date% %time%] Almacen: ya en la ultima version. >> "%LOG%"
+for /f "tokens=*" %%i in ('git rev-parse HEAD') do set ALM_LOCAL=%%i
+for /f "tokens=*" %%i in ('git rev-parse origin/main') do set ALM_REMOTE=%%i
+if "!ALM_LOCAL!"=="!ALM_REMOTE!" (
+    call :say "  Ya esta en la ultima version."
     cd /d "%~dp0"
-    goto :FinAlmacen
+    goto :Bodega
 )
-echo [%date% %time%] Almacen: sincronizando... >> "%LOG%"
+call :say "  Cambios detectados. Sincronizando..."
 git reset --hard origin/main >> "%LOG%" 2>&1
 git clean -fd >> "%LOG%" 2>&1
-echo [%date% %time%] Almacen: actualizado. >> "%LOG%"
+set BODEGA_EST=ACTUALIZADO
+call :say "  Bodega sincronizada."
 cd /d "%~dp0"
-goto :FinAlmacen
+goto :Bodega
 
 :ClonAlmacen
-echo [%date% %time%] Almacen: clonando repo... >> "%LOG%"
+call :say "  Clonando repo de almacen..."
 cd /d "%~dp0.."
 git clone https://github.com/Konekt-ai/lacasitadeli-almacen >> "%LOG%" 2>&1
+set BODEGA_EST=CLONADO
 cd /d "%~dp0"
-:FinAlmacen
 
-:: ── BODEGA PWA ───────────────────────────────────────────────────────────────
-
+:Bodega
 set BODEGA=%~dp0..\lacasitadeli-almacen\pwa-bodega
 if not exist "%BODEGA%\package.json" goto :FinBodega
-echo [%date% %time%] Bodega: reconstruyendo PWA TC52... >> "%LOG%"
+for /f %%i in ('git -C "%ALMACEN%" rev-parse --short HEAD') do set BODEGA_VER=%%i
+call :say "  Reconstruyendo PWA del TC52..."
 cd /d "%BODEGA%"
 call npm install --omit=dev >> "%LOG%" 2>&1
 call npm run build >> "%LOG%" 2>&1
 cd /d "%~dp0"
-echo [%date% %time%] Bodega: reconstruida. >> "%LOG%"
+call :say "  PWA del TC52 reconstruida."
 :FinBodega
 
 :: ── REINICIAR ────────────────────────────────────────────────────────────────
-
-echo [%date% %time%] Reiniciando servicios... >> "%LOG%"
+echo.
+call :say "Reiniciando servicios..."
 taskkill /F /IM node.exe    >> "%LOG%" 2>&1
 taskkill /F /IM pythonw.exe >> "%LOG%" 2>&1
 timeout /t 2 /nobreak >nul
-
 wscript.exe "%~dp0iniciar-silencioso.vbs"
 
-echo [%date% %time%] Actualizacion completada. >> "%LOG%"
-echo [%date% %time%] =============================== >> "%LOG%"
+:: ── RESUMEN ──────────────────────────────────────────────────────────────────
+echo.
+echo  ------------------------------------------------------------
+echo    RESUMEN DE LA ACTUALIZACION
+echo      Admin  (panel / API) : !ADMIN_EST!  -  version !ADMIN_VER!
+echo      Bodega (TC52 / PWA)  : !BODEGA_EST!  -  version !BODEGA_VER!
+echo  ------------------------------------------------------------
+echo.
+>>"%LOG%" echo [%date% %time%] Resumen: Admin=!ADMIN_EST! (!ADMIN_VER!)  Bodega=!BODEGA_EST! (!BODEGA_VER!)
+>>"%LOG%" echo [%date% %time%] Actualizacion completada.
+>>"%LOG%" echo [%date% %time%] ===============================
+goto :EOF
+
+:: ── Helper: imprime en pantalla y en el log ───────────────────────────────────
+:say
+echo  %~1
+>>"%LOG%" echo [%date% %time%] %~1
+exit /b
+
+:Fin
+echo.
+echo  La actualizacion se detuvo. Revisa logs\actualizaciones.log
+>>"%LOG%" echo [%date% %time%] Actualizacion abortada.
+exit /b 1
