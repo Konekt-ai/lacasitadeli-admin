@@ -78,13 +78,20 @@ echo.
 echo  ─────────────────────────────────────────────
 echo   1.  Crear o editar conexion SQL  (.env)
 echo   2.  Abrir .env en Notepad
-echo   3.  Salir
+echo   3.  Preparar acceso por red / Tailscale  (firewall + arranque automatico)
+echo   4.  Salir
 echo  ─────────────────────────────────────────────
 echo.
 set /p "op=  Opcion: "
 if "!op!"=="1" goto :CREAR_ENV
 if "!op!"=="2" goto :ABRIR_ENV
-if "!op!"=="3" exit /b 0
+if "!op!"=="3" goto :PREPARAR_RED
+if "!op!"=="4" exit /b 0
+goto :MENU
+
+
+:PREPARAR_RED
+call "%~dp0preparar-red.bat"
 goto :MENU
 
 
