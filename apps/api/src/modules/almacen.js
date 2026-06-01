@@ -64,6 +64,73 @@ function configToTc52(r) {
   return { id: r.id, nombre: r.nombre, color: TAILWIND_HEX[r.color_text] || '#3B82F6', clave: r.clave };
 }
 
+// ── Unificación de áreas/ubicaciones (fuente de verdad: MSSQL ubicaciones_bodega) ──
+// Deriva la "clave" estable a partir del nombre, igual que las claves del front
+// (p.ej. "Casita 1" -> "casita_1", "Bodega" -> "bodega").
+function areaClave(nombre) {
+  return String(nombre || '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '_') || 'area';
+}
+const ICON_BY_CLAVE = {
+  bodega: 'warehouse', casita_1: 'storefront', casita_2: 'store',
+  usa: 'flight', cocina: 'restaurant', refrigerador: 'ac_unit',
+};
+// Lista de áreas en el shape que espera el panel (AreaConfig), desde MSSQL.
+async function fetchAreasBodega() {
+  const r = await mssql.query(
+    `SELECT id, nombre, color, orden FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden, nombre`
+  );
+  return (r.recordset || []).map(u => {
+    const clave = areaClave(u.nombre);
+    const tw = HEX_TO_TAILWIND[u.color] || HEX_TO_TAILWIND[(u.color || '').toLowerCase()] || { bg: 'bg-stone-100', text: 'text-stone-600' };
+    return { id: u.id, clave, nombre: u.nombre, icono: ICON_BY_CLAVE[clave] || 'category', color_bg: tw.bg, color_text: tw.text, orden: u.orden, activo: 1 };
+  });
+}
+// Mapa nombre(ubicacion) -> clave, para traducir inventario_bodega.ubicacion
+async function mapaUbicacionAClave() {
+  const areas = await fetchAreasBodega();
+  const m = {};
+  for (const a of areas) m[a.nombre] = a.clave;
+  return m;
+}
+// Mapa clave -> nombre (p.ej. 'bodega' -> 'Bodega') para escribir inventario_bodega
+async function mapaClaveANombre() {
+  const areas = await fetchAreasBodega();
+  const m = {};
+  for (const a of areas) m[a.clave] = a.nombre;
+  return m;
+}
+// Upsert de stock por ubicación en MSSQL (misma convención que /traslado:
+// codigo_barras = Art_Codigo, ubicacion = nombre del área). delta>0 entra, delta<0 sale.
+async function setStockInventarioBodega(codigo, ubicacionNombre, delta) {
+  const cb = esc(codigo), ub = esc(ubicacionNombre);
+  if (delta >= 0) {
+    await mssql.query(`
+      MERGE [compucaja].[dbo].[inventario_bodega] AS t
+      USING (SELECT '${cb}' AS cb, '${ub}' AS ub) AS s
+        ON t.codigo_barras=s.cb AND t.ubicacion=s.ub
+      WHEN MATCHED THEN UPDATE SET cantidad=t.cantidad+${delta}, ultima_entrada=GETDATE()
+      WHEN NOT MATCHED THEN INSERT (codigo_barras,ubicacion,cantidad,ultima_entrada,creado)
+        VALUES ('${cb}','${ub}',${delta},GETDATE(),GETDATE());`);
+  } else {
+    await mssql.query(`
+      UPDATE [compucaja].[dbo].[inventario_bodega]
+      SET cantidad = CASE WHEN cantidad + (${delta}) < 0 THEN 0 ELSE cantidad + (${delta}) END,
+          ultima_salida = GETDATE()
+      WHERE codigo_barras='${cb}' AND ubicacion='${ub}';`);
+  }
+}
+
+// ── GET /api/almacen/ubicaciones/areas-bodega — lista unificada (MSSQL) ───────
+router.get('/ubicaciones/areas-bodega', async (_req, res) => {
+  try {
+    res.json(await fetchAreasBodega());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Mantiene stock_ubicaciones actualizado después de cada movimiento
 function upsertUbicacion(db, codigo, nombre, area, delta) {
   db.prepare(`
@@ -148,9 +215,11 @@ router.post('/entrada', async (req, res) => {
       `).run(pedido_id);
     }
 
-    upsertUbicacion(db, codigo, nombre, area, qty);
+    // Stock por ubicación (fuente unificada: MSSQL inventario_bodega)
+    const ubicNombre = (await mapaClaveANombre())[area] || 'Bodega';
+    await setStockInventarioBodega(codigo, ubicNombre, qty);
 
-    res.json({ ok: true, stockActual: stockDespues, mensaje: `Entrada registrada: +${qty} pzas en ${area}` });
+    res.json({ ok: true, stockActual: stockDespues, mensaje: `Entrada registrada: +${qty} pzas en ${ubicNombre}` });
   } catch (err) {
     console.error('Error entrada:', err.message);
     res.status(500).json({ ok: false, mensaje: 'Error del servidor' });
@@ -189,9 +258,11 @@ router.post('/salida', async (req, res) => {
       VALUES (?, ?, 'salida', ?, ?, ?, ?, 'TC52')
     `).run(codigo, nombre || null, qty, stockAntes, stockDespues, area);
 
-    upsertUbicacion(db, codigo, nombre, area, -qty);
+    // Stock por ubicación (fuente unificada: MSSQL inventario_bodega)
+    const ubicNombre = (await mapaClaveANombre())[area] || 'Bodega';
+    await setStockInventarioBodega(codigo, ubicNombre, -qty);
 
-    res.json({ ok: true, stockActual: stockDespues, mensaje: `Salida registrada: -${qty} pzas de ${area}` });
+    res.json({ ok: true, stockActual: stockDespues, mensaje: `Salida registrada: -${qty} pzas de ${ubicNombre}` });
   } catch (err) {
     console.error('Error salida:', err.message);
     res.status(500).json({ ok: false, mensaje: 'Error del servidor' });
@@ -527,23 +598,34 @@ router.get('/merma/historial', (req, res) => {
 });
 
 // ── GET /api/almacen/ubicaciones — stock actual por producto y área ───────────
-router.get('/ubicaciones', (req, res) => {
+router.get('/ubicaciones', async (req, res) => {
   const { area, q } = req.query;
   try {
-    const conditions = ['cantidad > 0'];
-    const params     = [];
-
-    if (area) { conditions.push('area = ?'); params.push(area); }
-    if (q)    { conditions.push("LOWER(COALESCE(nombre, art_codigo)) LIKE ?"); params.push(`%${q.toLowerCase()}%`); }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-
-    const rows = getDb().prepare(`
-      SELECT art_codigo, nombre, area, cantidad, updated_at
-      FROM stock_ubicaciones
-      ${where}
-      ORDER BY nombre, area
-    `).all(...params);
+    const result = await mssql.query(`
+      SELECT
+        i.codigo_barras                            AS art_codigo,
+        ISNULL(v.Art_Descripcion, i.codigo_barras) AS nombre,
+        i.ubicacion,
+        i.cantidad,
+        CONVERT(VARCHAR(23), ISNULL(i.ultima_entrada, i.creado), 120) AS updated_at
+      FROM [compucaja].[dbo].[inventario_bodega] i
+      OUTER APPLY (
+        SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados]
+        WHERE Art_GTIN = i.codigo_barras OR CodAlt_Codigo = i.codigo_barras OR Art_Codigo = i.codigo_barras
+      ) v
+      WHERE i.cantidad > 0
+    `);
+    const mapa = await mapaUbicacionAClave();
+    let rows = (result.recordset || []).map(r => ({
+      art_codigo: r.art_codigo,
+      nombre:     r.nombre,
+      area:       mapa[r.ubicacion] || areaClave(r.ubicacion),
+      cantidad:   r.cantidad,
+      updated_at: r.updated_at,
+    }));
+    if (area) rows = rows.filter(r => r.area === area);
+    if (q) { const ql = String(q).toLowerCase(); rows = rows.filter(r => (r.nombre || r.art_codigo).toLowerCase().includes(ql)); }
+    rows.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es') || a.area.localeCompare(b.area));
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -551,19 +633,25 @@ router.get('/ubicaciones', (req, res) => {
 });
 
 // ── GET /api/almacen/ubicaciones/resumen — totales por área ──────────────────
-router.get('/ubicaciones/resumen', (req, res) => {
+router.get('/ubicaciones/resumen', async (req, res) => {
   try {
-    const rows = getDb().prepare(`
-      SELECT
-        area,
-        COUNT(DISTINCT art_codigo) AS productos,
-        SUM(cantidad)              AS unidades
-      FROM stock_ubicaciones
-      WHERE cantidad > 0
-      GROUP BY area
-      ORDER BY area
-    `).all();
-    res.json(rows);
+    const result = await mssql.query(`
+      SELECT i.ubicacion,
+             COUNT(DISTINCT i.codigo_barras) AS productos,
+             SUM(i.cantidad)                 AS unidades
+      FROM [compucaja].[dbo].[inventario_bodega] i
+      WHERE i.cantidad > 0
+      GROUP BY i.ubicacion
+    `);
+    const mapa = await mapaUbicacionAClave();
+    const agg = {};
+    for (const r of (result.recordset || [])) {
+      const clave = mapa[r.ubicacion] || areaClave(r.ubicacion);
+      if (!agg[clave]) agg[clave] = { area: clave, productos: 0, unidades: 0 };
+      agg[clave].productos += Number(r.productos) || 0;
+      agg[clave].unidades  += Number(r.unidades)  || 0;
+    }
+    res.json(Object.values(agg).sort((a, b) => a.area.localeCompare(b.area)));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -745,47 +833,36 @@ router.delete('/pedidos/:id', (req, res) => {
   }
 });
 
-// ── GET /api/almacen/ubicaciones/areas — TC52 compatible ─────────────────────
-router.get('/ubicaciones/areas', (req, res) => {
-  try {
-    const rows = getDb().prepare(
-      `SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`
-    ).all();
-    res.json(rows.map(configToTc52));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+// ── GET /api/almacen/ubicaciones/areas — lista para TC52 (MSSQL ubicaciones_bodega) ──
+async function areasTc52() {
+  const r = await mssql.query(
+    `SELECT id, nombre, color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden, nombre`
+  );
+  return (r.recordset || []).map(u => ({ id: u.id, nombre: u.nombre, color: u.color || '#3B82F6', clave: areaClave(u.nombre) }));
+}
+router.get('/ubicaciones/areas', async (req, res) => {
+  try { res.json(await areasTc52()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── POST /api/almacen/ubicaciones/areas — TC52 crea área ─────────────────────
-router.post('/ubicaciones/areas', (req, res) => {
+// ── POST /api/almacen/ubicaciones/areas — TC52 crea área (MSSQL) ─────────────
+router.post('/ubicaciones/areas', async (req, res) => {
   const { nombre, color = '#3B82F6' } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ error: 'Nombre requerido' });
-
-  const db = getDb();
-  const tw = HEX_TO_TAILWIND[color] || HEX_TO_TAILWIND[color.toLowerCase()] || { bg: 'bg-stone-100', text: 'text-stone-600' };
-
-  let clave = nombre.toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '_') || 'area';
-  if (db.prepare(`SELECT id FROM ubicaciones_config WHERE clave=?`).get(clave))
-    clave = `${clave}_${Date.now().toString().slice(-4)}`;
-
   try {
-    const maxOrden = db.prepare(`SELECT COALESCE(MAX(orden),-1) AS m FROM ubicaciones_config WHERE activo=1`).get()?.m ?? -1;
-    db.prepare(`INSERT INTO ubicaciones_config (clave,nombre,icono,color_bg,color_text,orden) VALUES (?,?,?,?,?,?)`)
-      .run(clave, nombre.trim(), 'category', tw.bg, tw.text, maxOrden + 1);
-    const rows = db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`).all();
-    res.status(201).json(rows.map(configToTc52));
+    const mo    = await mssql.query(`SELECT ISNULL(MAX(orden),0) AS m FROM [compucaja].[dbo].[ubicaciones_bodega]`);
+    const orden = (Number(mo.recordset[0]?.m) || 0) + 1;
+    await mssql.query(`INSERT INTO [compucaja].[dbo].[ubicaciones_bodega] (nombre,color,orden,activa) VALUES ('${esc(nombre.trim())}','${esc(color)}',${orden},1)`);
+    res.status(201).json(await areasTc52());
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── DELETE /api/almacen/ubicaciones/areas/:id — TC52 soft-delete área ─────────
-router.delete('/ubicaciones/areas/:id', (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const db = getDb();
+// ── DELETE /api/almacen/ubicaciones/areas/:id — TC52 soft-delete área (MSSQL) ─
+router.delete('/ubicaciones/areas/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10) || 0;
   try {
-    db.prepare(`UPDATE ubicaciones_config SET activo=0 WHERE id=?`).run(id);
-    const rows = db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 ORDER BY orden ASC, id ASC`).all();
-    res.json(rows.map(configToTc52));
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET activa=0 WHERE id=${id}`);
+    res.json(await areasTc52());
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -808,133 +885,81 @@ router.post('/producto-ubicacion', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── "Configurar Áreas" (CRUD) — fuente unificada: MSSQL ubicaciones_bodega ────
+// GET devuelve shape AreaConfig (clave/icono/colores derivados); ubicaciones_bodega
+// solo guarda nombre+color(hex)+orden+activa (sin tocar su esquema).
+
 // ── GET /api/almacen/ubicaciones/config ───────────────────────────────────────
-router.get('/ubicaciones/config', (req, res) => {
+router.get('/ubicaciones/config', async (req, res) => {
+  try { res.json(await fetchAreasBodega()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/almacen/ubicaciones/config — crear área ─────────────────────────
+router.post('/ubicaciones/config', async (req, res) => {
+  const { nombre, color_text = 'text-stone-600' } = req.body;
+  if (!nombre?.trim()) return res.status(400).json({ error: 'Nombre requerido' });
+  const hex = TAILWIND_HEX[color_text] || '#3B82F6';
   try {
-    const rows = getDb().prepare(
-      `SELECT * FROM ubicaciones_config WHERE activo = 1 ORDER BY orden ASC, id ASC`
-    ).all();
-    res.json(rows);
+    const mo    = await mssql.query(`SELECT ISNULL(MAX(orden),0) AS m FROM [compucaja].[dbo].[ubicaciones_bodega]`);
+    const orden = (Number(mo.recordset[0]?.m) || 0) + 1;
+    await mssql.query(`INSERT INTO [compucaja].[dbo].[ubicaciones_bodega] (nombre,color,orden,activa) VALUES ('${esc(nombre.trim())}','${esc(hex)}',${orden},1)`);
+    res.status(201).json({ ok: true, message: 'Área creada' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── POST /api/almacen/ubicaciones/config ──────────────────────────────────────
-router.post('/ubicaciones/config', (req, res) => {
-  const { nombre, icono = 'category', color_bg = 'bg-stone-100', color_text = 'text-stone-600' } = req.body;
+// ── PUT /api/almacen/ubicaciones/config/:id — editar área ─────────────────────
+router.put('/ubicaciones/config/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10) || 0;
+  const { nombre, color_text } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ error: 'Nombre requerido' });
-
-  const db = getDb();
-  let clave = nombre.toLowerCase()
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '_');
-  if (!clave) clave = 'area';
-  const exists = db.prepare(`SELECT id FROM ubicaciones_config WHERE clave = ?`).get(clave);
-  if (exists) clave = `${clave}_${Date.now().toString().slice(-4)}`;
-
+  const hex = TAILWIND_HEX[color_text] || '#3B82F6';
   try {
-    const maxOrden = db.prepare(`SELECT COALESCE(MAX(orden), -1) AS m FROM ubicaciones_config WHERE activo = 1`).get()?.m ?? -1;
-    const r = db.prepare(`
-      INSERT INTO ubicaciones_config (clave, nombre, icono, color_bg, color_text, orden)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(clave, nombre.trim(), icono, color_bg, color_text, maxOrden + 1);
-    res.status(201).json({ id: r.lastInsertRowid, clave, message: 'Área creada' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── PUT /api/almacen/ubicaciones/config/:id ───────────────────────────────────
-router.put('/ubicaciones/config/:id', (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  const { nombre, icono, color_bg, color_text } = req.body;
-  if (!nombre?.trim()) return res.status(400).json({ error: 'Nombre requerido' });
-  try {
-    getDb().prepare(`
-      UPDATE ubicaciones_config SET nombre = ?, icono = ?, color_bg = ?, color_text = ?
-      WHERE id = ?
-    `).run(nombre.trim(), icono || 'category', color_bg || 'bg-stone-100', color_text || 'text-stone-600', id);
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET nombre='${esc(nombre.trim())}', color='${esc(hex)}' WHERE id=${id}`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── DELETE /api/almacen/ubicaciones/config/:id — soft delete ──────────────────
-router.delete('/ubicaciones/config/:id', (req, res) => {
-  const id = parseInt(req.params.id, 10);
+// ── DELETE /api/almacen/ubicaciones/config/:id — soft delete (activa=0) ───────
+router.delete('/ubicaciones/config/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10) || 0;
   try {
-    getDb().prepare(`UPDATE ubicaciones_config SET activo = 0 WHERE id = ?`).run(id);
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET activa=0 WHERE id=${id}`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── PUT /api/almacen/ubicaciones/config/:id/orden — swap order ────────────────
-router.put('/ubicaciones/config/:id/orden', (req, res) => {
-  const id  = parseInt(req.params.id, 10);
+// ── PUT /api/almacen/ubicaciones/config/:id/orden — reordenar (swap) ──────────
+router.put('/ubicaciones/config/:id/orden', async (req, res) => {
+  const id  = parseInt(req.params.id, 10) || 0;
   const dir = req.body.direction; // 'up' | 'down'
   try {
-    const db   = getDb();
-    const curr = db.prepare(`SELECT * FROM ubicaciones_config WHERE id = ? AND activo = 1`).get(id);
+    const cur  = await mssql.query(`SELECT id, orden FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE id=${id} AND activa=1`);
+    const curr = cur.recordset[0];
     if (!curr) return res.status(404).json({ error: 'No encontrado' });
 
-    const neighbor = dir === 'up'
-      ? db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 AND orden < ? ORDER BY orden DESC LIMIT 1`).get(curr.orden)
-      : db.prepare(`SELECT * FROM ubicaciones_config WHERE activo=1 AND orden > ? ORDER BY orden ASC  LIMIT 1`).get(curr.orden);
-
+    const nb = dir === 'up'
+      ? await mssql.query(`SELECT TOP 1 id, orden FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 AND orden < ${curr.orden} ORDER BY orden DESC`)
+      : await mssql.query(`SELECT TOP 1 id, orden FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 AND orden > ${curr.orden} ORDER BY orden ASC`);
+    const neighbor = nb.recordset[0];
     if (!neighbor) return res.json({ ok: true });
-    db.prepare(`UPDATE ubicaciones_config SET orden = ? WHERE id = ?`).run(neighbor.orden, id);
-    db.prepare(`UPDATE ubicaciones_config SET orden = ? WHERE id = ?`).run(curr.orden, neighbor.id);
+
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET orden=${neighbor.orden} WHERE id=${curr.id}`);
+    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET orden=${curr.orden} WHERE id=${neighbor.id}`);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/almacen/ubicaciones/areas — lista de ubicaciones del TC52 ─────────
-router.get('/ubicaciones/areas', async (_req, res) => {
-  try {
-    const result = await mssql.query(`
-      SELECT id, nombre, color FROM [compucaja].[dbo].[ubicaciones_bodega]
-      WHERE activa=1 ORDER BY orden, nombre`);
-    res.json(result.recordset || []);
-  } catch (err) {
-    // Si la tabla no existe aún, devolver una lista por defecto
-    res.json([
-      { id:1, nombre:'Bodega',       color:'#1D9E75' },
-      { id:2, nombre:'Casita 1',     color:'#3B82F6' },
-      { id:3, nombre:'Casita 2',     color:'#8B5CF6' },
-      { id:4, nombre:'USA',          color:'#F59E0B' },
-      { id:5, nombre:'Cocina',       color:'#E07B39' },
-      { id:6, nombre:'Refrigerador', color:'#06B6D4' },
-    ]);
-  }
-});
-
-// ── POST /api/almacen/ubicaciones/areas ─────────────────────────────────────────
-router.post('/ubicaciones/areas', async (req, res) => {
-  const { nombre, color } = req.body;
-  if (!nombre?.trim()) return res.status(400).json({ mensaje: 'Nombre requerido' });
-  try {
-    await mssql.query(
-      `INSERT INTO [compucaja].[dbo].[ubicaciones_bodega](nombre,color) VALUES('${nombre.trim().replace(/'/g,"''")}','${(color||'#5F5E5A').replace(/'/g,"''")}')`,
-    );
-    const result = await mssql.query(`SELECT id,nombre,color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden,nombre`);
-    res.json(result.recordset || []);
-  } catch (err) { res.status(500).json({ mensaje: err.message }); }
-});
-
-// ── DELETE /api/almacen/ubicaciones/areas/:id ──────────────────────────────────
-router.delete('/ubicaciones/areas/:id', async (req, res) => {
-  try {
-    await mssql.query(`UPDATE [compucaja].[dbo].[ubicaciones_bodega] SET activa=0 WHERE id=${parseInt(req.params.id)||0}`);
-    const result = await mssql.query(`SELECT id,nombre,color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden,nombre`);
-    res.json(result.recordset || []);
-  } catch (err) { res.status(500).json({ mensaje: err.message }); }
-});
+// (Rutas /ubicaciones/areas duplicadas eliminadas: quedaron unificadas arriba
+//  contra MSSQL ubicaciones_bodega — ver areasTc52.)
 
 // ── POST /api/almacen/traslado — mover piezas entre ubicaciones ────────────────
 router.post('/traslado', async (req, res) => {

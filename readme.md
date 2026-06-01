@@ -20,13 +20,15 @@ Desarrollado por **Konekt**.
 └──────────┬────────────────────────────────┬─────────────────┘
            │                                │
 ┌──────────▼──────────┐        ┌────────────▼────────────────┐
-│  SQL Server 2014    │        │  SQLite  (lacasita.db)       │
-│  NovaCaja           │        │  — almacen_movimientos       │
-│  — Articulos        │        │  — merma_registros           │
-│  — ArticulosAlmacen │        │  — stock_ubicaciones         │
+│  SQL Server         │        │  SQLite (lacasita.db)        │
+│  (compucaja)        │        │  — almacen_movimientos       │
+│  — ArticulosAlmacen │        │  — merma_registros           │
 │  — VArticulosUnif.  │        │  — product_expiry            │
-│  — Proveedores      │        │  — pedidos / facturas        │
-└─────────────────────┘        └─────────────────────────────┘
+│  — Proveedores      │        │  — facturas / pedidos        │
+│  — inventario_bodega│        │  en desuso: ubicaciones_     │
+│  — ubicaciones_bod. │        │  config, stock_ubicaciones   │
+│  — recepciones_*    │        └──────────────────────────────┘
+└─────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
 │  PWA Zebra TC52  (React/Vite)    http://<IP-LOCAL>:3003      │
@@ -101,6 +103,20 @@ RESEND_API_KEY=<tu API key de Resend>
 > Si no existe el `.env`, al ejecutar `iniciar.bat` se abre el asistente de configuración automáticamente.
 
 La base de datos SQLite (`apps/api/lacasita.db`) se crea sola al iniciar la API por primera vez.
+
+### 4. Migración de tablas de Recepción (SQL Server)
+
+El flujo de **Recepción con conversión caja→pieza** y **Caducidades** usa tablas propias en SQL Server (`recepciones_esperadas`, `recepciones_reales`, `productos_compra`, el SP `sp_confirmar_recepcion` y vistas). Se crean con una migración **idempotente** (segura de repetir):
+
+```bat
+cd apps\api
+node migrate.js
+```
+
+- Lee `apps/api/.env` y aplica `crear_tablas_recepcion.sql` (en la raíz del repo) por lotes.
+- Es **aditiva**: usa `IF NOT EXISTS` / `DROP-CREATE` de objetos propios; **no borra ni altera** tablas de NovaCaja.
+- **`actualizar-sistema.bat` la ejecuta automáticamente** en cada actualización, así que en el cliente no hay que correr nada a mano.
+- Para correrla desde otra PC (p. ej. tu laptop por Tailscale), apunta `MSSQL_SERVER` del `.env` a la IP correspondiente y ejecuta `node migrate.js`.
 
 ---
 
@@ -198,6 +214,9 @@ pm2 restart lacasita-pwa
 | Archivo | Para qué sirve |
 |---|---|
 | `iniciar.bat` | Arranque manual con terminal visible (desarrollo) |
+| `actualizar-sistema.bat` | Baja cambios de GitHub (admin + almacén), `npm install`, **corre la migración de BD** y reinicia |
+| `apps/api/migrate.js` | Migración idempotente de tablas de recepción en SQL Server |
+| `crear_tablas_recepcion.sql` | Esquema de recepción (tablas + SP + vistas) que aplica `migrate.js` |
 | `configurar-inicio.bat` | Instalación del inicio automático (correr una vez) |
 | `detener.bat` | Detener todos los servicios |
 | `arrancar.vbs` | Script silencioso que PM2 usa al iniciar Windows |
@@ -224,14 +243,16 @@ lacasitadeli-admin/
 │   │   │   ├── config/
 │   │   │   │   └── novacaja-mapping.js  # Queries MSSQL reutilizables
 │   │   │   ├── modules/
-│   │   │   │   ├── almacen.js       # Pedidos de recepción, movimientos
-│   │   │   │   ├── bodega.js        # Áreas, merma, surtido, alertas, recuentos
+│   │   │   │   ├── almacen.js       # Stock por ubicación (MSSQL), entrada/salida, áreas
+│   │   │   │   ├── bodega.js        # Asignación por área, merma, surtido, alertas
+│   │   │   │   ├── recepcion.js     # Recepción caja→pieza, discrepancias, caducidades
 │   │   │   │   ├── facturas.js      # Facturas de compra
 │   │   │   │   ├── novacaja.js      # Dashboard NovaCaja, proveedores, polizas
 │   │   │   │   ├── products.js      # Inventario, precios, stock
 │   │   │   │   ├── sales.js         # Ventas locales (SQLite)
 │   │   │   │   └── emailService.js  # Reporte mensual automático por correo
 │   │   │   └── index.js             # Express server :3002 + cron mensual
+│   │   ├── migrate.js               # Migración idempotente de tablas de recepción (MSSQL)
 │   │   ├── lacasita.db              # Base de datos SQLite (auto-generada)
 │   │   └── .env                     # Variables de entorno (no en git)
 │   │
@@ -251,6 +272,8 @@ lacasitadeli-admin/
 │
 ├── ecosystem.config.js              # Configuración PM2
 ├── iniciar.bat                      # Arranque desarrollo
+├── actualizar-sistema.bat           # Pull GitHub + npm install + migración BD + reinicio
+├── crear_tablas_recepcion.sql       # Esquema de recepción para SQL Server (lo aplica migrate.js)
 ├── configurar-inicio.bat            # Setup producción 24/7
 ├── detener.bat                      # Detener todo
 └── arrancar.vbs                     # Launcher silencioso (Startup Windows)
@@ -274,15 +297,16 @@ lacasitadeli-admin/
 
 | Sub-módulo | Función |
 |---|---|
-| **Áreas** | Vista por área (bodega / cocina / tienda / refrigerador) |
-| **Merma** | Registro de bajas con motivo y área |
-| **Caducidades** | Control de fechas de vencimiento |
-| **Surtido** | Transferencias entre áreas con autorización |
-| **Recuentos** | Conteo físico vs sistema |
-| **Discrepancias** | Diferencias entre stock NovaCaja y movimientos locales |
-| **Recepción** | Pedidos de compra y recepción de mercancía |
+| **Stock & Surtido** | Stock por área (fuente única: SQL Server `inventario_bodega`) + transferencias |
+| **Recepción** | Órdenes esperadas **en cajas** → el TC52 confirma → **conversión caja→pieza**, sube stock real, discrepancias y semáforo de caducidad |
+| **Áreas** | Áreas/ubicaciones unificadas (Bodega, Casita 1/2, USA, Cocina, Refrigerador) leídas de SQL Server `ubicaciones_bodega`; asignación producto→área |
+| **Merma / Caducidad** | Registro de bajas con motivo y área |
+| **Caducidades** | Lotes con vencimiento capturado en recepción (semáforo VENCIDO/CRÍTICO/AVISO/OK, selector de días, export a Excel) |
+| **Discrepancias** | Diferencias esperado vs recibido por orden |
 | **Facturas** | Facturas de compra ligadas a pedidos |
-| **TC52 en vivo** | Historial del día desde el Zebra TC52 |
+| **Movimientos TC52** | Stock actual por ubicación e historial del día desde el Zebra TC52 |
+
+> **Áreas y ubicaciones** ahora tienen **una sola fuente de verdad en SQL Server**: la lista de áreas en `ubicaciones_bodega` y el stock por ubicación en `inventario_bodega`. Las altas/bajas/edición de áreas ("Configurar Áreas") y las escrituras de entrada/salida/recepción operan todas sobre estas tablas. Las tablas SQLite antiguas (`ubicaciones_config`, `stock_ubicaciones`) quedaron en desuso (no se borraron).
 
 ---
 
@@ -292,7 +316,7 @@ URL: `http://<IP-LOCAL>:3003` — abrir en Chrome del TC52.
 
 | Sección | Función |
 |---|---|
-| **Recepción** | Escanear y registrar entrada de mercancía (+stock en NovaCaja) |
+| **Recepción** | Elegir orden (o sin orden) → escanear **cajas** → al confirmar en el panel se hace la **conversión caja→pieza** y sube el stock real; captura opcional de **lote y caducidad** |
 | **Salida** | Escanear y registrar salida de mercancía (−stock en NovaCaja) |
 | **Merma** | Dar de baja producto con motivo (vencimiento/daño/cocina/robo) |
 | **Historial** | Ver movimientos del día |

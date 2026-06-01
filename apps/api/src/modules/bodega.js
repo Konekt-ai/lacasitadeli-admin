@@ -20,13 +20,27 @@ function getWeekNumber(d) {
 
 function esc(s) { return String(s || '').replace(/'/g, "''"); }
 
+// ── Áreas unificadas (fuente de verdad: MSSQL ubicaciones_bodega) ──
+function areaClave(nombre) {
+  return String(nombre || '').toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '_') || 'area';
+}
+async function getAreaList() {
+  const r = await mssql.query(
+    `SELECT nombre FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden, nombre`
+  );
+  return (r.recordset || []).map(u => ({ clave: areaClave(u.nombre), nombre: u.nombre }));
+}
+async function getAreaClaves() {
+  return (await getAreaList()).map(a => a.clave);
+}
+
 // ── GET /api/bodega/area-counts ───────────────────────────────────────────────
-router.get('/area-counts', (req, res) => {
+router.get('/area-counts', async (req, res) => {
   try {
-    const db    = getDb();
-    const areas = db.prepare(
-      `SELECT clave, nombre FROM ubicaciones_config WHERE activo = 1 ORDER BY orden`
-    ).all();
+    const db     = getDb();
+    const areas  = await getAreaList();  // lista unificada desde MSSQL
     const counts = db.prepare(`SELECT area, COUNT(*) AS total FROM product_locations GROUP BY area`).all();
     const map    = Object.fromEntries(counts.map(r => [r.area, r.total]));
     res.json(areas.map(a => ({ area: a.clave, nombre: a.nombre, total: map[a.clave] || 0 })));
@@ -54,7 +68,7 @@ router.get('/areas/:area/products', async (req, res) => {
   const search   = (req.query.search || '').trim();
   try {
     const db         = getDb();
-    const validAreas = getValidAreas(db);
+    const validAreas = await getAreaClaves();
     if (!validAreas.includes(area)) return res.status(400).json({ error: 'Área inválida' });
     const searchClause = search
       ? `AND (a.Art_Descripcion LIKE '%${esc(search)}%' OR a.Art_Codigo LIKE '%${esc(search)}%')`
@@ -121,12 +135,12 @@ router.get('/areas/:area/products', async (req, res) => {
 });
 
 // ── PUT /api/bodega/products/:id/location ────────────────────────────────────
-router.put('/products/:id/location', (req, res) => {
+router.put('/products/:id/location', async (req, res) => {
   const { area, notas } = req.body;
   const artCodigo       = req.params.id;
 
   const db = getDb();
-  if (!getValidAreas(db).includes(area)) return res.status(400).json({ error: 'Área inválida' });
+  if (!(await getAreaClaves()).includes(area)) return res.status(400).json({ error: 'Área inválida' });
 
   try {
     db.prepare(`

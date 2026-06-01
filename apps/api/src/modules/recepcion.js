@@ -511,15 +511,21 @@ async function confirmarRecepcion(req, res) {
         VALUES (?, ?, 'entrada', ?, ?, ?, ?, 'Recepcion')
       `).run(artCodigo, nombre, piezas, antes, despues, area)
 
-      // 3) Stock por área (SQLite — lo que muestra "Stock por área" del panel)
-      sqlite.prepare(`
-        INSERT INTO stock_ubicaciones (art_codigo, nombre, area, cantidad)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(art_codigo, area) DO UPDATE SET
-          nombre     = COALESCE(excluded.nombre, nombre),
-          cantidad   = MAX(0, cantidad + excluded.cantidad),
-          updated_at = datetime('now')
-      `).run(artCodigo, nombre, area, piezas)
+      // 3) Stock por ubicación (fuente unificada: MSSQL inventario_bodega).
+      //    Convención igual que /traslado: codigo_barras = Art_Codigo, ubicacion = nombre del área.
+      const ubicNombre = row.ubicacion || 'Bodega';
+      await db.request()
+        .input('cb', sql.VarChar(50), artCodigo)
+        .input('ub', sql.VarChar(50), ubicNombre)
+        .input('q',  sql.Int,         piezas)
+        .query(`
+          MERGE [compucaja].[dbo].[inventario_bodega] AS t
+          USING (SELECT @cb AS cb, @ub AS ub) AS s
+            ON t.codigo_barras = s.cb AND t.ubicacion = s.ub
+          WHEN MATCHED THEN UPDATE SET cantidad = t.cantidad + @q, ultima_entrada = GETDATE()
+          WHEN NOT MATCHED THEN INSERT (codigo_barras, ubicacion, cantidad, ultima_entrada, creado)
+            VALUES (@cb, @ub, @q, GETDATE(), GETDATE());
+        `)
 
       totalPiezas += piezas
     }

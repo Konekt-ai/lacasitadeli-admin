@@ -3778,7 +3778,8 @@ export default function BodegaTab() {
 
   const loadAreas = useCallback(async () => {
     try {
-      const data = await fetch('/api/almacen/ubicaciones/config').then(r => r.json());
+      // Fuente unificada de áreas: MSSQL ubicaciones_bodega (las 6 reales)
+      const data = await fetch('/api/almacen/ubicaciones/areas-bodega').then(r => r.json());
       if (Array.isArray(data) && data.length > 0) setAreasData(data);
     } catch { /* use defaults */ }
   }, []);
