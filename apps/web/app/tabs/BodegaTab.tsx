@@ -6,17 +6,20 @@ import type {
   Area, AreaConfig, AreaCount, AreaProduct, ExpiryRecord,
   SurtidoTransfer, Recuento, StagnantProduct,
   StockUbicacion, ResumenUbicacion, MovimientoUnificado, TipoMovimiento,
-  PedidoRecepcion, PedidoConDetalle, EstadoPedido, ConsumoArea,
+  ConsumoArea,
   EstadoFactura, FacturaCompra, FacturaConDetalle, FacturaDetalle,
+  RecepcionEsperada, RecepcionEsperadaConDetalle, EstatusRecepcion,
+  RecepcionDiscrepancia, CaducidadItem, SemaforoCaducidad,
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'caducidades' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'stock-surtido',  label: 'Stock & Surtido',   icon: 'inventory_2'    },
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
   { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
+  { id: 'caducidades',    label: 'Caducidades',        icon: 'hourglass_bottom'},
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
@@ -2281,29 +2284,39 @@ function ZebraView() {
 // ── Configuración de Áreas ─────────────────────────────────────────────────────
 // ── Recepción de Mercancía ─────────────────────────────────────────────────────
 
-const ESTADO_META: Record<EstadoPedido, { label: string; color: string; bg: string; icon: string }> = {
-  pendiente:    { label: 'Pendiente',     color: 'text-amber-700',  bg: 'bg-amber-50',   icon: 'schedule' },
-  en_recepcion: { label: 'En Recepción',  color: 'text-blue-700',   bg: 'bg-blue-50',    icon: 'local_shipping' },
-  cerrado:      { label: 'Cerrado',       color: 'text-emerald-700',bg: 'bg-emerald-50', icon: 'check_circle' },
-  cancelado:    { label: 'Cancelado',     color: 'text-stone-500',  bg: 'bg-stone-100',  icon: 'cancel' },
+const ESTATUS_META: Record<EstatusRecepcion, { label: string; color: string; bg: string; icon: string }> = {
+  Pendiente: { label: 'Pendiente',    color: 'text-amber-700',   bg: 'bg-amber-50',   icon: 'schedule' },
+  Parcial:   { label: 'En Recepción', color: 'text-blue-700',    bg: 'bg-blue-50',    icon: 'local_shipping' },
+  Recibida:  { label: 'Recibida',     color: 'text-emerald-700', bg: 'bg-emerald-50', icon: 'check_circle' },
+  Cancelada: { label: 'Cancelada',    color: 'text-stone-500',   bg: 'bg-stone-100',  icon: 'cancel' },
 };
 
-interface ItemForm { art_codigo: string; nombre: string; cantidad_esperada: string; }
+const SEMAFORO_META: Record<SemaforoCaducidad, { label: string; color: string; bg: string }> = {
+  VENCIDO: { label: 'Vencido', color: 'text-on-error',        bg: 'bg-error' },
+  CRITICO: { label: 'Crítico', color: 'text-white',           bg: 'bg-orange-500' },
+  AVISO:   { label: 'Aviso',   color: 'text-yellow-900',      bg: 'bg-yellow-400' },
+  OK:      { label: 'OK',      color: 'text-emerald-700',     bg: 'bg-emerald-100' },
+};
+
+interface ItemForm { codigo_barras: string; nombre: string; cajas_esperadas: string; piezas_por_caja: string; }
 
 function RecepcionView() {
-  const [pedidos,      setPedidos]      = useState<PedidoRecepcion[]>([]);
-  const [selected,     setSelected]     = useState<PedidoConDetalle | null>(null);
-  const [showForm,     setShowForm]     = useState(false);
-  const [loading,      setLoading]      = useState(false);
-  const [saving,       setSaving]       = useState(false);
-  const [filtroEstado, setFiltroEstado] = useState<string>('activos');
+  const [pedidos,       setPedidos]       = useState<RecepcionEsperada[]>([]);
+  const [selected,      setSelected]      = useState<RecepcionEsperadaConDetalle | null>(null);
+  const [discrepancias, setDiscrepancias] = useState<RecepcionDiscrepancia[]>([]);
+  const [caducidades,   setCaducidades]   = useState<CaducidadItem[]>([]);
+  const [showForm,      setShowForm]      = useState(false);
+  const [loading,       setLoading]       = useState(false);
+  const [saving,        setSaving]        = useState(false);
+  const [confirming,    setConfirming]    = useState(false);
+  const [filtroEstado,  setFiltroEstado]  = useState<string>('activos');
   const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
-  // Formulario nuevo pedido
+  // Formulario nueva orden
   const [proveedor,      setProveedor]      = useState('');
   const [fechaEsperada,  setFechaEsperada]  = useState('');
   const [notas,          setNotas]          = useState('');
-  const [items,          setItems]          = useState<ItemForm[]>([{ art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+  const [items,          setItems]          = useState<ItemForm[]>([{ codigo_barras: '', nombre: '', cajas_esperadas: '', piezas_por_caja: '1' }]);
   const [busqueda,       setBusqueda]       = useState<Record<number, string>>({});
   const [sugerencias,    setSugerencias]    = useState<Record<number, { id: string; nombre: string }[]>>({});
 
@@ -2314,32 +2327,43 @@ function RecepcionView() {
   const fetchPedidos = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetch('/api/almacen/pedidos').then(r => r.json());
+      const estadoParam =
+        filtroEstado === 'activos'    ? 'activos'   :
+        filtroEstado === 'recibidas'  ? 'Recibida'  :
+        filtroEstado === 'canceladas' ? 'Cancelada' : '';
+      const url = `/api/recepcion/esperadas${estadoParam ? `?estado=${encodeURIComponent(estadoParam)}` : ''}`;
+      const data = await fetch(url).then(r => r.json());
       setPedidos(Array.isArray(data) ? data : []);
     } catch { /* silent */ }
     finally { setLoading(false); }
-  }, []);
+  }, [filtroEstado]);
 
   const fetchDetalle = useCallback(async (id: number) => {
     try {
-      const data = await fetch(`/api/almacen/pedidos/${id}`).then(r => r.json());
-      setSelected(data);
+      const [det, disc, cad] = await Promise.all([
+        fetch(`/api/recepcion/esperadas/${id}`).then(r => r.json()),
+        fetch(`/api/recepcion/discrepancias/${id}`).then(r => r.json()),
+        fetch('/api/recepcion/caducidades?dias=30').then(r => r.json()),
+      ]);
+      setSelected(det && !det.error ? det : null);
+      setDiscrepancias(Array.isArray(disc) ? disc : []);
+      setCaducidades(Array.isArray(cad) ? cad : []);
     } catch { notify('Error al cargar detalle', 'error'); }
   }, []);
 
   useEffect(() => { fetchPedidos(); }, [fetchPedidos]);
 
-  // Auto-refresh del detalle cada 8s mientras el pedido está en recepción activa
+  // Auto-refresh del detalle cada 8s mientras la orden sigue activa (Pendiente/Parcial)
   useEffect(() => {
-    if (!selected || selected.estado === 'cerrado' || selected.estado === 'cancelado') return;
-    const id = setInterval(() => fetchDetalle(selected.id), 8000);
-    return () => clearInterval(id);
-  }, [selected?.id, selected?.estado, fetchDetalle]);
+    if (!selected || selected.estatus === 'Recibida' || selected.estatus === 'Cancelada') return;
+    const t = setInterval(() => fetchDetalle(selected.id), 8000);
+    return () => clearInterval(t);
+  }, [selected?.id, selected?.estatus, fetchDetalle]);
 
   const buscarProducto = async (idx: number, q: string) => {
     setBusqueda(p => ({ ...p, [idx]: q }));
     // Si el usuario escribe de nuevo, limpiar el código seleccionado previamente
-    setItems(prev => prev.map((it, i) => i === idx ? { ...it, art_codigo: '', nombre: '' } : it));
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, codigo_barras: '', nombre: '' } : it));
     if (q.length < 2) { setSugerencias(p => ({ ...p, [idx]: [] })); return; }
     try {
       const res = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(q)}`).then(r => r.json());
@@ -2348,55 +2372,103 @@ function RecepcionView() {
   };
 
   const seleccionarProducto = (idx: number, codigo: string, nombre: string) => {
-    setItems(prev => prev.map((it, i) => i === idx ? { ...it, art_codigo: codigo, nombre } : it));
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, codigo_barras: codigo, nombre } : it));
     setBusqueda(p => ({ ...p, [idx]: nombre }));
     setSugerencias(p => ({ ...p, [idx]: [] }));
   };
 
-  const agregarItem = () => setItems(p => [...p, { art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+  const agregarItem = () => setItems(p => [...p, { codigo_barras: '', nombre: '', cajas_esperadas: '', piezas_por_caja: '1' }]);
   const quitarItem  = (idx: number) => setItems(p => p.filter((_, i) => i !== idx));
 
   const crearPedido = async () => {
-    const validItems = items.filter(it => it.art_codigo && parseFloat(it.cantidad_esperada) > 0);
-    if (!validItems.length) { notify('Agrega al menos un producto con cantidad', 'error'); return; }
+    const validItems = items.filter(it => it.codigo_barras && parseInt(it.cajas_esperadas) > 0);
+    if (!validItems.length) { notify('Agrega al menos un producto con cajas esperadas', 'error'); return; }
     setSaving(true);
     try {
-      const res  = await fetch('/api/almacen/pedidos', {
+      const res  = await fetch('/api/recepcion/esperadas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ proveedor, fecha_esperada: fechaEsperada, notas, items: validItems }),
+        body: JSON.stringify({
+          proveedor,
+          fecha_esperada: fechaEsperada || null,
+          notas,
+          items: validItems.map(it => ({
+            codigo_barras:   it.codigo_barras,
+            cajas_esperadas: parseInt(it.cajas_esperadas),
+            piezas_por_caja: parseInt(it.piezas_por_caja) || 1,
+          })),
+        }),
       });
       const data = await res.json();
       if (res.ok) {
-        notify(`Pedido ${data.folio} creado`);
+        notify(`Orden ${data.folio} creada`);
         setShowForm(false);
         setProveedor(''); setFechaEsperada(''); setNotas('');
-        setItems([{ art_codigo: '', nombre: '', cantidad_esperada: '' }]);
+        setItems([{ codigo_barras: '', nombre: '', cajas_esperadas: '', piezas_por_caja: '1' }]);
         fetchPedidos();
       } else notify(data.error || 'Error al crear', 'error');
     } catch { notify('Error de conexión', 'error'); }
     finally { setSaving(false); }
   };
 
-  const cambiarEstado = async (id: number, estado: EstadoPedido) => {
+  const confirmarRecepcion = async () => {
+    if (!selected) return;
+    const real = selected.recepciones_reales?.[0];
+    if (!real) { notify('Aún no hay recepción física del TC52 para confirmar', 'error'); return; }
+    setConfirming(true);
     try {
-      await fetch(`/api/almacen/pedidos/${id}/estado`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ estado }),
-      });
-      notify(estado === 'cerrado' ? 'Pedido cerrado' : 'Estado actualizado');
+      const res  = await fetch(`/api/recepcion/reales/${real.id}/confirmar`, { method: 'POST' });
+      const data = await res.json();
+      if (res.ok) { notify(data.mensaje || 'Recepción confirmada · stock actualizado'); fetchDetalle(selected.id); fetchPedidos(); }
+      else notify(data.error || 'Error al confirmar', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setConfirming(false); }
+  };
+
+  const cancelarOrden = async (id: number) => {
+    try {
+      await fetch(`/api/recepcion/esperadas/${id}/cancelar`, { method: 'PATCH' });
+      notify('Orden cancelada');
       fetchPedidos();
       if (selected?.id === id) fetchDetalle(id);
     } catch { notify('Error', 'error'); }
   };
 
-  const pedidosFiltrados = pedidos.filter(p => {
-    if (filtroEstado === 'activos') return p.estado === 'pendiente' || p.estado === 'en_recepcion';
-    if (filtroEstado === 'cerrados') return p.estado === 'cerrado';
-    if (filtroEstado === 'cancelados') return p.estado === 'cancelado';
-    return true;
-  });
+  // Caducidad más urgente por código de barras
+  const caducidadMap = useMemo(() => {
+    const m = new Map<string, CaducidadItem>();
+    for (const c of caducidades) {
+      const prev = m.get(c.codigo_barras);
+      if (!prev || c.dias_para_vencer < prev.dias_para_vencer) m.set(c.codigo_barras, c);
+    }
+    return m;
+  }, [caducidades]);
+
+  // Filas de discrepancias: esperado (todos los items) + recibido (merge por código)
+  const filas = useMemo(() => {
+    const m = new Map<string, {
+      codigo: string; nombre: string;
+      cajas_esperadas: number; cajas_recibidas: number; diferencia_cajas: number;
+      piezas_esperadas: number; piezas_recibidas: number;
+    }>();
+    for (const d of (selected?.detalle ?? [])) {
+      m.set(d.codigo_barras, {
+        codigo: d.codigo_barras, nombre: d.nombre,
+        cajas_esperadas: d.cajas_esperadas, cajas_recibidas: 0, diferencia_cajas: -d.cajas_esperadas,
+        piezas_esperadas: d.piezas_esperadas, piezas_recibidas: 0,
+      });
+    }
+    for (const x of discrepancias) {
+      m.set(x.codigo_barras, {
+        codigo: x.codigo_barras, nombre: x.nombre,
+        cajas_esperadas: x.cajas_esperadas, cajas_recibidas: x.cajas_recibidas, diferencia_cajas: x.diferencia_cajas,
+        piezas_esperadas: x.piezas_esperadas, piezas_recibidas: x.piezas_recibidas,
+      });
+    }
+    return Array.from(m.values());
+  }, [selected, discrepancias]);
+
+  const pedidosFiltrados = pedidos;
 
   return (
     <div>
@@ -2456,6 +2528,13 @@ function RecepcionView() {
                 <Icon name="add_circle" className="text-sm" /> Agregar producto
               </button>
             </div>
+            {/* Encabezados de columnas */}
+            <div className="hidden sm:flex gap-2 items-center px-1 mb-1">
+              <span className="flex-1 text-[9px] font-label uppercase tracking-widest text-stone-400">Producto</span>
+              <span className="w-20 text-center text-[9px] font-label uppercase tracking-widest text-stone-400">Cajas</span>
+              <span className="w-20 text-center text-[9px] font-label uppercase tracking-widest text-stone-400">Pzas/caja</span>
+              <span className="w-8 flex-shrink-0" />
+            </div>
             <div className="space-y-2">
               {items.map((item, idx) => (
                 <div key={idx} className="flex gap-2 items-start">
@@ -2468,16 +2547,16 @@ function RecepcionView() {
                         placeholder="Buscar producto por nombre o código…"
                         className={cn(
                           'w-full px-3 py-2 bg-background border rounded-lg text-sm font-body outline-none focus:border-primary transition-colors pr-8',
-                          item.art_codigo ? 'border-emerald-400 bg-emerald-50/40' : 'border-outline-variant/20'
+                          item.codigo_barras ? 'border-emerald-400 bg-emerald-50/40' : 'border-outline-variant/20'
                         )}
                       />
-                      {item.art_codigo && (
+                      {item.codigo_barras && (
                         <Icon name="check_circle" className="absolute right-2.5 top-1/2 -translate-y-1/2 text-emerald-500 text-base pointer-events-none" />
                       )}
                     </div>
-                    {item.art_codigo && (
+                    {item.codigo_barras && (
                       <p className="text-[9px] font-mono text-emerald-600 mt-0.5 ml-1">
-                        {item.art_codigo}
+                        {item.codigo_barras}
                       </p>
                     )}
                     {(sugerencias[idx] || []).length > 0 && (
@@ -2493,12 +2572,20 @@ function RecepcionView() {
                       </div>
                     )}
                   </div>
-                  {/* Cantidad */}
-                  <div className="w-24 flex-shrink-0">
-                    <input type="number" min="1" value={item.cantidad_esperada}
-                      onChange={e => setItems(p => p.map((it, i) => i === idx ? { ...it, cantidad_esperada: e.target.value } : it))}
-                      placeholder="Cant."
-                      className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors text-center"
+                  {/* Cajas esperadas */}
+                  <div className="w-20 flex-shrink-0">
+                    <input type="number" min="1" value={item.cajas_esperadas}
+                      onChange={e => setItems(p => p.map((it, i) => i === idx ? { ...it, cajas_esperadas: e.target.value } : it))}
+                      placeholder="Cajas"
+                      className="w-full px-2 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors text-center"
+                    />
+                  </div>
+                  {/* Piezas por caja */}
+                  <div className="w-20 flex-shrink-0">
+                    <input type="number" min="1" value={item.piezas_por_caja}
+                      onChange={e => setItems(p => p.map((it, i) => i === idx ? { ...it, piezas_por_caja: e.target.value } : it))}
+                      placeholder="Pzas"
+                      className="w-full px-2 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors text-center"
                     />
                   </div>
                   <button onClick={() => quitarItem(idx)} disabled={items.length === 1}
@@ -2524,27 +2611,27 @@ function RecepcionView() {
         </div>
       )}
 
-      {/* Vista detalle de un pedido */}
+      {/* Vista detalle de una orden */}
       {selected && (
         <div className="mb-6 bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-hidden">
           {/* Header del detalle */}
           <div className="p-4 border-b border-outline-variant/10 flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-base font-serif text-primary font-bold">{selected.folio}</span>
+                <span className="text-base font-serif text-primary font-bold">{selected.referencia}</span>
                 <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-widest flex items-center gap-1',
-                  ESTADO_META[selected.estado].bg, ESTADO_META[selected.estado].color)}>
-                  <Icon name={ESTADO_META[selected.estado].icon} className="text-xs" />
-                  {ESTADO_META[selected.estado].label}
+                  ESTATUS_META[selected.estatus].bg, ESTATUS_META[selected.estatus].color)}>
+                  <Icon name={ESTATUS_META[selected.estatus].icon} className="text-xs" />
+                  {ESTATUS_META[selected.estatus].label}
                 </span>
               </div>
               <p className="text-xs font-body text-stone-500 mt-1">
-                {selected.proveedor || 'Sin proveedor'}{selected.fecha_esperada ? ` · Esperado: ${new Date(selected.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}
+                {selected.proveedor || 'Sin proveedor'}{selected.fecha_esperada ? ` · Esperado: ${new Date(selected.fecha_esperada.slice(0, 10) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}
               </p>
               {selected.notas && <p className="text-xs font-body text-stone-400 mt-0.5 italic">{selected.notas}</p>}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {selected.estado === 'en_recepcion' && (
+              {selected.estatus === 'Parcial' && (
                 <span className="flex items-center gap-1.5 text-[9px] font-label uppercase tracking-widest text-blue-600 bg-blue-50 border border-blue-200 px-2 py-1 rounded-full">
                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse inline-block" />
                   TC52 activo · live
@@ -2555,10 +2642,21 @@ function RecepcionView() {
                 title="Actualizar">
                 <Icon name="refresh" className="text-base" />
               </button>
-              {selected.estado !== 'cerrado' && selected.estado !== 'cancelado' && (
-                <button onClick={() => cambiarEstado(selected.id, 'cerrado')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-emerald-100 transition-all border border-emerald-200">
-                  <Icon name="check_circle" className="text-sm" /> Cerrar pedido
+              {selected.estatus !== 'Recibida' && selected.estatus !== 'Cancelada' && (
+                <button onClick={confirmarRecepcion} disabled={confirming}
+                  className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all border',
+                    confirming ? 'bg-stone-100 text-stone-400 border-stone-200' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200')}>
+                  {confirming
+                    ? <div className="w-3 h-3 border-2 border-emerald-400/40 border-t-emerald-600 rounded-full animate-spin" />
+                    : <Icon name="check_circle" className="text-sm" />}
+                  Confirmar recepción
+                </button>
+              )}
+              {selected.estatus === 'Pendiente' && (
+                <button onClick={() => cancelarOrden(selected.id)}
+                  className="p-1.5 rounded-lg text-stone-300 hover:text-error hover:bg-error-container/20 transition-all"
+                  title="Cancelar orden">
+                  <Icon name="block" className="text-base" />
                 </button>
               )}
               <button onClick={() => setSelected(null)}
@@ -2568,56 +2666,63 @@ function RecepcionView() {
             </div>
           </div>
 
-          {/* Tabla de discrepancias */}
+          {/* Tabla de discrepancias (cajas + piezas) */}
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-surface-container-low">
                   <th className="text-left px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Producto</th>
-                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Esperado</th>
-                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Recibido</th>
-                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Diferencia</th>
-                  <th className="px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Estado</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Cajas esp.</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Cajas rec.</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Dif.</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Pzas esp.</th>
+                  <th className="text-right px-4 py-2.5 text-[10px] font-label uppercase tracking-widest text-stone-500">Pzas rec.</th>
                 </tr>
               </thead>
               <tbody>
-                {selected.detalle.map(d => {
-                  const ok       = d.diferencia === 0;
-                  const faltante = d.diferencia < 0;
-                  const sobrante = d.diferencia > 0;
+                {filas.map(f => {
+                  const ok       = f.diferencia_cajas === 0;
+                  const faltante = f.diferencia_cajas < 0;
+                  const sobrante = f.diferencia_cajas > 0;
+                  const cad      = caducidadMap.get(f.codigo);
                   return (
-                    <tr key={d.id} className="border-t border-outline-variant/5 hover:bg-surface-container-low/50">
+                    <tr key={f.codigo} className="border-t border-outline-variant/5 hover:bg-surface-container-low/50">
                       <td className="px-4 py-3">
-                        <p className="font-body text-on-surface text-sm">{d.nombre || d.art_codigo}</p>
-                        <p className="text-[10px] font-mono text-stone-400">{d.art_codigo}</p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-body text-on-surface text-sm">{f.nombre || f.codigo}</p>
+                          {cad && (
+                            <span
+                              title={`Caduca ${cad.caducidad}${cad.lote ? ` · Lote ${cad.lote}` : ''}`}
+                              className={cn('px-1.5 py-0.5 rounded-full text-[9px] font-label font-bold uppercase tracking-wider', SEMAFORO_META[cad.semaforo].bg, SEMAFORO_META[cad.semaforo].color)}>
+                              {SEMAFORO_META[cad.semaforo].label}{cad.dias_para_vencer >= 0 ? ` · ${cad.dias_para_vencer}d` : ''}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] font-mono text-stone-400">{f.codigo}</p>
                       </td>
-                      <td className="px-4 py-3 text-right font-body font-semibold text-stone-600">{d.cantidad_esperada}</td>
+                      <td className="px-4 py-3 text-right font-body font-semibold text-stone-600">{f.cajas_esperadas}</td>
                       <td className="px-4 py-3 text-right font-body font-semibold">
-                        <span className={d.cantidad_recibida === 0 ? 'text-stone-300' : 'text-on-surface'}>{d.cantidad_recibida}</span>
+                        <span className={f.cajas_recibidas === 0 ? 'text-stone-300' : 'text-on-surface'}>{f.cajas_recibidas}</span>
                       </td>
                       <td className="px-4 py-3 text-right font-serif font-bold text-base">
                         <span className={ok ? 'text-emerald-600' : faltante ? 'text-error' : 'text-amber-600'}>
-                          {sobrante ? '+' : ''}{d.diferencia}
+                          {sobrante ? '+' : ''}{f.diferencia_cajas}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
-                        {ok ? (
-                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-emerald-600">
-                            <Icon name="check_circle" className="text-sm" /> OK
-                          </span>
-                        ) : faltante ? (
-                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-error">
-                            <Icon name="warning" className="text-sm" /> Faltante
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-[10px] font-label uppercase text-amber-600">
-                            <Icon name="info" className="text-sm" /> Sobrante
-                          </span>
-                        )}
+                      <td className="px-4 py-3 text-right font-body text-stone-600">{Number(f.piezas_esperadas).toLocaleString('es-MX')}</td>
+                      <td className="px-4 py-3 text-right font-body">
+                        <span className={f.piezas_recibidas === 0 ? 'text-stone-300' : 'text-on-surface'}>{Number(f.piezas_recibidas).toLocaleString('es-MX')}</span>
                       </td>
                     </tr>
                   );
                 })}
+                {filas.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-stone-300 text-xs font-label uppercase tracking-widest">
+                      Sin productos en esta orden
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -2625,13 +2730,13 @@ function RecepcionView() {
           {/* Resumen */}
           <div className="p-4 border-t border-outline-variant/10 flex gap-4 flex-wrap">
             {(() => {
-              const faltantes = selected.detalle.filter(d => d.diferencia < 0).length;
-              const sobrantes = selected.detalle.filter(d => d.diferencia > 0).length;
-              const ok        = selected.detalle.filter(d => d.diferencia === 0 && d.cantidad_recibida > 0).length;
-              const pendientes = selected.detalle.filter(d => d.cantidad_recibida === 0).length;
+              const faltantes  = filas.filter(f => f.diferencia_cajas < 0).length;
+              const sobrantes  = filas.filter(f => f.diferencia_cajas > 0).length;
+              const okc        = filas.filter(f => f.diferencia_cajas === 0 && f.cajas_recibidas > 0).length;
+              const pendientes = filas.filter(f => f.cajas_recibidas === 0).length;
               return (
                 <>
-                  <div className="flex items-center gap-1.5 text-[11px] font-label text-emerald-600"><Icon name="check_circle" className="text-sm" />{ok} correctos</div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-label text-emerald-600"><Icon name="check_circle" className="text-sm" />{okc} correctos</div>
                   <div className="flex items-center gap-1.5 text-[11px] font-label text-error"><Icon name="warning" className="text-sm" />{faltantes} faltantes</div>
                   <div className="flex items-center gap-1.5 text-[11px] font-label text-amber-600"><Icon name="info" className="text-sm" />{sobrantes} sobrantes</div>
                   <div className="flex items-center gap-1.5 text-[11px] font-label text-stone-400"><Icon name="schedule" className="text-sm" />{pendientes} sin recibir</div>
@@ -2646,8 +2751,8 @@ function RecepcionView() {
       <div className="flex gap-2 mb-4">
         {[
           { id: 'activos',    label: 'Activos' },
-          { id: 'cerrados',   label: 'Cerrados' },
-          { id: 'cancelados', label: 'Cancelados' },
+          { id: 'recibidas',  label: 'Recibidas' },
+          { id: 'canceladas', label: 'Canceladas' },
           { id: 'todos',      label: 'Todos' },
         ].map(f => (
           <button key={f.id} onClick={() => setFiltroEstado(f.id)}
@@ -2672,8 +2777,7 @@ function RecepcionView() {
       ) : (
         <div className="space-y-2">
           {pedidosFiltrados.map(p => {
-            const meta   = ESTADO_META[p.estado];
-            const pct    = p.total_esperado > 0 ? Math.min(100, Math.round((p.total_recibido / p.total_esperado) * 100)) : 0;
+            const meta = ESTATUS_META[p.estatus];
             return (
               <button key={p.id} onClick={() => fetchDetalle(p.id)}
                 className={cn('w-full text-left bg-surface-container-lowest rounded-xl border transition-all hover:border-primary/30 hover:shadow-sm p-4',
@@ -2681,28 +2785,21 @@ function RecepcionView() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-serif text-sm text-primary font-bold">{p.folio}</span>
+                      <span className="font-serif text-sm text-primary font-bold">{p.referencia}</span>
                       <span className={cn('px-2 py-0.5 rounded-full text-[9px] font-label font-bold uppercase tracking-widest flex items-center gap-1', meta.bg, meta.color)}>
                         <Icon name={meta.icon} className="text-[10px]" />{meta.label}
                       </span>
                     </div>
                     <p className="text-xs font-body text-stone-500 mt-0.5 truncate">
-                      {p.proveedor || 'Sin proveedor'}{p.fecha_esperada ? ` · ${new Date(p.fecha_esperada + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}` : ''}
+                      {p.proveedor || 'Sin proveedor'}{p.fecha_esperada ? ` · ${new Date(p.fecha_esperada.slice(0, 10) + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })}` : ''}
                       {' · '}{p.num_items} productos
                     </p>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <p className="text-xs font-label font-bold text-stone-600">{p.total_recibido} / {p.total_esperado} uds</p>
-                    <p className="text-[10px] font-label text-stone-400">{pct}% recibido</p>
+                    <p className="text-xs font-label font-bold text-stone-600">{p.total_cajas_esperadas} cajas</p>
+                    <p className="text-[10px] font-label text-stone-400">{Number(p.total_piezas_esperadas).toLocaleString('es-MX')} pzas esp.</p>
                   </div>
                 </div>
-                {/* Barra de progreso */}
-                {p.estado !== 'pendiente' && (
-                  <div className="mt-2.5 h-1.5 bg-surface-container rounded-full overflow-hidden">
-                    <div className={cn('h-full rounded-full transition-all', pct === 100 ? 'bg-emerald-500' : 'bg-primary')}
-                      style={{ width: `${pct}%` }} />
-                  </div>
-                )}
               </button>
             );
           })}
@@ -3499,6 +3596,181 @@ function StockSurtidoView() {
   );
 }
 
+// ── Caducidades sub-view ───────────────────────────────────────────────────────
+const DIAS_OPCIONES = [7, 15, 30, 60, 90];
+
+function CaducidadesView() {
+  const [items,   setItems]   = useState<CaducidadItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [dias,    setDias]    = useState(30);
+
+  const fetchData = useCallback(async (d: number) => {
+    setLoading(true);
+    try {
+      const data = await fetch(`/api/recepcion/caducidades?dias=${d}`).then(r => r.json());
+      const arr = (Array.isArray(data) ? data : []) as CaducidadItem[];
+      // Orden por fecha de vencimiento ascendente (más próximos arriba)
+      arr.sort((a, b) => (a.caducidad || '').localeCompare(b.caducidad || ''));
+      setItems(arr);
+    } catch { setItems([]); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchData(dias); }, [fetchData, dias]);
+
+  const counts = useMemo(() => {
+    const c: Record<SemaforoCaducidad, number> = { VENCIDO: 0, CRITICO: 0, AVISO: 0, OK: 0 };
+    for (const it of items) c[it.semaforo] = (c[it.semaforo] ?? 0) + 1;
+    return c;
+  }, [items]);
+
+  const exportarExcel = () => {
+    if (!items.length) return;
+    const XLSX = require('xlsx');
+    const filas = items.map(it => ({
+      'Producto':         it.nombre || it.codigo_barras,
+      'Código':           it.codigo_barras,
+      'Ubicación':        it.ubicacion || '',
+      'Lote':             it.lote || '',
+      'Vence':            it.caducidad || '',
+      'Días restantes':   it.dias_para_vencer,
+      'Piezas':           it.piezas_totales,
+      'Estado':           SEMAFORO_META[it.semaforo].label,
+      'Folio recepción':  it.folio_recepcion || '',
+    }));
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([], { skipHeader: true });
+    XLSX.utils.sheet_add_aoa(ws, [
+      ['Caducidades — La Casita Deli'],
+      [`Alertas de los próximos ${dias} días`],
+      [`Total: ${items.length} lote${items.length !== 1 ? 's' : ''} · ${items.reduce((s, r) => s + Number(r.piezas_totales || 0), 0)} piezas`],
+      [],
+    ]);
+    XLSX.utils.sheet_add_json(ws, filas, { origin: 'A5' });
+    ws['!cols'] = [{ wch: 36 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 18 }];
+    ['A1', 'A2', 'A3'].forEach(cell => { if (ws[cell]) ws[cell].s = { font: { bold: true } }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'Caducidades');
+    XLSX.writeFile(wb, `caducidades-${dias}d.xlsx`);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
+        <div>
+          <h3 className="font-serif text-xl text-primary">Caducidades</h3>
+          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
+            Lotes con fecha de vencimiento registrada en recepciones confirmadas
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500">Próximos</label>
+          <select value={dias} onChange={e => setDias(Number(e.target.value))}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors">
+            {DIAS_OPCIONES.map(d => <option key={d} value={d}>{d} días</option>)}
+          </select>
+          <button onClick={() => fetchData(dias)} disabled={loading}
+            className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', loading && 'animate-spin')}
+            title="Actualizar">
+            <Icon name="refresh" />
+          </button>
+          <button onClick={exportarExcel} disabled={!items.length}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-primary/90 shadow-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+            <Icon name="download" className="text-base" /> Exportar Excel
+          </button>
+        </div>
+      </div>
+
+      {/* Summary chips */}
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[
+          { label: 'Vencidos',     count: counts.VENCIDO, color: 'bg-error-container/50 text-on-error-container' },
+          { label: 'Crítico (7d)', count: counts.CRITICO, color: 'bg-orange-100 text-orange-700' },
+          { label: 'Aviso',        count: counts.AVISO,   color: 'bg-yellow-100 text-yellow-700' },
+          { label: 'En orden',     count: counts.OK,      color: 'bg-emerald-100 text-emerald-700' },
+        ].map(c => (
+          <span key={c.label}
+            className={cn('px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest', c.color)}>
+            {c.label}: {c.count}
+          </span>
+        ))}
+      </div>
+
+      {/* Tabla */}
+      {loading ? (
+        <div className="flex justify-center py-14">
+          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="py-16 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl">
+          <Icon name="hourglass_empty" className="text-5xl opacity-20 mb-3" />
+          <p className="text-sm font-label uppercase tracking-widest">Sin caducidades en los próximos {dias} días</p>
+          <p className="text-[11px] font-body text-stone-400 mt-2 text-center max-w-xs">
+            Las caducidades se registran al recibir mercancía con fecha de vencimiento desde el TC52
+          </p>
+        </div>
+      ) : (
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
+                <tr>
+                  <th className="px-5 py-3">Producto</th>
+                  <th className="px-4 py-3">Ubicación</th>
+                  <th className="px-4 py-3">Lote</th>
+                  <th className="px-4 py-3">Vence</th>
+                  <th className="px-4 py-3 text-center">Días restantes</th>
+                  <th className="px-4 py-3 text-right">Piezas</th>
+                  <th className="px-4 py-3 text-center">Estado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {items.map((it, i) => {
+                  const meta = SEMAFORO_META[it.semaforo];
+                  return (
+                    <tr key={`${it.codigo_barras}-${it.lote ?? ''}-${it.caducidad}-${i}`} className="hover:bg-background transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="text-sm font-body text-on-surface">{it.nombre || it.codigo_barras}</p>
+                        <p className="text-[9px] font-mono text-stone-400 mt-0.5">{it.codigo_barras}</p>
+                      </td>
+                      <td className="px-4 py-3 text-sm font-body text-stone-600">{it.ubicacion || '—'}</td>
+                      <td className="px-4 py-3 text-sm font-body text-stone-600">{it.lote || '—'}</td>
+                      <td className="px-4 py-3 text-sm font-body text-stone-600">
+                        {it.caducidad ? new Date(it.caducidad + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={cn('font-serif font-bold', it.dias_para_vencer < 0 ? 'text-error' : it.dias_para_vencer <= 7 ? 'text-orange-600' : 'text-on-surface')}>
+                          {it.dias_para_vencer < 0 ? `${Math.abs(it.dias_para_vencer)}d vencido` : `${it.dias_para_vencer}d`}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right font-serif font-bold text-on-surface">
+                        {Number(it.piezas_totales).toLocaleString('es-MX')}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={cn('inline-block px-2.5 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-wider', meta.bg, meta.color)}>
+                          {meta.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
+            <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+              {items.length} lote{items.length !== 1 ? 's' : ''} con caducidad
+            </p>
+            <p className="text-[10px] font-label text-stone-400">
+              Total: {items.reduce((s, r) => s + Number(r.piezas_totales || 0), 0).toLocaleString('es-MX')} pzas
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
   const [view,      setView]      = useState<SubView>('stock-surtido');
@@ -3567,6 +3839,7 @@ export default function BodegaTab() {
         {view === 'recepcion'      && <RecepcionView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
         {view === 'merma'          && <MermaView />}
+        {view === 'caducidades'    && <CaducidadesView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
         {view === 'zebra'          && <ZebraView />}

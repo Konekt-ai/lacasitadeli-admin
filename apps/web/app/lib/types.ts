@@ -3,6 +3,7 @@ export interface Product {
   costPrice: number; salePrice: number; stock: number; minStock: number;
   image: string | null; active: boolean; visibleWeb: boolean;
   category: string | null; categoryId: number | null; createdAt: string;
+  brand?: string | null;
 }
 
 export interface Category { id: string | number; name: string; description?: string | null; }
@@ -139,6 +140,78 @@ export interface PedidoDetalle {
 
 export interface PedidoConDetalle extends PedidoRecepcion {
   detalle: PedidoDetalle[];
+}
+
+// ── Recepción con conversión caja→pieza (MSSQL /api/recepcion/*) ───────────────
+export type EstatusRecepcion = 'Pendiente' | 'Parcial' | 'Recibida' | 'Cancelada';
+
+export interface RecepcionEsperada {
+  id:                    number;
+  referencia:            string;
+  proveedor:             string | null;
+  fecha_esperada:        string | null;
+  destino_esperado:      string | null;
+  estatus:               EstatusRecepcion;
+  notas:                 string | null;
+  creado:                string;
+  num_items:             number;
+  total_cajas_esperadas: number;
+  total_piezas_esperadas: number;
+}
+
+export interface RecepcionEsperadaItem {
+  id:               number;
+  codigo_barras:    string;
+  sku_proveedor:    string | null;
+  cajas_esperadas:  number;
+  piezas_por_caja:  number;
+  piezas_esperadas: number;
+  notas:            string | null;
+  nombre:           string;
+}
+
+export interface RecepcionRealRef {
+  id:             number;
+  fecha_real:     string | null;
+  recibido_por:   string | null;
+  estatus:        string;
+  confirmada:     number | boolean;
+  fecha_real_fmt: string | null;
+}
+
+export interface RecepcionEsperadaConDetalle extends RecepcionEsperada {
+  creado_fmt?:         string;
+  detalle:             RecepcionEsperadaItem[];
+  recepciones_reales:  RecepcionRealRef[];
+}
+
+export interface RecepcionDiscrepancia {
+  recepcion_esperada_id: number;
+  referencia:            string;
+  proveedor:             string | null;
+  codigo_barras:         string;
+  nombre:                string;
+  cajas_esperadas:       number;
+  cajas_recibidas:       number;
+  diferencia_cajas:      number;
+  piezas_esperadas:      number;
+  piezas_recibidas:      number;
+}
+
+export type SemaforoCaducidad = 'VENCIDO' | 'CRITICO' | 'AVISO' | 'OK';
+
+export interface CaducidadItem {
+  codigo_barras:     string;
+  nombre:            string;
+  ubicacion:         string | null;
+  lote:              string | null;
+  caducidad:         string;
+  piezas_totales:    number;
+  dias_para_vencer:  number;
+  semaforo:          SemaforoCaducidad;
+  recepcion_real_id: number;
+  folio_recepcion:   string | null;
+  fecha_recepcion:   string | null;
 }
 
 // ── Ubicaciones y movimientos unificados ──────────────────────────────────────

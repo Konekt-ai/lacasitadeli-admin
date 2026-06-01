@@ -310,7 +310,7 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
   useEffect(() => {
     fetch(`/api/novacaja/tickets/${folio}/detalle`)
       .then(r => r.ok ? r.json() : {})
-      .then(data => {
+      .then((data: any) => {
         if (Array.isArray(data)) {
           setLineas(data);
         } else if (data?.lineas) {

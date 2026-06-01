@@ -42,7 +42,7 @@ echo [%date% %time%] Admin: cambios detectados. Sincronizando... >> "%LOG%"
 
 :: 3. Sincronizar exacto con GitHub (descarta cambios locales sin preguntar)
 git reset --hard origin/main >> "%LOG%" 2>&1
-git clean -fd --exclude=logs/ --exclude=apps/api/.env --exclude=apps/api/lacasita.db >> "%LOG%" 2>&1
+git clean -fd --exclude=logs/ --exclude=apps/api/.env --exclude=apps/api/lacasita.db --exclude=apps/api/lacasita.db-wal --exclude=apps/api/lacasita.db-shm >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo [%date% %time%] ERROR: Fallo al sincronizar admin. >> "%LOG%"
     exit /b 1
@@ -61,6 +61,11 @@ call npm install --omit=dev >> "%LOG%" 2>&1
 cd /d "%~dp0"
 
 :SaltarInstallAdmin
+
+:: ── MIGRACION DE BASE DE DATOS (idempotente) ─────────────────────────────────
+:: Crea/actualiza las tablas de recepcion en MSSQL si faltan. Seguro repetir.
+echo [%date% %time%] Ejecutando migracion de BD (recepcion)... >> "%LOG%"
+node "%~dp0apps\api\migrate.js" >> "%LOG%" 2>&1
 
 :: ── REPO ALMACEN ─────────────────────────────────────────────────────────────
 

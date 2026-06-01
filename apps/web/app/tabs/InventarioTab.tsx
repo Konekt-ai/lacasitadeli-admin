@@ -71,7 +71,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   }, []);
 
   // ── Fetch products — debounced on search/category, immediate on page ──────────
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const searchRef   = useRef(searchQuery);
   const categoryRef = useRef(categoryFilter);
   searchRef.current   = searchQuery;

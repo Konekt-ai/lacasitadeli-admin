@@ -5,6 +5,7 @@ const cron       = require('node-cron');
 const mssql      = require('./db/mssql');
 const { getDb }  = require('./db');
 const emailSvc   = require('./modules/emailService');
+const { setupRecepcionRoutes } = require('./modules/recepcion');
 
 const app  = express();
 const PORT = process.env.PORT || 3002;
@@ -20,6 +21,7 @@ app.use('/api/bodega',   require('./modules/bodega'));
 app.use('/api/almacen',  require('./modules/almacen'));
 app.use('/api/facturas', require('./modules/facturas'));
 app.use('/api/admin',   require('./modules/admin'));
+setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
   const status = { api: 'ok', sqlserver: 'error', sqlite: 'error' };
