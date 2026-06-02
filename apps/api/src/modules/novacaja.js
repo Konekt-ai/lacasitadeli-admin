@@ -168,10 +168,8 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, ticketCountRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
       mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
-      // Conteo real de tickets desde Tickets con GETDATE() — se actualiza en vivo
-      mssql.query(buildTicketKPIsQuery({ period })).catch(() => ({ recordset: [{}] })),
       mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
@@ -182,18 +180,23 @@ router.get('/dashboard', async (req, res) => {
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
     const polizaKPIs     = kpiRes.recordset[0]           || {};
-    const ticketKPIs     = ticketCountRes.recordset[0]   || {};
 
+    // TODOS los KPIs vienen de una sola fuente (VBasePolizaVentas) con la MISMA
+    // fecha ancla (maxDate). Así reconcilian entre sí: ganancia = ventas - costo,
+    // ticketPromedio = ventas / tickets, y las unidades cuadran con el top de
+    // productos. Antes ventas/tickets venían de la tabla Tickets con GETDATE() y
+    // costo/unidades de pólizas con maxDate → al ser días distintos, no cuadraban.
+    const totalVentasN  = Number(polizaKPIs.totalVentas)  || 0;
+    const totalTicketsN = Number(polizaKPIs.totalTickets) || 0;
     const kpisFull = {
-      // Ticket count: tabla Tickets en tiempo real (GETDATE)
-      totalTickets:     ticketKPIs.totalTickets              || polizaKPIs.totalTickets || 0,
-      ticketPromedio:   ticketKPIs.ticketPromedio            || polizaKPIs.ticketPromedio || 0,
-      // Ventas: SUMA de T_ImporteTotal de la tabla Tickets (total real de caja por periodo)
-      totalVentas:      ticketKPIs.totalVentas ?? polizaKPIs.totalVentas ?? 0,
-      // Costo, unidades y ganancia: VBasePolizaVentas (Tickets no trae costo)
-      totalCosto:       polizaKPIs.totalCosto       || 0,
-      unidadesVendidas: polizaKPIs.unidadesVendidas || 0,
-      ganancia:         polizaKPIs.ganancia         || 0,
+      totalTickets:     totalTicketsN,
+      // Promedio exacto = ventas / tickets (el AVG de la consulta queda sesgado por
+      // el JOIN, que repite el total del ticket una vez por cada línea).
+      ticketPromedio:   totalTicketsN > 0 ? totalVentasN / totalTicketsN : 0,
+      totalVentas:      totalVentasN,
+      totalCosto:       Number(polizaKPIs.totalCosto)       || 0,
+      unidadesVendidas: Number(polizaKPIs.unidadesVendidas) || 0,
+      ganancia:         Number(polizaKPIs.ganancia)         || 0,
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,

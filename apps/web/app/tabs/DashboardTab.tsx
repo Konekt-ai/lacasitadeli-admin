@@ -58,7 +58,7 @@ const ProdTooltip = ({ active, payload, label }: any) => {
       <p className="font-body text-xs text-stone-500 mb-1 truncate max-w-[160px]">{label}</p>
       <p className="font-serif text-primary text-lg font-bold">{Number(payload[0]?.value).toLocaleString('es-MX')} uds</p>
       <p className="text-[10px] text-stone-400 font-label">
-        ${Number(payload[0]?.payload?.ingresos).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+        ${Number(payload[0]?.payload?.ingresos).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
       </p>
     </div>
   );
@@ -119,7 +119,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     return () => clearInterval(id);
   }, [fetchRecentTickets]);
 
-  const fmt  = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
+  const fmt  = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const pct  = kpis && kpis.totalVentas > 0
     ? ((kpis.ganancia / kpis.totalVentas) * 100).toFixed(1)
     : '0.0';
@@ -190,16 +190,16 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-10">
           {kpiCards.map((card, i) => (
             <div key={i} className={cn(
-              'bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between shadow-[0px_12px_32px_rgba(28,28,25,0.04)]',
+              'bg-surface-container-lowest p-4 sm:p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between shadow-[0px_12px_32px_rgba(28,28,25,0.04)] min-w-0 overflow-hidden',
               card.danger && 'border-l-4 border-l-error'
             )}>
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex justify-between items-start gap-2 mb-3 sm:mb-4">
                 <span className="text-[10px] font-label uppercase tracking-widest text-stone-500">{card.label}</span>
-                <Icon name={card.icon} className={cn(card.color, card.bg, 'p-2 rounded-lg')} />
+                <Icon name={card.icon} className={cn(card.color, card.bg, 'p-2 rounded-lg flex-shrink-0')} />
               </div>
-              <div>
-                <p className={cn('text-3xl font-serif', card.danger ? 'text-error' : 'text-on-surface')}>{card.value}</p>
-                <p className={cn('text-[11px] mt-1 font-body font-medium', card.danger ? 'text-error' : 'text-emerald-700')}>{card.sub}</p>
+              <div className="min-w-0">
+                <p className={cn('text-xl sm:text-2xl lg:text-3xl font-serif tabular-nums tracking-tight leading-tight break-words', card.danger ? 'text-error' : 'text-on-surface')}>{card.value}</p>
+                <p className={cn('text-[11px] mt-1 font-body font-medium truncate', card.danger ? 'text-error' : 'text-emerald-700')}>{card.sub}</p>
               </div>
             </div>
           ))}
@@ -393,8 +393,8 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
                       {t.cajero && ` · Cajero ${t.cajero}`}
                     </p>
                   </div>
-                  <p className="font-serif text-lg font-bold text-on-surface">
-                    ${Number(t.importeTotal).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  <p className="font-serif text-lg font-bold text-on-surface tabular-nums">
+                    ${Number(t.importeTotal).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </p>
                 </div>
               ))}
