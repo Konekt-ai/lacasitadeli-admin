@@ -99,8 +99,14 @@ export interface StagnantProduct {
   id: string; name: string; stock: number; category: string | null; ultima_venta: string | null;
 }
 
+export interface SinPrecioProduct {
+  id: string; name: string; stock: number;
+  costoEstimado: number | null; precioEstimado: number | null;
+  faltaCosto: number; faltaPrecio: number;
+}
+
 export interface AlertTotals {
-  expirySoon: number; expired: number; stagnant: number; noSales: number;
+  expirySoon: number; expired: number; stagnant: number; noSales: number; sinPrecio?: number;
 }
 
 export interface BodegaAlerts {
@@ -108,6 +114,7 @@ export interface BodegaAlerts {
   expired:    ExpiryRecord[];
   stagnant:   StagnantProduct[];
   noSales:    StagnantProduct[];
+  sinPrecio?: SinPrecioProduct[];
   totals:     AlertTotals;
 }
 

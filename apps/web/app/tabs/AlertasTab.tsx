@@ -9,7 +9,7 @@ interface Props {
   onRefresh:        () => void;
 }
 
-type CategoryId = 'lowStock' | 'expirySoon' | 'expired' | 'stagnant' | 'noSales';
+type CategoryId = 'lowStock' | 'expirySoon' | 'expired' | 'stagnant' | 'noSales' | 'sinPrecio';
 
 interface AlertCategory {
   id:       CategoryId;
@@ -25,6 +25,7 @@ const CATEGORIES: AlertCategory[] = [
   { id: 'expirySoon', label: 'Próximos a Vencer',       sub: 'Vencen en los próximos 30 días',       icon: 'schedule',       severity: 'warning'  },
   { id: 'stagnant',   label: 'Inventario Estancado',    sub: 'Sin ventas en 30+ días',               icon: 'do_not_disturb', severity: 'warning'  },
   { id: 'noSales',    label: 'Sin Ventas Este Mes',     sub: 'Stock disponible sin movimiento',      icon: 'trending_down',  severity: 'info'     },
+  { id: 'sinPrecio',  label: 'Sin Precio Registrado',   sub: 'Se venden con costo/precio estimado — registra el real', icon: 'price_change', severity: 'warning' },
 ];
 
 const SEVERITY_STYLES: Record<string, { card: string; badge: string; icon: string; count: string }> = {
@@ -87,6 +88,7 @@ export default function AlertasTab({ lowStockProducts, onRefresh }: Props) {
     if (id === 'expired')    return bodegaData.totals.expired;
     if (id === 'stagnant')   return bodegaData.totals.stagnant;
     if (id === 'noSales')    return bodegaData.totals.noSales;
+    if (id === 'sinPrecio')  return bodegaData.totals.sinPrecio ?? 0;
     return 0;
   };
 
@@ -233,6 +235,9 @@ export default function AlertasTab({ lowStockProducts, onRefresh }: Props) {
                   )}
                   {cat.id === 'noSales' && bodegaData && (
                     <StagnantList products={bodegaData.noSales} noSalesMode />
+                  )}
+                  {cat.id === 'sinPrecio' && bodegaData && (
+                    <SinPrecioList items={bodegaData.sinPrecio || []} />
                   )}
                 </div>
               )}
@@ -383,6 +388,38 @@ function StagnantList({ products, noSalesMode = false }: { products: { id: strin
                     : 'Sin registro'}
                 </span>
               )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SinPrecioList({ items }: {
+  items: { id: string; name: string; stock: number; costoEstimado: number | null; precioEstimado: number | null; faltaCosto: number; faltaPrecio: number }[];
+}) {
+  const fmt = (n: number | null) => n != null ? `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+  if (items.length === 0) {
+    return <p className="text-xs font-body text-stone-400 italic px-1">Todos los productos que se venden tienen precio registrado. 🎉</p>;
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-body text-stone-500 px-1 mb-1">
+        Estos productos se venden pero su costo/precio está <strong>estimado</strong> (no registrado). El sistema los usa para no romper el cálculo, pero conviene registrar el precio real en NovaCaja o recibir su factura.
+      </p>
+      {items.map(p => (
+        <div key={p.id} className="bg-surface-container-lowest rounded-xl border border-amber-200 p-3.5 flex items-center gap-3">
+          <Icon name="price_change" className="text-xl text-amber-600 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-body text-on-surface truncate">{p.name}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-0.5">
+              <span className="text-[10px] font-mono text-stone-400">{p.id}</span>
+              <span className="text-[10px] font-label text-stone-400">Stock: {p.stock}</span>
+              <span className="text-[10px] font-label text-amber-700">Costo est.: {fmt(p.costoEstimado)}</span>
+              <span className="text-[10px] font-label text-amber-700">Venta est.: {fmt(p.precioEstimado)}</span>
+              {p.faltaCosto === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">sin costo</span>}
+              {p.faltaPrecio === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">sin precio</span>}
             </div>
           </div>
         </div>

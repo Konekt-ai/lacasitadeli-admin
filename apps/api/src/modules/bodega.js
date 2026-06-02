@@ -4,6 +4,11 @@ const mssql    = require('../db/mssql');
 
 const router = express.Router();
 
+// Cache TTL simple (las alertas son consultas pesadas y se consultan seguido)
+const _cache = new Map();
+const _cacheGet = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
+const _cacheSet = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
+
 function getValidAreas(db) {
   return db.prepare(
     `SELECT clave FROM ubicaciones_config WHERE activo = 1 ORDER BY orden`
@@ -404,6 +409,9 @@ router.post('/recuento', (req, res) => {
 // ── GET /api/bodega/alerts ───────────────────────────────────────────────────
 router.get('/alerts', async (req, res) => {
   try {
+    const cached = _cacheGet('alerts');
+    if (cached) return res.json(cached);
+
     const db    = getDb();
     const today = new Date().toISOString().slice(0, 10);
     const in30  = new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10);
@@ -416,8 +424,42 @@ router.get('/alerts', async (req, res) => {
       `SELECT * FROM product_expiry WHERE fecha_caducidad < ? ORDER BY fecha_caducidad DESC`
     ).all(today);
 
-    const dismissed        = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'stagnant'`).all().map(r => r.art_codigo));
-    const dismissedNoSales = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo));
+    const dismissed         = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'stagnant'`).all().map(r => r.art_codigo));
+    const dismissedNoSales  = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo));
+    const dismissedSinPrecio = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'sinPrecio'`).all().map(r => r.art_codigo));
+
+    // Productos que SE VENDEN pero no tienen costo real (factura/NovaCaja) o no
+    // tienen precio de venta en lista → distorsionan ganancia/inversión. El sistema
+    // ya rellena con estimados para no romper el cálculo; esta alerta avisa cuáles
+    // necesitan que se registre el precio real. Consulta acotada (tablas base).
+    // El relleno (costos_producto fuente='estimado') ya marca los productos que
+    // se venden sin costo/precio REAL registrado. Leer de ahí es instantáneo
+    // (tabla chica) y no recorre las pólizas.
+    let sinPrecio = [];
+    try {
+      const spRes = await mssql.query(`
+        SELECT TOP 200
+          cp.codigo_barras                          AS id,
+          ISNULL(a.Art_Descripcion, cp.codigo_barras) AS name,
+          ISNULL(aa.stock, 0)                       AS stock,
+          cp.precio_compra                          AS costoEstimado,
+          cp.precio_venta                           AS precioEstimado,
+          CASE WHEN ISNULL(cp.precio_compra,0) = 0 THEN 1 ELSE 0 END AS faltaCosto,
+          CASE WHEN ISNULL(cp.precio_venta,0)  = 0 THEN 1 ELSE 0 END AS faltaPrecio
+        FROM [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK)
+        LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = cp.codigo_barras
+        OUTER APPLY (
+          SELECT SUM(aa2.AA_ExistenciaActualU) AS stock
+          FROM [compucaja].[dbo].[ArticulosAlmacen] aa2 WITH (NOLOCK)
+          WHERE aa2.Art_Codigo = cp.codigo_barras
+        ) aa
+        WHERE cp.fuente = 'estimado'
+        ORDER BY cp.precio_compra ASC
+      `);
+      sinPrecio = (spRes.recordset || []).filter(r => !dismissedSinPrecio.has(r.id));
+    } catch (e) {
+      console.error('MSSQL sinPrecio fetch error:', e.message);
+    }
 
     let stagnant = [], noSales = [];
     try {
@@ -462,18 +504,22 @@ router.get('/alerts', async (req, res) => {
       console.error('MSSQL alert fetch error:', e.message);
     }
 
-    res.json({
+    const payload = {
       expirySoon,
       expired,
       stagnant,
       noSales,
+      sinPrecio,
       totals: {
         expirySoon: expirySoon.length,
         expired:    expired.length,
         stagnant:   stagnant.length,
         noSales:    noSales.length,
+        sinPrecio:  sinPrecio.length,
       },
-    });
+    };
+    _cacheSet('alerts', payload, 180_000); // 3 min
+    res.json(payload);
   } catch (err) {
     console.error('Error alerts:', err.message);
     res.status(500).json({ error: err.message });
@@ -483,13 +529,14 @@ router.get('/alerts', async (req, res) => {
 // ── POST /api/bodega/alerts/descartar ────────────────────────────────────────
 router.post('/alerts/descartar', (req, res) => {
   const { art_codigo, tipo, notas } = req.body;
-  if (!art_codigo || !['stagnant', 'noSales', 'expiry'].includes(tipo))
+  if (!art_codigo || !['stagnant', 'noSales', 'expiry', 'sinPrecio'].includes(tipo))
     return res.status(400).json({ error: 'art_codigo y tipo válido requeridos' });
   try {
     getDb().prepare(`
       INSERT OR REPLACE INTO alertas_descartadas (art_codigo, tipo, notas)
       VALUES (?, ?, ?)
     `).run(art_codigo, tipo, notas || null);
+    _cache.delete('alerts');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -501,6 +548,7 @@ router.delete('/alerts/descartar/:codigo/:tipo', (req, res) => {
   try {
     getDb().prepare(`DELETE FROM alertas_descartadas WHERE art_codigo = ? AND tipo = ?`)
       .run(req.params.codigo, req.params.tipo);
+    _cache.delete('alerts');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -298,11 +298,16 @@ BEGIN
     CREATE TABLE costos_producto (
       codigo_barras  VARCHAR(50)   NOT NULL PRIMARY KEY,        -- = Art_Codigo (resuelto)
       precio_compra  DECIMAL(18,4) NOT NULL DEFAULT 0,          -- costo real por pieza (ultima factura)
+      precio_venta   DECIMAL(18,4) NULL,                        -- precio de venta efectivo (relleno)
       proveedor      VARCHAR(100)  NULL,                        -- de quien se compro
-      fuente         VARCHAR(20)   NOT NULL DEFAULT 'factura',  -- factura | manual
+      fuente         VARCHAR(20)   NOT NULL DEFAULT 'factura',  -- factura | estimado | manual
       actualizado    DATETIME      NOT NULL DEFAULT GETDATE()
     );
 END
+GO
+-- precio_venta para instalaciones que ya tenian costos_producto
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('costos_producto') AND name='precio_venta')
+    ALTER TABLE costos_producto ADD precio_venta DECIMAL(18,4) NULL;
 GO
 
 -- =====================================================================
@@ -316,19 +321,23 @@ CREATE VIEW v_costos_producto AS
 SELECT
   a.Art_Codigo                                                        AS codigo_barras,
   a.Art_Descripcion                                                   AS nombre,
-  cp.precio_compra                                                    AS costo_factura,    -- nuestro (facturas)
+  cp.precio_compra                                                    AS costo_factura,    -- nuestro (facturas/estimado)
   a.Art_UltimoCosto                                                   AS costo_novacaja,   -- respaldo
-  COALESCE(NULLIF(cp.precio_compra, 0), NULLIF(a.Art_UltimoCosto, 0)) AS precio_compra,    -- COSTO EXACTO
-  lp.LPA_PrecioVentaImp                                               AS precio_venta,     -- lista NovaCaja c/imp
-  CASE WHEN COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0)) IS NOT NULL
-       THEN lp.LPA_PrecioVentaImp - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0))
-       END                                                            AS margen_unitario,
-  CASE WHEN lp.LPA_PrecioVentaImp > 0
-       THEN CAST((lp.LPA_PrecioVentaImp - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0)))
-                 / lp.LPA_PrecioVentaImp * 100 AS DECIMAL(6,2))
+  -- COSTO EXACTO con respaldos: factura/estimado -> ultimo costo -> reposicion
+  COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) AS precio_compra,
+  -- PRECIO DE VENTA con respaldos: lista NovaCaja -> relleno (ticket/derivado)
+  COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(cp.precio_venta,0))                               AS precio_venta,
+  COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(cp.precio_venta,0))
+    - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) AS margen_unitario,
+  CASE WHEN COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(cp.precio_venta,0)) > 0
+       THEN CAST((COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(cp.precio_venta,0))
+                  - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)))
+                 / COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(cp.precio_venta,0)) * 100 AS DECIMAL(6,2))
        END                                                            AS margen_pct,
-  CASE WHEN NULLIF(cp.precio_compra,0)   IS NOT NULL THEN 'factura'
-       WHEN NULLIF(a.Art_UltimoCosto,0)  IS NOT NULL THEN 'novacaja'
+  CASE WHEN NULLIF(cp.precio_compra,0) IS NOT NULL AND cp.fuente = 'factura' THEN 'factura'
+       WHEN NULLIF(cp.precio_compra,0) IS NOT NULL                          THEN 'estimado'
+       WHEN NULLIF(a.Art_UltimoCosto,0) IS NOT NULL                         THEN 'novacaja'
+       WHEN NULLIF(a.Art_CostoReposicion,0) IS NOT NULL                     THEN 'reposicion'
        ELSE 'sin_costo' END                                           AS fuente_costo
 FROM [compucaja].[dbo].[VArticulosUnificados] a
 LEFT JOIN costos_producto cp ON cp.codigo_barras = a.Art_Codigo
@@ -338,6 +347,41 @@ OUTER APPLY (
   WHERE l.Art_Codigo = a.Art_Codigo
   ORDER BY l.LP_Codigo
 ) lp;
+GO
+
+-- =====================================================================
+-- 8. RELLENO de costo/precio para productos CON VENTAS sin registro propio.
+--    Evita huecos que rompan ganancia/inversion. Usa SOLO lo que el producto
+--    ya tiene (NovaCaja): ultimo costo -> reposicion -> derivado del precio;
+--    precio de venta: lista -> promedio real de tickets -> costo*factor.
+--    NO sobreescribe lo capturado de facturas (solo inserta lo que falta).
+--    Acotado a productos con ventas (no recorre todo el catalogo).
+-- =====================================================================
+INSERT INTO costos_producto (codigo_barras, precio_compra, precio_venta, proveedor, fuente, actualizado)
+SELECT
+  s.producto,
+  -- costo derivado (estos productos NO tienen costo real): precio/factor -> ticket/1.30
+  COALESCE(NULLIF(lp.LPA_PrecioVentaImp / NULLIF(lp.LPA_UtilidadFactor,0), 0),
+           NULLIF(s.precioTicket / 1.30, 0), 0)                                              AS precio_compra,
+  -- precio de venta: lista -> promedio real de tickets
+  COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(s.precioTicket,0), 0)                      AS precio_venta,
+  NULL, 'estimado', GETDATE()
+FROM (
+  SELECT v.producto,
+         AVG(NULLIF(v.importe / NULLIF(v.cantidad,0), 0)) AS precioTicket
+  FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+  WHERE v.Fecha >= DATEADD(DAY, -90, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
+    AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
+  GROUP BY v.producto
+) s
+LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = s.producto
+OUTER APPLY (
+  SELECT TOP 1 l.LPA_PrecioVentaImp, l.LPA_UtilidadFactor
+  FROM [compucaja].[dbo].[ListaPreciosArt] l WHERE l.Art_Codigo = s.producto ORDER BY l.LP_Codigo
+) lp
+WHERE NOT EXISTS (SELECT 1 FROM costos_producto cp WHERE cp.codigo_barras = s.producto)
+  -- solo huecos reales: el producto NO tiene costo en NovaCaja
+  AND COALESCE(NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL;
 GO
 
 -- ============================================================
