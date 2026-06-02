@@ -239,20 +239,27 @@ async function crearRecepcionEsperada(req, res) {
         `)
       const recepcionId = r.recordset[0].id
 
-      // Insertar detalle
+      // Insertar detalle (con precio de compra de la factura si viene)
       for (const item of items) {
         if (!item.codigo_barras || !item.cajas_esperadas) continue
+        const ppc        = item.piezas_por_caja || 1
+        const precioCaja = item.precio_compra_caja != null ? Number(item.precio_compra_caja) : null
+        // precio por pieza: explícito, o derivado de caja/ppc
+        const precioPza  = item.precio_compra_pieza != null ? Number(item.precio_compra_pieza)
+                         : (precioCaja != null && ppc > 0 ? precioCaja / ppc : null)
         await t.request()
-          .input('recepcion_id',   sql.Int,         recepcionId)
-          .input('codigo_barras',  sql.VarChar(50), item.codigo_barras)
-          .input('sku_proveedor',  sql.VarChar(50), item.sku_proveedor || null)
-          .input('cajas_esperadas',sql.Int,         item.cajas_esperadas)
-          .input('piezas_por_caja',sql.Int,         item.piezas_por_caja || 1)
-          .input('notas',          sql.VarChar(200),item.notas || null)
+          .input('recepcion_id',       sql.Int,          recepcionId)
+          .input('codigo_barras',      sql.VarChar(50),  item.codigo_barras)
+          .input('sku_proveedor',      sql.VarChar(50),  item.sku_proveedor || null)
+          .input('cajas_esperadas',    sql.Int,          item.cajas_esperadas)
+          .input('piezas_por_caja',    sql.Int,          ppc)
+          .input('precio_compra_caja', sql.Decimal(18,4),precioCaja)
+          .input('precio_compra_pieza',sql.Decimal(18,4),precioPza)
+          .input('notas',              sql.VarChar(200), item.notas || null)
           .query(`
             INSERT INTO recepciones_esperadas_detalle
-              (recepcion_id, codigo_barras, sku_proveedor, cajas_esperadas, piezas_por_caja, notas)
-            VALUES (@recepcion_id, @codigo_barras, @sku_proveedor, @cajas_esperadas, @piezas_por_caja, @notas)
+              (recepcion_id, codigo_barras, sku_proveedor, cajas_esperadas, piezas_por_caja, precio_compra_caja, precio_compra_pieza, notas)
+            VALUES (@recepcion_id, @codigo_barras, @sku_proveedor, @cajas_esperadas, @piezas_por_caja, @precio_compra_caja, @precio_compra_pieza, @notas)
           `)
       }
 
@@ -464,6 +471,15 @@ async function confirmarRecepcion(req, res) {
     const sqlite = getDb()
     let totalPiezas = 0
 
+    // Orden esperada ligada (para tomar el precio de compra de la factura)
+    const esperadaId = rec.recordset[0].recepcion_esperada_id
+    let proveedorOrden = null
+    if (esperadaId) {
+      const e = await db.request().input('eid', sql.Int, esperadaId)
+        .query('SELECT proveedor FROM recepciones_esperadas WHERE id=@eid')
+      proveedorOrden = e.recordset[0]?.proveedor || null
+    }
+
     for (const row of det.recordset) {
       const piezas = Number(row.piezas_resultantes) || 0
       if (piezas <= 0) continue
@@ -526,6 +542,32 @@ async function confirmarRecepcion(req, res) {
           WHEN NOT MATCHED THEN INSERT (codigo_barras, ubicacion, cantidad, ultima_entrada, creado)
             VALUES (@cb, @ub, @q, GETDATE(), GETDATE());
         `)
+
+      // 4) Costo exacto: si la orden trae precio de compra de la factura, fijarlo
+      //    como costo oficial del producto (gana sobre Art_UltimoCosto de NovaCaja).
+      if (esperadaId) {
+        const pcRes = await db.request()
+          .input('eid', sql.Int,         esperadaId)
+          .input('cb',  sql.VarChar(50), row.codigo_barras)
+          .query(`SELECT TOP 1 precio_compra_pieza
+                  FROM recepciones_esperadas_detalle
+                  WHERE recepcion_id=@eid AND codigo_barras=@cb AND precio_compra_pieza IS NOT NULL
+                  ORDER BY id DESC`)
+        const precioPza = pcRes.recordset[0]?.precio_compra_pieza
+        if (precioPza != null && Number(precioPza) > 0) {
+          await db.request()
+            .input('cb',   sql.VarChar(50),   artCodigo)
+            .input('pp',   sql.Decimal(18,4), Number(precioPza))
+            .input('prov', sql.VarChar(100),  proveedorOrden)
+            .query(`
+              MERGE costos_producto AS t
+              USING (SELECT @cb AS cb) AS s ON t.codigo_barras = s.cb
+              WHEN MATCHED THEN UPDATE SET precio_compra=@pp, proveedor=@prov, fuente='factura', actualizado=GETDATE()
+              WHEN NOT MATCHED THEN INSERT (codigo_barras, precio_compra, proveedor, fuente, actualizado)
+                VALUES (@cb, @pp, @prov, 'factura', GETDATE());
+            `)
+        }
+      }
 
       totalPiezas += piezas
     }

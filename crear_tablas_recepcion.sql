@@ -262,6 +262,84 @@ LEFT JOIN (
 GROUP BY re.id, re.referencia, re.proveedor, esp.codigo_barras, rec.cajas_recibidas;
 GO
 
+-- =====================================================================
+-- 6. PRECIOS DE COMPRA  (costo real desde las facturas/recepciones)
+--    Aditivo e idempotente. NO toca tablas de NovaCaja.
+--    El costo de NovaCaja (Art_UltimoCosto) viene incompleto/inconsistente,
+--    asi que capturamos el precio de compra real de cada factura para que el
+--    margen sea exacto. El precio de VENTA se lee de NovaCaja (ListaPreciosArt).
+-- =====================================================================
+
+-- 6a. productos_compra: ultimo precio de compra por proveedor+sku
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('productos_compra') AND name='precio_compra_caja')
+    ALTER TABLE productos_compra ADD precio_compra_caja DECIMAL(18,4) NULL;   -- costo por caja (factura)
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('productos_compra') AND name='precio_compra_pieza')
+    ALTER TABLE productos_compra ADD precio_compra_pieza DECIMAL(18,4) NULL;  -- costo por pieza (= caja / piezas_por_caja)
+GO
+
+-- 6b. recepciones_esperadas_detalle: precio de la factura (precaptura)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('recepciones_esperadas_detalle') AND name='precio_compra_caja')
+    ALTER TABLE recepciones_esperadas_detalle ADD precio_compra_caja DECIMAL(18,4) NULL;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('recepciones_esperadas_detalle') AND name='precio_compra_pieza')
+    ALTER TABLE recepciones_esperadas_detalle ADD precio_compra_pieza DECIMAL(18,4) NULL;
+GO
+
+-- 6c. recepciones_reales_detalle: costo por pieza al recibir (snapshot)
+IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('recepciones_reales_detalle') AND name='precio_compra_pieza')
+    ALTER TABLE recepciones_reales_detalle ADD precio_compra_pieza DECIMAL(18,4) NULL;
+GO
+
+-- 6d. costos_producto: FUENTE UNICA del costo real por producto (por pieza).
+--     Se actualiza al confirmar una recepcion con el precio de la factura.
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='costos_producto' AND xtype='U')
+BEGIN
+    CREATE TABLE costos_producto (
+      codigo_barras  VARCHAR(50)   NOT NULL PRIMARY KEY,        -- = Art_Codigo (resuelto)
+      precio_compra  DECIMAL(18,4) NOT NULL DEFAULT 0,          -- costo real por pieza (ultima factura)
+      proveedor      VARCHAR(100)  NULL,                        -- de quien se compro
+      fuente         VARCHAR(20)   NOT NULL DEFAULT 'factura',  -- factura | manual
+      actualizado    DATETIME      NOT NULL DEFAULT GETDATE()
+    );
+END
+GO
+
+-- =====================================================================
+-- 7. VISTA UNIFICADA DE COSTO Y PRECIO  (base del calculo exacto)
+--    Por producto: costo (nuestro precio de compra -> respaldo NovaCaja),
+--    precio de venta (lista de NovaCaja con impuestos) y el margen.
+-- =====================================================================
+IF OBJECT_ID('v_costos_producto') IS NOT NULL DROP VIEW v_costos_producto;
+GO
+CREATE VIEW v_costos_producto AS
+SELECT
+  a.Art_Codigo                                                        AS codigo_barras,
+  a.Art_Descripcion                                                   AS nombre,
+  cp.precio_compra                                                    AS costo_factura,    -- nuestro (facturas)
+  a.Art_UltimoCosto                                                   AS costo_novacaja,   -- respaldo
+  COALESCE(NULLIF(cp.precio_compra, 0), NULLIF(a.Art_UltimoCosto, 0)) AS precio_compra,    -- COSTO EXACTO
+  lp.LPA_PrecioVentaImp                                               AS precio_venta,     -- lista NovaCaja c/imp
+  CASE WHEN COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0)) IS NOT NULL
+       THEN lp.LPA_PrecioVentaImp - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0))
+       END                                                            AS margen_unitario,
+  CASE WHEN lp.LPA_PrecioVentaImp > 0
+       THEN CAST((lp.LPA_PrecioVentaImp - COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0)))
+                 / lp.LPA_PrecioVentaImp * 100 AS DECIMAL(6,2))
+       END                                                            AS margen_pct,
+  CASE WHEN NULLIF(cp.precio_compra,0)   IS NOT NULL THEN 'factura'
+       WHEN NULLIF(a.Art_UltimoCosto,0)  IS NOT NULL THEN 'novacaja'
+       ELSE 'sin_costo' END                                           AS fuente_costo
+FROM [compucaja].[dbo].[VArticulosUnificados] a
+LEFT JOIN costos_producto cp ON cp.codigo_barras = a.Art_Codigo
+OUTER APPLY (
+  SELECT TOP 1 l.LPA_PrecioVentaImp
+  FROM [compucaja].[dbo].[ListaPreciosArt] l
+  WHERE l.Art_Codigo = a.Art_Codigo
+  ORDER BY l.LP_Codigo
+) lp;
+GO
+
 -- ============================================================
 -- FIN. Ejemplo de uso del flujo completo:
 --

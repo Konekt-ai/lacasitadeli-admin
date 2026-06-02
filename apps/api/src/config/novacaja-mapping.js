@@ -161,22 +161,24 @@ function buildSalesBySupplierQuery({ period = 'month', maxDate } = {}) {
 
 function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
   const outerFilter = _dateFilter(period, 'v.Fecha', maxDate);
-  const innerFilter = _dateFilter(period, 'Fecha',   maxDate);
+  // COSTO EXACTO por pieza: nuestro precio de compra real (costos_producto, de
+  // las facturas) y, si aún no se ha capturado, el último costo de NovaCaja
+  // (Art_UltimoCosto). Así el margen deja de depender del Costo de las pólizas,
+  // que viene incompleto/inconsistente. ticketPromedio se calcula en el handler
+  // como ventas/tickets (exacto).
+  const costoPza = `ISNULL(NULLIF(cp.precio_compra, 0), ISNULL(a.Art_UltimoCosto, 0))`;
   return `
     SELECT
-      COUNT(DISTINCT v.ticket)           AS totalTickets,
-      SUM(v.importe)                     AS totalVentas,
-      SUM(v.Costo)                       AS totalCosto,
-      SUM(v.importe) - SUM(v.Costo)      AS ganancia,
-      SUM(v.cantidad)                    AS unidadesVendidas,
-      AVG(sub.ticketTotal)               AS ticketPromedio
+      COUNT(DISTINCT v.ticket)                  AS totalTickets,
+      SUM(v.importe)                            AS totalVentas,
+      SUM(v.cantidad * ${costoPza})             AS totalCosto,
+      SUM(v.importe) - SUM(v.cantidad * ${costoPza}) AS ganancia,
+      SUM(v.cantidad)                           AS unidadesVendidas
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-    JOIN (
-      SELECT ticket, SUM(importe) AS ticketTotal
-      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-      WHERE ${innerFilter}
-      GROUP BY ticket
-    ) sub ON sub.ticket = v.ticket
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK)
+      ON cp.codigo_barras = v.producto
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      ON a.Art_Codigo = v.producto
     WHERE ${outerFilter}
   `;
 }

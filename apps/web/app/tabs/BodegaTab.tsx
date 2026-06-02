@@ -3245,9 +3245,11 @@ function FacturaPdfModal({ onClose, onNotify, onCreated }: {
   const crearOrden = async () => {
     if (!data) return;
     const itemsOrden = items.filter(i => i.mapeo && i.cajas_esperadas > 0).map(i => ({
-      codigo_barras:   i.mapeo!.codigo_barras,
-      cajas_esperadas: i.cajas_esperadas,
-      piezas_por_caja: i.mapeo!.piezas_por_caja || 1,
+      codigo_barras:      i.mapeo!.codigo_barras,
+      cajas_esperadas:    i.cajas_esperadas,
+      piezas_por_caja:    i.mapeo!.piezas_por_caja || 1,
+      // precio de compra de la factura (por caja) → alimenta el costo exacto
+      precio_compra_caja: i.precio_unitario ?? null,
     }));
     if (!itemsOrden.length) { onNotify('No hay productos enlazados con cajas para crear la orden', 'error'); return; }
     setCreating(true);
