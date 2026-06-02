@@ -106,6 +106,14 @@ function _dateFilter(period, col, maxDate) {
   return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
 }
 
+// Filtro de fecha en TIEMPO REAL (tabla Tickets, ancla GETDATE — el día de hoy
+// real, no el último día de pólizas que va con retraso).
+function _ticketDateFilter(period, col = 'T_Fecha') {
+  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  GETDATE())`;
+  if (period === 'month') return `${col} >= DATEADD(DAY, -30, GETDATE())`;
+  return `CAST(${col} AS DATE) = CAST(GETDATE() AS DATE)`;
+}
+
 // ── COSTO EXACTO ─────────────────────────────────────────────────────────────
 // Costo por pieza = nuestro precio de compra real (costos_producto, de las
 // facturas) y, si aún no se capturó, el último costo de NovaCaja (Art_UltimoCosto).
@@ -190,6 +198,54 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
     ${JOIN_CP_A}
     WHERE ${outerFilter}
+  `;
+}
+
+// Costo + unidades en TIEMPO REAL desde los renglones de los tickets (TicketsPS),
+// MISMA fuente y fecha que las ventas (tabla Tickets). Costo por pieza:
+// factura -> Art_UltimoCosto -> reposicion. Tope por renglón: el costo no puede
+// exceder la venta del renglón (evita margen negativo absurdo por costo en otra
+// unidad o mal capturado en NovaCaja).
+function buildDashboardCostQuery({ period = 'day' } = {}) {
+  return `
+    SELECT
+      ISNULL(SUM(x.cantidad), 0) AS unidadesVendidas,
+      ISNULL(SUM(CASE WHEN x.costoLinea > x.ventaLinea THEN x.ventaLinea ELSE x.costoLinea END), 0) AS totalCosto
+    FROM (
+      SELECT
+        ps.[Cantidad] AS cantidad,
+        ps.[Cantidad] * COALESCE(NULLIF(cp.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0), 0) AS costoLinea,
+        (ps.[Importe] + ISNULL(ps.[MontoIva],0) + ISNULL(ps.[MontoIeps],0)) AS ventaLinea
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+      JOIN [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+        ON ps.FolTda_Codigo = t.FolTda_Codigo AND ps.FolEst_Codigo = t.FolEst_Codigo
+       AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
+      LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
+      WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    ) x
+  `;
+}
+
+// Top productos en TIEMPO REAL (TicketsPS), misma fecha que las ventas.
+function buildTopProductsRealtimeQuery({ period = 'day', limit = 10 } = {}) {
+  return `
+    SELECT TOP ${limit}
+      ps.[Codigo]                              AS productCode,
+      MAX(ISNULL(a.Art_Descripcion, ps.[Concepto])) AS name,
+      MAX(ISNULL(a.Mar_Nombre, ''))            AS brand,
+      MAX(ISNULL(a.Org_Descripcion, ''))       AS category,
+      SUM(ps.[Cantidad])                       AS unidadesVendidas,
+      SUM(ps.[Importe] + ISNULL(ps.[MontoIva],0) + ISNULL(ps.[MontoIeps],0)) AS ingresos
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    JOIN [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+      ON ps.FolTda_Codigo = t.FolTda_Codigo AND ps.FolEst_Codigo = t.FolEst_Codigo
+     AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
+    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+      AND ps.[Codigo] IS NOT NULL AND ps.[Codigo] <> ''
+    GROUP BY ps.[Codigo]
+    ORDER BY SUM(ps.[Cantidad]) DESC
   `;
 }
 
@@ -394,6 +450,8 @@ module.exports = {
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
+  buildDashboardCostQuery,
+  buildTopProductsRealtimeQuery,
   // Helpers de costo exacto (para consultas inline en otros módulos)
   COSTO_PZA,
   COSTO_LINEA,

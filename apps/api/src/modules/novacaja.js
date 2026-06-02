@@ -17,6 +17,8 @@ const {
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
+  buildDashboardCostQuery,
+  buildTopProductsRealtimeQuery,
   COSTO_LINEA,
   JOIN_CP,
   JOIN_CP_A,
@@ -171,9 +173,15 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [kpiRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
-      mssql.query(buildDashboardKPIsQuery({ period, maxDate })),
-      mssql.query(buildTopProductsQuery({ period, limit: 10, maxDate })),
+    const [ticketRes, costRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+      // Ventas + tickets + promedio: tabla Tickets en TIEMPO REAL (GETDATE), igual
+      // que el feed "Últimas ventas". Las pólizas se postean con retraso, por eso
+      // antes el conteo salía bajo (ej. 5 en vez de 40).
+      mssql.query(buildTicketKPIsQuery({ period })),
+      // Costo + unidades: renglones reales de esos tickets (TicketsPS) × costo, con
+      // tope por renglón. Misma fuente/fecha que las ventas → todo reconcilia.
+      mssql.query(buildDashboardCostQuery({ period })),
+      mssql.query(buildTopProductsRealtimeQuery({ period, limit: 10 })),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
@@ -182,24 +190,23 @@ router.get('/dashboard', async (req, res) => {
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    const polizaKPIs     = kpiRes.recordset[0]           || {};
+    const ticketKPIs     = ticketRes.recordset[0] || {};
+    const costKPIs       = costRes.recordset[0]   || {};
 
-    // TODOS los KPIs vienen de una sola fuente (VBasePolizaVentas) con la MISMA
-    // fecha ancla (maxDate). Así reconcilian entre sí: ganancia = ventas - costo,
-    // ticketPromedio = ventas / tickets, y las unidades cuadran con el top de
-    // productos. Antes ventas/tickets venían de la tabla Tickets con GETDATE() y
-    // costo/unidades de pólizas con maxDate → al ser días distintos, no cuadraban.
-    const totalVentasN  = Number(polizaKPIs.totalVentas)  || 0;
-    const totalTicketsN = Number(polizaKPIs.totalTickets) || 0;
+    // Ventas/tickets en tiempo real (Tickets); costo/unidades de los renglones de
+    // esos mismos tickets (TicketsPS). Reconcilian: ganancia = ventas - costo,
+    // ticketPromedio = ventas / tickets. El costo tiene tope por renglón (no excede
+    // la venta) para que un costo mal capturado no genere margen negativo absurdo.
+    const totalVentasN  = Number(ticketKPIs.totalVentas)  || 0;
+    const totalTicketsN = Number(ticketKPIs.totalTickets) || 0;
+    const totalCostoN   = Number(costKPIs.totalCosto)     || 0;
     const kpisFull = {
       totalTickets:     totalTicketsN,
-      // Promedio exacto = ventas / tickets (el AVG de la consulta queda sesgado por
-      // el JOIN, que repite el total del ticket una vez por cada línea).
       ticketPromedio:   totalTicketsN > 0 ? totalVentasN / totalTicketsN : 0,
       totalVentas:      totalVentasN,
-      totalCosto:       Number(polizaKPIs.totalCosto)       || 0,
-      unidadesVendidas: Number(polizaKPIs.unidadesVendidas) || 0,
-      ganancia:         Number(polizaKPIs.ganancia)         || 0,
+      totalCosto:       totalCostoN,
+      unidadesVendidas: Number(costKPIs.unidadesVendidas) || 0,
+      ganancia:         totalVentasN - totalCostoN,
       totalProducts,
       lowStockAlerts,
       alerts:    lowStockAlerts,
