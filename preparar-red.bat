@@ -33,7 +33,7 @@ if errorlevel 1 (
 )
 
 :: ── 2. Arranque automatico al iniciar sesion (acceso directo en Startup) ──────
-echo  [2/2] Configurando arranque automatico al prender la PC...
+echo  [2/3] Configurando arranque automatico al prender la PC...
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
 set "LNK=%STARTUP%\LaCasitaDeli.lnk"
 set "VBS=%~dp0iniciar-silencioso.vbs"
@@ -48,12 +48,23 @@ if exist "%LNK%" (
     echo        ERROR al crear el acceso directo de arranque.
 )
 
+:: ── 3. Watchdog: revisa cada 5 min y revive el sistema si se cayo ─────────────
+echo  [3/3] Instalando watchdog (auto-recuperacion cada 5 min)...
+schtasks /query /tn "LaCasitaWatchdog" >nul 2>&1 && schtasks /delete /tn "LaCasitaWatchdog" /f >nul 2>&1
+schtasks /create /tn "LaCasitaWatchdog" /tr "wscript.exe \"%~dp0watchdog-oculto.vbs\"" /sc minute /mo 5 /f >nul
+if errorlevel 1 (
+    echo        ERROR al crear la tarea del watchdog.
+) else (
+    echo        OK - si los servicios se caen, se reinician solos en menos de 5 min.
+)
+
 :Fin
 echo.
 echo  ------------------------------------------------------------
 echo    RESUMEN
-echo      Firewall          : entrante TCP 3001-3003 permitido
-echo      Arranque automatico: %LNK%
+echo      Firewall           : entrante TCP 3001-3003 permitido
+echo      Arranque automatico : %LNK%
+echo      Watchdog            : tarea LaCasitaWatchdog (cada 5 min)
 echo  ------------------------------------------------------------
 echo.
 echo  NOTA: para que arranque sin que nadie inicie sesion, la PC de
