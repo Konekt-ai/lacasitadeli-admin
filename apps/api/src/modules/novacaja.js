@@ -17,6 +17,9 @@ const {
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
+  COSTO_LINEA,
+  JOIN_CP,
+  JOIN_CP_A,
 } = require('../config/novacaja-mapping');
 
 const router = express.Router();
@@ -284,8 +287,8 @@ router.get('/proveedores', async (req, res) => {
           p.Pro_FechaUltimaCompra                                   AS fechaUltimaCompra,
           COUNT(DISTINCT pa.Art_Codigo)                             AS totalProductos,
           ISNULL(SUM(v.importe), 0)                                 AS totalVentas,
-          ISNULL(SUM(v.Costo), 0)                                   AS totalCosto,
-          ISNULL(SUM(v.importe) - SUM(v.Costo), 0)                  AS ganancia,
+          ISNULL(SUM(${COSTO_LINEA}), 0)                            AS totalCosto,
+          ISNULL(SUM(v.importe) - SUM(${COSTO_LINEA}), 0)           AS ganancia,
           ISNULL(COUNT(DISTINCT v.ticket), 0)                       AS totalTickets,
           ISNULL(SUM(v.cantidad), 0)                                AS unidadesVendidas
         FROM [compucaja].[dbo].[Proveedores] p WITH (NOLOCK)
@@ -294,6 +297,7 @@ router.get('/proveedores', async (req, res) => {
         LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
           ON v.producto = pa.Art_Codigo
           AND ${joinFilter}
+        ${JOIN_CP_A}
         WHERE p.Pro_Bloqueado = 0
           AND p.Pro_Nombre IS NOT NULL
           AND LEN(CAST(p.Pro_Nombre AS NVARCHAR(500))) > 0
@@ -360,12 +364,13 @@ router.get('/proveedores/:id/products', async (req, res) => {
         ISNULL(a.Art_Descripcion, pa.Art_Codigo)       AS name,
         ISNULL(SUM(v.cantidad), 0)                     AS unidadesVendidas,
         ISNULL(SUM(v.importe), 0)                      AS ingresos,
-        ISNULL(SUM(v.Costo), 0)                        AS costo
+        ISNULL(SUM(${COSTO_LINEA}), 0)                 AS costo
       FROM [compucaja].[dbo].[ProveedoresArticulo] pa WITH (NOLOCK)
       LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
         ON a.Art_Codigo = pa.Art_Codigo
       LEFT JOIN [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
         ON v.producto = pa.Art_Codigo AND ${joinFilter}
+      ${JOIN_CP}
       WHERE pa.Pro_Codigo = '${id}'
       GROUP BY pa.Art_Codigo, a.Art_Descripcion
       ORDER BY ISNULL(SUM(v.importe), 0) DESC

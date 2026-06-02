@@ -394,4 +394,9 @@ module.exports = {
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
+  // Helpers de costo exacto (para consultas inline en otros módulos)
+  COSTO_PZA,
+  COSTO_LINEA,
+  JOIN_CP,
+  JOIN_CP_A,
 };
