@@ -10,6 +10,7 @@ interface SysInfo {
   branch: string;
   lastMsg: string;
   lastDate: string;
+  present?: boolean;
 }
 
 interface GitInfo {
@@ -21,6 +22,7 @@ interface GitInfo {
 export default function AdminConsoleTab() {
   const [gitInfo,    setGitInfo]    = useState<GitInfo>({ name: '', email: '', remote: '' });
   const [sysInfo,    setSysInfo]    = useState<SysInfo | null>(null);
+  const [bodInfo,    setBodInfo]    = useState<SysInfo | null>(null);
   const [gitSaving,  setGitSaving]  = useState(false);
   const [gitMsg,     setGitMsg]     = useState<{ text: string; ok: boolean } | null>(null);
   const [launching,  setLaunching]  = useState(false);
@@ -30,13 +32,15 @@ export default function AdminConsoleTab() {
     Promise.all([
       fetch('/api/admin/git').then(r => r.json()).catch(() => ({})),
       fetch('/api/admin/sistema/info').then(r => r.json()).catch(() => ({})),
-    ]).then(([git, sys]) => {
+      fetch('/api/admin/bodega/info').then(r => r.json()).catch(() => ({})),
+    ]).then(([git, sys, bod]) => {
       setGitInfo({
         name:   git.name   || 'casitadev',
         email:  git.email  || 'lacasitadeli2000@gmail.com',
         remote: git.remote || 'https://github.com/Konekt-ai/lacasitadeli-admin',
       });
       setSysInfo(sys);
+      setBodInfo(bod);
     });
   }, []);
 
@@ -80,14 +84,32 @@ export default function AdminConsoleTab() {
   return (
     <div className="p-4 lg:p-8 space-y-6 max-w-2xl">
 
-      {/* Info del repo */}
-      {sysInfo?.hasGit && (
-        <div className="bg-stone-950 text-emerald-400 rounded-xl p-4 font-mono text-xs space-y-1 border border-stone-800">
-          <div><span className="text-stone-500">rama &nbsp;&nbsp;:</span> {sysInfo.branch}</div>
-          <div><span className="text-stone-500">commit:</span> {sysInfo.hash} — {sysInfo.lastMsg}</div>
-          <div><span className="text-stone-500">fecha &nbsp;:</span> {sysInfo.lastDate}</div>
-        </div>
-      )}
+      {/* Info de versión: panel admin + bodega (TC52) */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        {sysInfo?.hasGit && (
+          <div className="bg-stone-950 text-emerald-400 rounded-xl p-4 font-mono text-xs space-y-1 border border-stone-800">
+            <div className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1.5">Panel admin</div>
+            <div><span className="text-stone-500">rama &nbsp;&nbsp;:</span> {sysInfo.branch}</div>
+            <div><span className="text-stone-500">commit:</span> {sysInfo.hash} — {sysInfo.lastMsg}</div>
+            <div><span className="text-stone-500">fecha &nbsp;:</span> {sysInfo.lastDate}</div>
+          </div>
+        )}
+        {bodInfo?.hasGit ? (
+          <div className="bg-stone-950 text-sky-400 rounded-xl p-4 font-mono text-xs space-y-1 border border-stone-800">
+            <div className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1.5">Bodega (TC52)</div>
+            <div><span className="text-stone-500">rama &nbsp;&nbsp;:</span> {bodInfo.branch}</div>
+            <div><span className="text-stone-500">commit:</span> {bodInfo.hash} — {bodInfo.lastMsg}</div>
+            <div><span className="text-stone-500">fecha &nbsp;:</span> {bodInfo.lastDate}</div>
+          </div>
+        ) : bodInfo && !bodInfo.present ? (
+          <div className="bg-stone-950 text-amber-400 rounded-xl p-4 font-mono text-xs border border-stone-800 flex items-center">
+            <div>
+              <div className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1.5">Bodega (TC52)</div>
+              repo no encontrado en ..\lacasitadeli-almacen
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       {/* Actualizar sistema */}
       <section className="bg-surface rounded-2xl border border-stone-200 p-5 space-y-4">
@@ -97,7 +119,8 @@ export default function AdminConsoleTab() {
         </div>
         <p className="text-stone-500 text-sm leading-relaxed">
           Ejecuta <code className="bg-stone-100 px-1.5 py-0.5 rounded text-stone-700 text-xs">actualizar-silencioso.vbs</code>,
-          que descarga los últimos cambios de Git, reinstala dependencias y reinicia el sistema completo.
+          que descarga los últimos cambios de Git de <strong>ambos</strong> repos (panel admin y bodega/TC52),
+          reinstala dependencias, reconstruye la PWA y reinicia el sistema completo.
         </p>
         <button
           onClick={launchActualizar}

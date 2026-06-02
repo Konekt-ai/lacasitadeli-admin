@@ -5,20 +5,40 @@ const fs   = require('fs');
 
 const router = express.Router();
 const ROOT   = path.resolve(__dirname, '..', '..', '..', '..');
+const BODEGA = path.resolve(ROOT, '..', 'lacasitadeli-almacen'); // repo hermano (TC52/PWA)
 
 function tryExec(cmd) {
   try { return execSync(cmd, { cwd: ROOT, timeout: 5000 }).toString().trim(); }
   catch { return ''; }
 }
+function tryExecIn(cmd, cwd) {
+  try { return execSync(cmd, { cwd, timeout: 5000 }).toString().trim(); }
+  catch { return ''; }
+}
+
+// Info de versión (commit) de un repo cualquiera
+function repoInfo(dir) {
+  if (!fs.existsSync(path.join(dir, '.git')))
+    return { present: false, hasGit: false, hash: '', branch: '', lastMsg: '', lastDate: '' };
+  const hash = tryExecIn('git rev-parse --short HEAD', dir);
+  return {
+    present:  true,
+    hasGit:   !!hash,
+    hash,
+    branch:   tryExecIn('git branch --show-current', dir),
+    lastMsg:  tryExecIn('git log -1 --format=%s', dir),
+    lastDate: tryExecIn('git log -1 --format=%ci', dir),
+  };
+}
 
 // ── GET /api/admin/sistema/info ───────────────────────────────────────────────
 router.get('/sistema/info', (_req, res) => {
-  const hash     = tryExec('git rev-parse --short HEAD');
-  const branch   = tryExec('git branch --show-current');
-  const lastMsg  = tryExec('git log -1 --format=%s');
-  const lastDate = tryExec('git log -1 --format=%ci');
-  const hasGit   = !!hash;
-  res.json({ hasGit, hash, branch, lastMsg, lastDate });
+  res.json(repoInfo(ROOT));
+});
+
+// ── GET /api/admin/bodega/info — versión del repo de bodega (TC52/PWA) ─────────
+router.get('/bodega/info', (_req, res) => {
+  res.json(repoInfo(BODEGA));
 });
 
 // ── GET /api/admin/sistema/log ────────────────────────────────────────────────
