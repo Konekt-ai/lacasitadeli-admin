@@ -106,6 +106,17 @@ function _dateFilter(period, col, maxDate) {
   return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
 }
 
+// ── COSTO EXACTO ─────────────────────────────────────────────────────────────
+// Costo por pieza = nuestro precio de compra real (costos_producto, de las
+// facturas) y, si aún no se capturó, el último costo de NovaCaja (Art_UltimoCosto).
+// Reemplaza al Costo de las pólizas (incompleto/inconsistente). Las consultas que
+// lo usen deben incluir el alias `v` (VBasePolizaVentas) y los JOINs `cp` y `a`.
+const COSTO_PZA   = `ISNULL(NULLIF(cp.precio_compra, 0), ISNULL(a.Art_UltimoCosto, 0))`;
+const COSTO_LINEA = `(v.cantidad * ${COSTO_PZA})`;                       // costo de un renglón
+const JOIN_CP     = `LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = v.producto`;
+const JOIN_CP_A   = `${JOIN_CP}
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = v.producto`;
+
 // ── VENTAS por periodo ────────────────────────────────────────────────────────
 function buildSalesQuery({ period = 'day', limit = 5000, maxDate } = {}) {
   return `
@@ -117,9 +128,10 @@ function buildSalesQuery({ period = 'day', limit = 5000, maxDate } = {}) {
       v.pu              AS precioUnitario,
       v.importe         AS importe,
       v.importeSI       AS importeSinImp,
-      v.Costo           AS costo,
+      ${COSTO_LINEA}    AS costo,
       v.FolTda_Codigo   AS tiendaCodigo
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
     WHERE ${_dateFilter(period, 'v.Fecha', maxDate)}
     ORDER BY v.Fecha DESC
   `;
@@ -132,8 +144,9 @@ function buildSalesByDayQuery({ days = 30, maxDate } = {}) {
       COUNT(DISTINCT v.ticket)     AS numTickets,
       SUM(v.cantidad)              AS unidadesVendidas,
       SUM(v.importe)               AS totalVentas,
-      SUM(v.Costo)                 AS totalCosto
+      SUM(${COSTO_LINEA})          AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
     WHERE v.Fecha >= DATEADD(DAY, -${days}, '${maxDate}')
     GROUP BY CAST(v.Fecha AS DATE)
     ORDER BY CAST(v.Fecha AS DATE) ASC
@@ -147,8 +160,9 @@ function buildSalesBySupplierQuery({ period = 'month', maxDate } = {}) {
       COUNT(DISTINCT v.ticket)                                      AS numTickets,
       SUM(v.cantidad)                                               AS unidadesVendidas,
       SUM(v.importe)                                                AS totalVentas,
-      SUM(v.Costo)                                                  AS totalCosto
+      SUM(${COSTO_LINEA})                                           AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP}
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = v.producto
     LEFT JOIN [compucaja].[dbo].[Proveedores] p WITH (NOLOCK)
@@ -166,19 +180,15 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
   // (Art_UltimoCosto). Así el margen deja de depender del Costo de las pólizas,
   // que viene incompleto/inconsistente. ticketPromedio se calcula en el handler
   // como ventas/tickets (exacto).
-  const costoPza = `ISNULL(NULLIF(cp.precio_compra, 0), ISNULL(a.Art_UltimoCosto, 0))`;
   return `
     SELECT
       COUNT(DISTINCT v.ticket)                  AS totalTickets,
       SUM(v.importe)                            AS totalVentas,
-      SUM(v.cantidad * ${costoPza})             AS totalCosto,
-      SUM(v.importe) - SUM(v.cantidad * ${costoPza}) AS ganancia,
+      SUM(${COSTO_LINEA})                       AS totalCosto,
+      SUM(v.importe) - SUM(${COSTO_LINEA})      AS ganancia,
       SUM(v.cantidad)                           AS unidadesVendidas
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-    LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK)
-      ON cp.codigo_barras = v.producto
-    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
-      ON a.Art_Codigo = v.producto
+    ${JOIN_CP_A}
     WHERE ${outerFilter}
   `;
 }
@@ -192,8 +202,9 @@ function buildTopProductsQuery({ period = 'day', limit = 10, maxDate } = {}) {
       ISNULL(a.Org_Descripcion, '')          AS category,
       SUM(v.cantidad)                        AS unidadesVendidas,
       SUM(v.importe)                         AS ingresos,
-      SUM(v.Costo)                           AS costo
+      SUM(${COSTO_LINEA})                    AS costo
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP}
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = v.producto
     WHERE ${_dateFilter(period, 'v.Fecha', maxDate)}
@@ -211,8 +222,9 @@ function buildSalesByHourQuery({ months = 3, maxDate } = {}) {
       COUNT(DISTINCT v.ticket)     AS numTickets,
       SUM(v.cantidad)              AS unidadesVendidas,
       SUM(v.importe)               AS totalVentas,
-      SUM(v.Costo)                 AS totalCosto
+      SUM(${COSTO_LINEA})          AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
     WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
     GROUP BY DATEPART(HOUR, v.Fecha)
     ORDER BY DATEPART(HOUR, v.Fecha) ASC
@@ -244,8 +256,9 @@ function buildSalesByMonthQuery({ months = 12, maxDate } = {}) {
       COUNT(DISTINCT v.ticket)     AS numTickets,
       SUM(v.cantidad)              AS unidadesVendidas,
       SUM(v.importe)               AS totalVentas,
-      SUM(v.Costo)                 AS totalCosto
+      SUM(${COSTO_LINEA})          AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
     WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
     GROUP BY YEAR(v.Fecha), MONTH(v.Fecha)
     ORDER BY YEAR(v.Fecha) ASC, MONTH(v.Fecha) ASC
@@ -279,8 +292,9 @@ function buildSalesByWeekdayQuery({ months = 3, maxDate } = {}) {
       COUNT(DISTINCT v.ticket)         AS numTickets,
       SUM(v.cantidad)                  AS unidadesVendidas,
       SUM(v.importe)                   AS totalVentas,
-      SUM(v.Costo)                     AS totalCosto
+      SUM(${COSTO_LINEA})              AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
     WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
     GROUP BY (DATEDIFF(DAY, 0, v.Fecha) % 7)
     ORDER BY (DATEDIFF(DAY, 0, v.Fecha) % 7) ASC
@@ -295,8 +309,9 @@ function buildSalesByCategoryQuery({ months = 3, limit = 12, maxDate } = {}) {
       COUNT(DISTINCT v.ticket)                                             AS numTickets,
       SUM(v.cantidad)                                                      AS unidadesVendidas,
       SUM(v.importe)                                                       AS totalVentas,
-      SUM(v.Costo)                                                         AS totalCosto
+      SUM(${COSTO_LINEA})                                                  AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP}
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = v.producto
     WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
@@ -313,9 +328,10 @@ function buildTopProductsPeriodQuery({ months = 3, limit = 30, maxDate } = {}) {
       ISNULL(a.Org_Descripcion, '')          AS categoria,
       SUM(v.cantidad)                        AS unidades,
       SUM(v.importe)                         AS ingresos,
-      SUM(v.Costo)                           AS costo,
-      SUM(v.importe) - SUM(v.Costo)          AS ganancia
+      SUM(${COSTO_LINEA})                    AS costo,
+      SUM(v.importe) - SUM(${COSTO_LINEA})   AS ganancia
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP}
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = v.producto
     WHERE v.Fecha >= DATEADD(MONTH, -${months}, '${maxDate}')
