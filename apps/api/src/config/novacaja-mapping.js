@@ -121,11 +121,27 @@ function _ticketDateFilter(period, col = 'T_Fecha') {
 // facturas) y, si aún no se capturó, el último costo de NovaCaja (Art_UltimoCosto).
 // Reemplaza al Costo de las pólizas (incompleto/inconsistente). Las consultas que
 // lo usen deben incluir el alias `v` (VBasePolizaVentas) y los JOINs `cp` y `a`.
-const COSTO_PZA   = `ISNULL(NULLIF(cp.precio_compra, 0), ISNULL(a.Art_UltimoCosto, 0))`;
+const COSTO_PZA   = `COALESCE(NULLIF(cp.precio_compra, 0), NULLIF(a.Art_UltimoCosto, 0), NULLIF(a.Art_CostoReposicion, 0), 0)`;
 const COSTO_LINEA = `(v.cantidad * ${COSTO_PZA})`;                       // costo de un renglón
 const JOIN_CP     = `LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = v.producto`;
 const JOIN_CP_A   = `${JOIN_CP}
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = v.producto`;
+
+// Costo + unidades desde PÓLIZAS para semana/mes (rápido; el escaneo de TicketsPS
+// a 30 días truena por tamaño). Tope por renglón: el costo no excede la venta.
+function buildDashboardCostPolizaQuery({ period = 'month' } = {}) {
+  // MISMA ventana que las ventas (Tickets, ancla GETDATE) para que el margen
+  // sea coherente. Las pólizas pueden faltar el último día o dos (se postean con
+  // retraso), impacto mínimo en periodos de semana/mes.
+  return `
+    SELECT
+      ISNULL(SUM(v.cantidad), 0) AS unidadesVendidas,
+      ISNULL(SUM(CASE WHEN ${COSTO_LINEA} > v.importe THEN v.importe ELSE ${COSTO_LINEA} END), 0) AS totalCosto
+    FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
+    ${JOIN_CP_A}
+    WHERE ${_ticketDateFilter(period, 'v.Fecha')}
+  `;
+}
 
 // ── VENTAS por periodo ────────────────────────────────────────────────────────
 function buildSalesQuery({ period = 'day', limit = 5000, maxDate } = {}) {
@@ -190,12 +206,13 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
   // (Art_UltimoCosto). Así el margen deja de depender del Costo de las pólizas,
   // que viene incompleto/inconsistente. ticketPromedio se calcula en el handler
   // como ventas/tickets (exacto).
+  const costoCap = `SUM(CASE WHEN ${COSTO_LINEA} > v.importe THEN v.importe ELSE ${COSTO_LINEA} END)`;
   return `
     SELECT
       COUNT(DISTINCT v.ticket)                  AS totalTickets,
       SUM(v.importe)                            AS totalVentas,
-      SUM(${COSTO_LINEA})                       AS totalCosto,
-      SUM(v.importe) - SUM(${COSTO_LINEA})      AS ganancia,
+      ${costoCap}                               AS totalCosto,
+      SUM(v.importe) - ${costoCap}              AS ganancia,
       SUM(v.cantidad)                           AS unidadesVendidas
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
     ${JOIN_CP_A}
@@ -453,6 +470,7 @@ module.exports = {
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
   buildDashboardCostQuery,
+  buildDashboardCostPolizaQuery,
   buildTopProductsRealtimeQuery,
   // Helpers de costo exacto (para consultas inline en otros módulos)
   COSTO_PZA,

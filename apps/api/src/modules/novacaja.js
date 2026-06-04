@@ -18,6 +18,7 @@ const {
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
   buildDashboardCostQuery,
+  buildDashboardCostPolizaQuery,
   buildTopProductsRealtimeQuery,
   COSTO_LINEA,
   JOIN_CP,
@@ -221,15 +222,19 @@ router.get('/dashboard', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [ticketRes, costRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
-      // Ventas + tickets + promedio: tabla Tickets en TIEMPO REAL (GETDATE), igual
-      // que el feed "Últimas ventas". Las pólizas se postean con retraso, por eso
-      // antes el conteo salía bajo (ej. 5 en vez de 40).
-      mssql.query(buildTicketKPIsQuery({ period })),
-      // Costo + unidades: renglones reales de esos tickets (TicketsPS) × costo, con
-      // tope por renglón. Misma fuente/fecha que las ventas → todo reconcilia.
-      mssql.query(buildDashboardCostQuery({ period })),
-      mssql.query(buildTopProductsRealtimeQuery({ period, limit: 10 })),
+    // "Día": TIEMPO REAL → ventas/tickets de la tabla Tickets (igual que el feed)
+    //   y costo/unidades de los renglones reales (TicketsPS). Las pólizas se
+    //   postean con retraso, por eso el día no puede salir de ahí.
+    // "Semana/Mes": TODO de PÓLIZAS (mismo origen que Análisis → las cifras
+    //   coinciden). El escaneo de TicketsPS a 30 días truena por tamaño.
+    const esDia     = period === 'day';
+    const kpiQuery  = esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate });
+    const topQuery  = esDia ? buildTopProductsRealtimeQuery({ period, limit: 10 }) : buildTopProductsQuery({ period, limit: 10, maxDate });
+
+    const [kpiRes, costRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
+      mssql.query(kpiQuery),
+      esDia ? mssql.query(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
+      mssql.query(topQuery),
       mssql.query(buildSalesByDayQuery({ days, maxDate })),
       mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
       mssql.query(buildDashboardProductsCountQuery()),
@@ -238,22 +243,20 @@ router.get('/dashboard', async (req, res) => {
 
     const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
     const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
-    const ticketKPIs     = ticketRes.recordset[0] || {};
-    const costKPIs       = costRes.recordset[0]   || {};
+    const kpi  = kpiRes.recordset[0]  || {};
+    const cost = costRes.recordset[0] || {};
 
-    // Ventas/tickets en tiempo real (Tickets); costo/unidades de los renglones de
-    // esos mismos tickets (TicketsPS). Reconcilian: ganancia = ventas - costo,
-    // ticketPromedio = ventas / tickets. El costo tiene tope por renglón (no excede
-    // la venta) para que un costo mal capturado no genere margen negativo absurdo.
-    const totalVentasN  = Number(ticketKPIs.totalVentas)  || 0;
-    const totalTicketsN = Number(ticketKPIs.totalTickets) || 0;
-    const totalCostoN   = Number(costKPIs.totalCosto)     || 0;
+    // Todo reconcilia: ganancia = ventas - costo; ticketPromedio = ventas/tickets.
+    const totalVentasN  = Number(kpi.totalVentas)  || 0;
+    const totalTicketsN = Number(kpi.totalTickets) || 0;
+    const totalCostoN   = Number(esDia ? cost.totalCosto       : kpi.totalCosto)       || 0;
+    const unidadesN     = Number(esDia ? cost.unidadesVendidas : kpi.unidadesVendidas) || 0;
     const kpisFull = {
       totalTickets:     totalTicketsN,
       ticketPromedio:   totalTicketsN > 0 ? totalVentasN / totalTicketsN : 0,
       totalVentas:      totalVentasN,
       totalCosto:       totalCostoN,
-      unidadesVendidas: Number(costKPIs.unidadesVendidas) || 0,
+      unidadesVendidas: unidadesN,
       ganancia:         totalVentasN - totalCostoN,
       totalProducts,
       lowStockAlerts,
@@ -274,7 +277,8 @@ router.get('/dashboard', async (req, res) => {
       bySupplier:   bySupplierRes.recordset || [],
     };
 
-    _set(cacheKey, result, 20_000); // 20 s
+    // Día: cache corto (tiempo real). Semana/mes: 5 min (histórico, consulta pesada).
+    _set(cacheKey, result, esDia ? 20_000 : 300_000);
     res.json(result);
   } catch (err) {
     console.error('Error dashboard:', err.message);
