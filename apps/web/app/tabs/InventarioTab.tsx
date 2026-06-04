@@ -352,25 +352,25 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
             <table className="w-full text-left">
               <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
                 <tr>
-                  <th className="px-6 py-4">Producto</th>
-                  <th className="px-6 py-4 text-center">Stock</th>
-                  <th className="px-6 py-4">Precio</th>
-                  <th className="px-6 py-4">Estado</th>
-                  <th className="px-6 py-4 text-right">Editar</th>
+                  <th className="px-3 sm:px-6 py-3 sm:py-4">Producto</th>
+                  <th className="px-2 sm:px-6 py-3 sm:py-4 text-center">Stock</th>
+                  <th className="px-2 sm:px-6 py-3 sm:py-4">Precio</th>
+                  <th className="px-3 sm:px-6 py-3 sm:py-4 hidden sm:table-cell">Estado</th>
+                  <th className="px-3 sm:px-6 py-3 sm:py-4 text-right">Editar</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-surface-container">
                 {displayed.map((p, i) => (
                   <tr key={`${p.id}-${i}`} className="hover:bg-background transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-lg bg-background flex items-center justify-center overflow-hidden border border-outline-variant/10 flex-shrink-0">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4">
+                      <div className="flex items-center gap-2 sm:gap-4">
+                        <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-background flex items-center justify-center overflow-hidden border border-outline-variant/10 flex-shrink-0">
                           {p.image
                             ? <img src={p.image} className="w-full h-full object-cover" alt={p.name} />
                             : <Icon name="image" className="text-stone-300" />}
                         </div>
                         <div className="min-w-0">
-                          <p className="font-bold text-on-surface font-body text-sm truncate max-w-[280px]">{p.name}</p>
+                          <p className="font-bold text-on-surface font-body text-sm truncate max-w-[150px] sm:max-w-[280px]">{p.name}</p>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase">
                               {p.category || 'Sin categoría'}
@@ -392,7 +392,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                       </div>
                     </td>
 
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-2 sm:px-6 py-3 sm:py-4 text-center">
                       {inlineId === String(p.id) ? (
                         <div className="flex items-center gap-1 justify-center">
                           <input type="number" min="0" step="1" value={inlineVal}
@@ -427,23 +427,23 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                       )}
                     </td>
 
-                    <td className="px-6 py-4">
-                      <p className="text-sm font-bold text-primary font-body">${Number(p.salePrice).toFixed(2)}</p>
-                      <p className="text-[10px] text-stone-400 font-label">Costo: ${Number(p.costPrice).toFixed(2)}</p>
+                    <td className="px-2 sm:px-6 py-3 sm:py-4">
+                      <p className="text-sm font-bold text-primary font-body whitespace-nowrap">${Number(p.salePrice).toFixed(2)}</p>
+                      <p className="text-[10px] text-stone-400 font-label whitespace-nowrap">Costo: ${Number(p.costPrice).toFixed(2)}</p>
                     </td>
 
-                    <td className="px-6 py-4">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 hidden sm:table-cell">
                       <span className={cn(
-                        'px-3 py-1 rounded-full text-[10px] font-label uppercase tracking-widest',
+                        'px-3 py-1 rounded-full text-[10px] font-label uppercase tracking-widest whitespace-nowrap',
                         p.stock > p.minStock ? 'bg-primary-fixed text-on-primary-fixed-variant' : 'bg-error-container text-on-error-container'
                       )}>
                         {p.stock > p.minStock ? 'En Stock' : 'Stock Bajo'}
                       </span>
                     </td>
 
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 text-right">
                       <button onClick={() => openPanel(p)}
-                        className="p-2 hover:bg-primary-fixed/20 rounded-lg text-primary transition-all opacity-0 group-hover:opacity-100"
+                        className="p-2 hover:bg-primary-fixed/20 rounded-lg text-primary transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                         title="Editar producto">
                         <Icon name="edit" className="text-lg" />
                       </button>

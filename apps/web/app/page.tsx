@@ -207,7 +207,8 @@ export default function Dashboard() {
 
       {/* ── Mobile bottom navigation ─────────────────────────────────────────── */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 bg-surface/95 backdrop-blur-md border-t border-stone-100 flex h-[68px] safe-area-inset-bottom">
-        {TABS.map(item => (
+        {/* En teléfono ocultamos Consola (admin) para no amontonar los iconos */}
+        {TABS.filter(item => item.id !== 'AdminConsole').map(item => (
           <button key={item.id}
             onClick={() => setActiveTab(item.id)}
             className={cn(
