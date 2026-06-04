@@ -8,6 +8,7 @@ const router = express.Router();
 const _cache = new Map();
 const _cacheGet = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
 const _cacheSet = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
+let _sinPrecioRunning = false; // evita disparar la consulta pesada en paralelo
 
 function getValidAreas(db) {
   return db.prepare(
@@ -428,38 +429,46 @@ router.get('/alerts', async (req, res) => {
     const dismissedNoSales  = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo));
     const dismissedSinPrecio = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'sinPrecio'`).all().map(r => r.art_codigo));
 
-    // Productos que SE VENDEN pero no tienen costo real (factura/NovaCaja) o no
-    // tienen precio de venta en lista → distorsionan ganancia/inversión. El sistema
-    // ya rellena con estimados para no romper el cálculo; esta alerta avisa cuáles
-    // necesitan que se registre el precio real. Consulta acotada (tablas base).
-    // El relleno (costos_producto fuente='estimado') ya marca los productos que
-    // se venden sin costo/precio REAL registrado. Leer de ahí es instantáneo
-    // (tabla chica) y no recorre las pólizas.
-    let sinPrecio = [];
-    try {
-      const spRes = await mssql.query(`
-        SELECT TOP 200
-          cp.codigo_barras                          AS id,
-          ISNULL(a.Art_Descripcion, cp.codigo_barras) AS name,
-          ISNULL(aa.stock, 0)                       AS stock,
-          cp.precio_compra                          AS costoEstimado,
-          cp.precio_venta                           AS precioEstimado,
-          CASE WHEN ISNULL(cp.precio_compra,0) = 0 THEN 1 ELSE 0 END AS faltaCosto,
-          CASE WHEN ISNULL(cp.precio_venta,0)  = 0 THEN 1 ELSE 0 END AS faltaPrecio
-        FROM [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK)
-        LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = cp.codigo_barras
-        OUTER APPLY (
-          SELECT SUM(aa2.AA_ExistenciaActualU) AS stock
-          FROM [compucaja].[dbo].[ArticulosAlmacen] aa2 WITH (NOLOCK)
-          WHERE aa2.Art_Codigo = cp.codigo_barras
-        ) aa
-        WHERE cp.fuente = 'estimado'
-        ORDER BY cp.precio_compra ASC
-      `);
-      sinPrecio = (spRes.recordset || []).filter(r => !dismissedSinPrecio.has(r.id));
-    } catch (e) {
-      console.error('MSSQL sinPrecio fetch error:', e.message);
+    // Productos que SE VENDIERON (últimos 30 días, renglones reales de TicketsPS)
+    // pero NO tienen costo real (factura ni NovaCaja) o NO tienen precio de venta
+    // en lista → el cliente debe capturar el precio. Es una consulta pesada
+    // (escanea ventas), así que corre en SEGUNDO PLANO con cache de 2 h: NUNCA
+    // bloquea el panel ni golpea la BD seguido. No inventamos estimados.
+    let sinPrecioRaw = _cacheGet('sinPrecioRaw');
+    if (!sinPrecioRaw) {
+      sinPrecioRaw = []; // aún no calculado; se llena en segundo plano para la próxima
+      if (!_sinPrecioRunning) {
+        _sinPrecioRunning = true;
+        mssql.query(`
+          SELECT TOP 200
+            a.Art_Codigo                              AS id,
+            ISNULL(a.Art_Descripcion, s.Codigo)       AS name,
+            s.uds                                     AS unidadesVendidas,
+            ISNULL(a.Art_UltimoCosto, 0)              AS costoNovacaja,
+            ISNULL(lp.LPA_PrecioVentaImp, 0)          AS precioLista,
+            CASE WHEN COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL
+                 THEN 1 ELSE 0 END                    AS faltaCosto,
+            CASE WHEN ISNULL(lp.LPA_PrecioVentaImp,0) = 0 THEN 1 ELSE 0 END AS faltaPrecio
+          FROM (
+            SELECT ps.Codigo, SUM(ps.Cantidad) AS uds
+            FROM [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+            WHERE ps.FechaHora >= DATEADD(DAY, -30, GETDATE())
+              AND ps.Codigo IS NOT NULL AND ps.Codigo <> ''
+            GROUP BY ps.Codigo
+          ) s
+          LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = s.Codigo
+          LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = s.Codigo AND cpf.fuente = 'factura'
+          LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] lp WITH (NOLOCK) ON lp.Art_Codigo = s.Codigo AND lp.LP_Codigo = 1
+          WHERE COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL
+             OR ISNULL(lp.LPA_PrecioVentaImp,0) = 0
+          ORDER BY s.uds DESC
+        `)
+          .then(r => _cacheSet('sinPrecioRaw', r.recordset || [], 7200_000)) // 2 h
+          .catch(e => console.error('MSSQL sinPrecio fetch error:', e.message))
+          .finally(() => { _sinPrecioRunning = false; });
+      }
     }
+    const sinPrecio = (sinPrecioRaw || []).filter(r => !dismissedSinPrecio.has(r.id));
 
     let stagnant = [], noSales = [];
     try {

@@ -350,38 +350,13 @@ OUTER APPLY (
 GO
 
 -- =====================================================================
--- 8. RELLENO de costo/precio para productos CON VENTAS sin registro propio.
---    Evita huecos que rompan ganancia/inversion. Usa SOLO lo que el producto
---    ya tiene (NovaCaja): ultimo costo -> reposicion -> derivado del precio;
---    precio de venta: lista -> promedio real de tickets -> costo*factor.
---    NO sobreescribe lo capturado de facturas (solo inserta lo que falta).
---    Acotado a productos con ventas (no recorre todo el catalogo).
+-- 8. LIMPIEZA: NO se rellenan precios estimados. El cliente captura el precio
+--    real; los productos que se venden sin costo/precio registrado salen en la
+--    alerta "Sin Precio Registrado" para que los corrija. Aqui solo se borran
+--    los estimados que pudieran haberse creado en versiones anteriores
+--    (los costos de factura, fuente='factura', NO se tocan).
 -- =====================================================================
-INSERT INTO costos_producto (codigo_barras, precio_compra, precio_venta, proveedor, fuente, actualizado)
-SELECT
-  s.producto,
-  -- costo derivado (estos productos NO tienen costo real): precio/factor -> ticket/1.30
-  COALESCE(NULLIF(lp.LPA_PrecioVentaImp / NULLIF(lp.LPA_UtilidadFactor,0), 0),
-           NULLIF(s.precioTicket / 1.30, 0), 0)                                              AS precio_compra,
-  -- precio de venta: lista -> promedio real de tickets
-  COALESCE(NULLIF(lp.LPA_PrecioVentaImp,0), NULLIF(s.precioTicket,0), 0)                      AS precio_venta,
-  NULL, 'estimado', GETDATE()
-FROM (
-  SELECT v.producto,
-         AVG(NULLIF(v.importe / NULLIF(v.cantidad,0), 0)) AS precioTicket
-  FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
-  WHERE v.Fecha >= DATEADD(DAY, -90, (SELECT MAX(Fecha) FROM [compucaja].[dbo].[VBasePolizaVentas]))
-    AND v.producto IS NOT NULL AND v.producto <> '' AND v.producto <> '0'
-  GROUP BY v.producto
-) s
-LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = s.producto
-OUTER APPLY (
-  SELECT TOP 1 l.LPA_PrecioVentaImp, l.LPA_UtilidadFactor
-  FROM [compucaja].[dbo].[ListaPreciosArt] l WHERE l.Art_Codigo = s.producto ORDER BY l.LP_Codigo
-) lp
-WHERE NOT EXISTS (SELECT 1 FROM costos_producto cp WHERE cp.codigo_barras = s.producto)
-  -- solo huecos reales: el producto NO tiene costo en NovaCaja
-  AND COALESCE(NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL;
+DELETE FROM costos_producto WHERE fuente = 'estimado';
 GO
 
 -- ============================================================

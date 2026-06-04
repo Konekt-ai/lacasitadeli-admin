@@ -100,8 +100,8 @@ export interface StagnantProduct {
 }
 
 export interface SinPrecioProduct {
-  id: string; name: string; stock: number;
-  costoEstimado: number | null; precioEstimado: number | null;
+  id: string; name: string; unidadesVendidas: number;
+  costoNovacaja: number | null; precioLista: number | null;
   faltaCosto: number; faltaPrecio: number;
 }
 

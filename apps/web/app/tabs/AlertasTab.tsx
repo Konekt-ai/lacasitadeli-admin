@@ -397,16 +397,17 @@ function StagnantList({ products, noSalesMode = false }: { products: { id: strin
 }
 
 function SinPrecioList({ items }: {
-  items: { id: string; name: string; stock: number; costoEstimado: number | null; precioEstimado: number | null; faltaCosto: number; faltaPrecio: number }[];
+  items: { id: string; name: string; unidadesVendidas: number; costoNovacaja: number | null; precioLista: number | null; faltaCosto: number; faltaPrecio: number }[];
 }) {
-  const fmt = (n: number | null) => n != null ? `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+  const fmt = (n: number | null) => n != null && Number(n) > 0
+    ? `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
   if (items.length === 0) {
-    return <p className="text-xs font-body text-stone-400 italic px-1">Todos los productos que se venden tienen precio registrado. 🎉</p>;
+    return <p className="text-xs font-body text-stone-400 italic px-1">Todos los productos que se venden tienen costo y precio registrado. 🎉</p>;
   }
   return (
     <div className="space-y-2">
       <p className="text-[11px] font-body text-stone-500 px-1 mb-1">
-        Estos productos se venden pero su costo/precio está <strong>estimado</strong> (no registrado). El sistema los usa para no romper el cálculo, pero conviene registrar el precio real en NovaCaja o recibir su factura.
+        Estos productos <strong>se vendieron</strong> pero les falta el <strong>costo de compra</strong> o el <strong>precio de venta</strong> registrado en NovaCaja. Captura el precio real (o recibe su factura con el lector de PDF) para que la ganancia salga exacta.
       </p>
       {items.map(p => (
         <div key={p.id} className="bg-surface-container-lowest rounded-xl border border-amber-200 p-3.5 flex items-center gap-3">
@@ -415,11 +416,11 @@ function SinPrecioList({ items }: {
             <p className="text-sm font-body text-on-surface truncate">{p.name}</p>
             <div className="flex flex-wrap items-center gap-2 mt-0.5">
               <span className="text-[10px] font-mono text-stone-400">{p.id}</span>
-              <span className="text-[10px] font-label text-stone-400">Stock: {p.stock}</span>
-              <span className="text-[10px] font-label text-amber-700">Costo est.: {fmt(p.costoEstimado)}</span>
-              <span className="text-[10px] font-label text-amber-700">Venta est.: {fmt(p.precioEstimado)}</span>
-              {p.faltaCosto === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">sin costo</span>}
-              {p.faltaPrecio === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">sin precio</span>}
+              <span className="text-[10px] font-label text-stone-400">Vendidas: {p.unidadesVendidas}</span>
+              <span className="text-[10px] font-label text-stone-500">Costo: {fmt(p.costoNovacaja)}</span>
+              <span className="text-[10px] font-label text-stone-500">Precio: {fmt(p.precioLista)}</span>
+              {p.faltaCosto === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">falta costo</span>}
+              {p.faltaPrecio === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">falta precio</span>}
             </div>
           </div>
         </div>
