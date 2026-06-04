@@ -632,3 +632,31 @@ También puedes enviarlo manualmente desde **Bodega → Discrepancias → Report
 ---
 
 *Última actualización: Mayo 2026*
+
+Sí, SSH funciona. El puerto 22 responde en la PC de tienda por Tailscale (TcpTestSucceeded: True). Tu sshd sigue activo y la regla de firewall del 22 está puesta. Por eso el 22 entra pero el 3001-3003 no — confirma que el problema es la app caída, no la red.
+
+Pasos para arrancarlo por SSH
+1. Conéctate (con el usuario que configuraste en la PC de tienda):
+
+
+ssh USUARIO@100.95.133.90
+2. Si caes en cmd (prompt C:\...>), entra a PowerShell:
+
+
+powershell
+3. Arranca el sistema de forma que sobreviva al cerrar la sesión SSH (Start-Process lo lanza independiente):
+
+
+Start-Process wscript.exe -ArgumentList "$env:USERPROFILE\Desktop\lacasitadeli-admin\iniciar-silencioso.vbs"
+Esto asume que el repo está en …\Desktop\lacasitadeli-admin del usuario con el que entras. Si no, ajusta la ruta (puedes verla con dir "$env:USERPROFILE\Desktop").
+
+Espera ~40 s (el panel Next.js tarda en compilar) y ya debería responder.
+
+Detalles importantes
+Los servidores Node son headless: aunque los lances desde SSH (sin pantalla), escuchan en 0.0.0.0 y se ven por Tailscale. El ícono de bandeja no aparecerá en la pantalla física (es de otra sesión), pero eso es cosmético.
+Si tras arrancar el 3001-3003 sigue en timeout, es el firewall (solo tienes regla para el 22). Estando en SSH como administrador, abre los puertos:
+
+netsh advfirewall firewall add rule name="La Casita Deli (3001-3003)" dir=in action=allow protocol=TCP localport=3001-3003 profile=any
+(Es justo lo que hace el preparar-red.bat que subí.)
+
+Para que ya no dependa de arrancarlo a mano, una vez arriba corre preparar-red.bat como admin (firewall + arranque automático al prender la PC).
