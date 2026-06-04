@@ -429,11 +429,11 @@ router.get('/alerts', async (req, res) => {
     const dismissedNoSales  = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo));
     const dismissedSinPrecio = new Set(db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'sinPrecio'`).all().map(r => r.art_codigo));
 
-    // Productos que SE VENDIERON (últimos 30 días, renglones reales de TicketsPS)
-    // pero NO tienen costo real (factura ni NovaCaja) o NO tienen precio de venta
-    // en lista → el cliente debe capturar el precio. Es una consulta pesada
-    // (escanea ventas), así que corre en SEGUNDO PLANO con cache de 2 h: NUNCA
-    // bloquea el panel ni golpea la BD seguido. No inventamos estimados.
+    // Productos con PRECIO de venta pero con COSTO en $0 (sin factura y
+    // Art_UltimoCosto=0 → lo que el panel muestra como "Costo: $0.00"). Estos
+    // distorsionan la ganancia; el cliente debe capturar el costo real. Consulta
+    // de catálogo (algo pesada) → corre en SEGUNDO PLANO con cache de 2 h: nunca
+    // bloquea el panel. No inventamos costos.
     let sinPrecioRaw = _cacheGet('sinPrecioRaw');
     if (!sinPrecioRaw) {
       sinPrecioRaw = []; // aún no calculado; se llena en segundo plano para la próxima
@@ -442,26 +442,19 @@ router.get('/alerts', async (req, res) => {
         mssql.query(`
           SELECT TOP 200
             a.Art_Codigo                              AS id,
-            ISNULL(a.Art_Descripcion, s.Codigo)       AS name,
-            s.uds                                     AS unidadesVendidas,
+            a.Art_Descripcion                         AS name,
+            (SELECT ISNULL(SUM(aa.AA_ExistenciaActualU),0) FROM [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK) WHERE aa.Art_Codigo = a.Art_Codigo) AS stock,
             ISNULL(a.Art_UltimoCosto, 0)              AS costoNovacaja,
             ISNULL(lp.LPA_PrecioVentaImp, 0)          AS precioLista,
-            CASE WHEN COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL
-                 THEN 1 ELSE 0 END                    AS faltaCosto,
+            1                                         AS faltaCosto,
             CASE WHEN ISNULL(lp.LPA_PrecioVentaImp,0) = 0 THEN 1 ELSE 0 END AS faltaPrecio
-          FROM (
-            SELECT ps.Codigo, SUM(ps.Cantidad) AS uds
-            FROM [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
-            WHERE ps.FechaHora >= DATEADD(DAY, -30, GETDATE())
-              AND ps.Codigo IS NOT NULL AND ps.Codigo <> ''
-            GROUP BY ps.Codigo
-          ) s
-          LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = s.Codigo
-          LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = s.Codigo AND cpf.fuente = 'factura'
-          LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] lp WITH (NOLOCK) ON lp.Art_Codigo = s.Codigo AND lp.LP_Codigo = 1
-          WHERE COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL
-             OR ISNULL(lp.LPA_PrecioVentaImp,0) = 0
-          ORDER BY s.uds DESC
+          FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+          LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
+          LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] lp WITH (NOLOCK) ON lp.Art_Codigo = a.Art_Codigo AND lp.LP_Codigo = 1
+          WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> ''
+            AND ISNULL(lp.LPA_PrecioVentaImp,0) > 0
+            AND COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL
+          ORDER BY lp.LPA_PrecioVentaImp DESC
         `)
           .then(r => _cacheSet('sinPrecioRaw', r.recordset || [], 7200_000)) // 2 h
           .catch(e => console.error('MSSQL sinPrecio fetch error:', e.message))

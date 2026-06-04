@@ -161,6 +161,54 @@ router.get('/analytics', async (req, res) => {
   }
 });
 
+// ── GET /api/novacaja/sin-costo — productos con costo en $0 (reporte) ─────────
+// "Costo 0" = sin costo de factura y Art_UltimoCosto=0 (lo que el panel muestra
+// como "Costo: $0.00"). Devuelve la lista + conteo por categoría (para gráfica).
+router.get('/sin-costo', async (req, res) => {
+  const cached = _get('sin_costo');
+  if (cached) return res.json(cached);
+  const SIN_COSTO = `COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)) IS NULL`;
+  const JOINS = `
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
+    LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] lp WITH (NOLOCK) ON lp.Art_Codigo = a.Art_Codigo AND lp.LP_Codigo = 1`;
+  try {
+    const [itemsRes, catRes] = await Promise.all([
+      mssql.query(`
+        SELECT TOP 500
+          a.Art_Codigo                                AS codigo,
+          a.Art_Descripcion                           AS nombre,
+          ISNULL(NULLIF(a.Org_Descripcion,''),'Sin categoría') AS categoria,
+          ISNULL(lp.LPA_PrecioVentaImp, 0)            AS precio,
+          ISNULL(a.Art_CostoReposicion, 0)            AS costoReposicion,
+          (SELECT ISNULL(SUM(aa.AA_ExistenciaActualU),0) FROM [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK) WHERE aa.Art_Codigo = a.Art_Codigo) AS stock
+        FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        ${JOINS}
+        WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> '' AND ${SIN_COSTO}
+        ORDER BY ISNULL(lp.LPA_PrecioVentaImp,0) DESC
+      `),
+      mssql.query(`
+        SELECT ISNULL(NULLIF(a.Org_Descripcion,''),'Sin categoría') AS categoria, COUNT(*) AS n
+        FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
+        WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> '' AND ${SIN_COSTO}
+        GROUP BY ISNULL(NULLIF(a.Org_Descripcion,''),'Sin categoría')
+        ORDER BY COUNT(*) DESC
+      `),
+    ]);
+    const porCategoria = catRes.recordset || [];
+    const result = {
+      total:       porCategoria.reduce((s, c) => s + (Number(c.n) || 0), 0),
+      items:       itemsRes.recordset || [],
+      porCategoria: porCategoria.slice(0, 12),
+    };
+    _set('sin_costo', result, 600_000); // 10 min
+    res.json(result);
+  } catch (err) {
+    console.error('Error sin-costo:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/novacaja/dashboard — cached 45 s per period ─────────────────────
 router.get('/dashboard', async (req, res) => {
   const { period = 'day' } = req.query;

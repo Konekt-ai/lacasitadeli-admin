@@ -23,7 +23,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       ISNULL(a.Art_GTIN, a.CodAlt_Codigo)               AS barcode,
       a.Art_Descripcion                                 AS name,
       a.Art_Alias                                       AS alias,
-      ISNULL(a.Art_UltimoCosto, 0)                      AS costPrice,
+      ISNULL(COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)), 0) AS costPrice,
       ISNULL(p.LPA_PrecioVentaImp, 0)                   AS salePrice,
       ISNULL(SUM(aa.AA_ExistenciaActualU), 0)           AS stock,
       a.Mar_Nombre                                      AS brand,
@@ -36,6 +36,8 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
     FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
     LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] p WITH (NOLOCK)
       ON p.Art_Codigo = a.Art_Codigo AND p.LP_Codigo = 1
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK)
+      ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
     LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
       ON aa.Art_Codigo = a.Art_Codigo
     WHERE a.Art_Descripcion <> ''
@@ -44,7 +46,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       ${whereCategory}
     GROUP BY
       a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo,
-      a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto,
+      a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto, a.Art_CostoReposicion, cpf.precio_compra,
       p.LPA_PrecioVentaImp, a.Mar_Nombre, a.Org_Descripcion,
       a.UM_Codigo, a.Art_SKU, a.Art_CodProv,
       a.Art_FechaUltimaCompra, a.Art_FechaUltimaVenta

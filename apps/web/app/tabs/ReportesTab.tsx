@@ -7,6 +7,16 @@ import type { PolizaTicket, PolizaSummary } from '../lib/types';
 
 const ExportModal = dynamic(() => import('../components/ExportModal'), { ssr: false });
 
+interface SinCostoItem {
+  codigo: string; nombre: string; categoria: string;
+  precio: number; costoReposicion: number; stock: number;
+}
+interface SinCostoReporte {
+  total: number;
+  items: SinCostoItem[];
+  porCategoria: { categoria: string; n: number }[];
+}
+
 // ── Tipos Conteo ──────────────────────────────────────────────────────────────
 interface ConteoItem {
   art_codigo:    string;
@@ -724,8 +734,25 @@ export default function ReportesTab({ timeFilter }: Props) {
   const [liveLoading,      setLiveLoading]       = useState(false);
   const [lastLiveRefresh,  setLastLiveRefresh]   = useState<Date | null>(null);
   const [showCostTable,    setShowCostTable]     = useState(false);
+  const [showSinCosto,     setShowSinCosto]      = useState(false);
+  const [sinCosto,         setSinCosto]          = useState<SinCostoReporte | null>(null);
+  const [sinCostoLoading,  setSinCostoLoading]   = useState(false);
 
   const config = PERIOD_CONFIG[timeFilter as TimeFilter] ?? PERIOD_CONFIG['Hoy'];
+
+  const fetchSinCosto = useCallback(async () => {
+    setSinCostoLoading(true);
+    try {
+      const d = await fetch('/api/novacaja/sin-costo').then(r => r.json());
+      if (!d.error) setSinCosto(d);
+    } catch { /* silent */ }
+    finally { setSinCostoLoading(false); }
+  }, []);
+
+  const toggleSinCosto = () => {
+    setShowSinCosto(v => !v);
+    if (!sinCosto && !sinCostoLoading) fetchSinCosto();
+  };
 
   const fetchData = useCallback(async (period: string) => {
     setLoading(true);
@@ -1039,6 +1066,100 @@ export default function ReportesTab({ timeFilter }: Props) {
                 </div>
               )}
             </>
+          )
+        )}
+      </div>
+
+      {/* ── Productos sin costo registrado ─────────────────────────────────── */}
+      <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-[0px_4px_12px_rgba(28,28,25,0.02)] overflow-hidden mt-6">
+        <button onClick={toggleSinCosto}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-surface-container-low/50 transition-colors text-left">
+          <div className="flex items-center gap-3">
+            <Icon name="price_change" className="text-amber-600 text-base" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">
+              Productos sin costo registrado
+            </span>
+            {sinCosto && (
+              <span className="text-[9px] font-label bg-amber-100 text-amber-700 px-2 py-0.5 rounded uppercase tracking-widest">
+                {sinCosto.total.toLocaleString('es-MX')} productos
+              </span>
+            )}
+          </div>
+          <Icon name={showSinCosto ? 'expand_less' : 'expand_more'} className="text-stone-400 text-xl flex-shrink-0" />
+        </button>
+
+        {showSinCosto && (
+          sinCostoLoading ? (
+            <div className="py-16 flex flex-col items-center text-stone-400 border-t border-surface-container">
+              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3" />
+              <p className="text-xs font-label uppercase tracking-widest">Cargando…</p>
+            </div>
+          ) : !sinCosto || sinCosto.items.length === 0 ? (
+            <div className="py-12 text-center text-stone-400 border-t border-surface-container">
+              <Icon name="check_circle" className="text-emerald-500 text-3xl mb-2" />
+              <p className="text-sm font-body">Todos los productos tienen costo registrado. 🎉</p>
+            </div>
+          ) : (
+            <div className="border-t border-surface-container">
+              <p className="px-5 pt-4 text-[11px] font-body text-stone-500">
+                Productos cuyo costo está en <strong>$0</strong> (lo que el panel muestra como costo). Captura su costo real en NovaCaja o recíbelos por factura para que la ganancia salga exacta.
+              </p>
+
+              {/* Gráfica: por categoría (barras) */}
+              {sinCosto.porCategoria.length > 0 && (() => {
+                const maxN = Math.max(...sinCosto.porCategoria.map(c => c.n));
+                return (
+                  <div className="px-5 py-4 space-y-1.5">
+                    <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-2">Por categoría</p>
+                    {sinCosto.porCategoria.map(c => (
+                      <div key={c.categoria} className="flex items-center gap-2">
+                        <span className="w-28 sm:w-40 text-[11px] font-body text-stone-600 truncate flex-shrink-0" title={c.categoria}>{c.categoria}</span>
+                        <div className="flex-1 h-3.5 bg-surface-container rounded-full overflow-hidden">
+                          <div className="h-full bg-amber-400 rounded-full" style={{ width: `${Math.max(4, (c.n / maxN) * 100)}%` }} />
+                        </div>
+                        <span className="w-10 text-right text-[11px] font-serif font-bold text-stone-600 flex-shrink-0">{c.n}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+
+              {/* Tabla */}
+              <div className="overflow-x-auto border-t border-surface-container">
+                <table className="w-full text-left">
+                  <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
+                    <tr>
+                      <th className="px-5 py-3">Producto</th>
+                      <th className="px-5 py-3">Categoría</th>
+                      <th className="px-5 py-3 text-right">Precio venta</th>
+                      <th className="px-5 py-3 text-right">Stock</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-container">
+                    {sinCosto.items.map((p, i) => (
+                      <tr key={i} className="hover:bg-background transition-colors">
+                        <td className="px-5 py-3">
+                          <p className="text-sm font-body text-on-surface">{p.nombre}</p>
+                          <p className="text-[10px] font-mono text-stone-400">{p.codigo}</p>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-stone-500 font-body">{p.categoria}</td>
+                        <td className="px-5 py-3 text-right font-body text-sm">
+                          {p.precio > 0 ? `$${Number(p.precio).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—'}
+                        </td>
+                        <td className="px-5 py-3 text-right font-body text-sm">{p.stock}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {sinCosto.total > sinCosto.items.length && (
+                <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30">
+                  <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
+                    Mostrando {sinCosto.items.length.toLocaleString('es-MX')} de {sinCosto.total.toLocaleString('es-MX')} productos sin costo
+                  </p>
+                </div>
+              )}
+            </div>
           )
         )}
       </div>

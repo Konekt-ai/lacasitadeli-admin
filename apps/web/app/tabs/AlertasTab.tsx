@@ -25,7 +25,7 @@ const CATEGORIES: AlertCategory[] = [
   { id: 'expirySoon', label: 'Próximos a Vencer',       sub: 'Vencen en los próximos 30 días',       icon: 'schedule',       severity: 'warning'  },
   { id: 'stagnant',   label: 'Inventario Estancado',    sub: 'Sin ventas en 30+ días',               icon: 'do_not_disturb', severity: 'warning'  },
   { id: 'noSales',    label: 'Sin Ventas Este Mes',     sub: 'Stock disponible sin movimiento',      icon: 'trending_down',  severity: 'info'     },
-  { id: 'sinPrecio',  label: 'Sin Precio Registrado',   sub: 'Se venden con costo/precio estimado — registra el real', icon: 'price_change', severity: 'warning' },
+  { id: 'sinPrecio',  label: 'Sin Costo Registrado',    sub: 'Tienen precio de venta pero costo en $0 — registra el costo real', icon: 'price_change', severity: 'warning' },
 ];
 
 const SEVERITY_STYLES: Record<string, { card: string; badge: string; icon: string; count: string }> = {
@@ -397,17 +397,17 @@ function StagnantList({ products, noSalesMode = false }: { products: { id: strin
 }
 
 function SinPrecioList({ items }: {
-  items: { id: string; name: string; unidadesVendidas: number; costoNovacaja: number | null; precioLista: number | null; faltaCosto: number; faltaPrecio: number }[];
+  items: { id: string; name: string; stock: number; costoNovacaja: number | null; precioLista: number | null; faltaCosto: number; faltaPrecio: number }[];
 }) {
   const fmt = (n: number | null) => n != null && Number(n) > 0
     ? `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
   if (items.length === 0) {
-    return <p className="text-xs font-body text-stone-400 italic px-1">Todos los productos que se venden tienen costo y precio registrado. 🎉</p>;
+    return <p className="text-xs font-body text-stone-400 italic px-1">Todos los productos con precio tienen su costo registrado. 🎉</p>;
   }
   return (
     <div className="space-y-2">
       <p className="text-[11px] font-body text-stone-500 px-1 mb-1">
-        Estos productos <strong>se vendieron</strong> pero les falta el <strong>costo de compra</strong> o el <strong>precio de venta</strong> registrado en NovaCaja. Captura el precio real (o recibe su factura con el lector de PDF) para que la ganancia salga exacta.
+        Estos productos tienen <strong>precio de venta</strong> pero su <strong>costo está en $0</strong>. Captura el costo real en NovaCaja (o recibe su factura con el lector de PDF) para que la ganancia salga exacta. Ves el reporte completo en <strong>Reportes</strong>.
       </p>
       {items.map(p => (
         <div key={p.id} className="bg-surface-container-lowest rounded-xl border border-amber-200 p-3.5 flex items-center gap-3">
@@ -416,10 +416,10 @@ function SinPrecioList({ items }: {
             <p className="text-sm font-body text-on-surface truncate">{p.name}</p>
             <div className="flex flex-wrap items-center gap-2 mt-0.5">
               <span className="text-[10px] font-mono text-stone-400">{p.id}</span>
-              <span className="text-[10px] font-label text-stone-400">Vendidas: {p.unidadesVendidas}</span>
+              <span className="text-[10px] font-label text-stone-400">Stock: {p.stock}</span>
               <span className="text-[10px] font-label text-stone-500">Costo: {fmt(p.costoNovacaja)}</span>
               <span className="text-[10px] font-label text-stone-500">Precio: {fmt(p.precioLista)}</span>
-              {p.faltaCosto === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">falta costo</span>}
+              <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">costo $0</span>
               {p.faltaPrecio === 1 && <span className="text-[9px] font-label bg-error-container text-on-error-container px-2 py-0.5 rounded uppercase tracking-wider">falta precio</span>}
             </div>
           </div>
