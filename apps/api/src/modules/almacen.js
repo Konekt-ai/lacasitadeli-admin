@@ -835,6 +835,23 @@ router.post('/productos-pendientes/:id/resolver', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POST /api/almacen/productos-pendientes/:id/precio — ponerle el precio
+// El empleado ya registró el producto y su stock en la bodega; aquí el admin
+// solo le asigna el precio de venta. NO toca NovaCaja (el alta en el POS es manual).
+router.post('/productos-pendientes/:id/precio', (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+  const precio = parseFloat(req.body?.precio_unitario);
+  if (!(precio >= 0)) return res.status(400).json({ error: 'precio_unitario inválido' });
+  const db = getDb();
+  try {
+    const p = db.prepare(`SELECT id FROM productos_pendientes WHERE id=?`).get(id);
+    if (!p) return res.status(404).json({ error: 'Pendiente no encontrado' });
+    db.prepare(`UPDATE productos_pendientes SET precio_unitario=? WHERE id=?`).run(precio, id);
+    res.json({ ok: true, id, precio_unitario: precio });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // DELETE /api/almacen/productos-pendientes/:id — descartar (soft)
 router.delete('/productos-pendientes/:id', (req, res) => {
   const id = parseInt(req.params.id, 10);
