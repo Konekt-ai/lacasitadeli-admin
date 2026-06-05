@@ -318,11 +318,16 @@ router.get('/movimientos/historial', (req, res) => {
 });
 
 // ── GET /api/almacen/movimientos/todos — vista unificada ──────────────────────
-router.get('/movimientos/todos', (req, res) => {
-  const { fecha, tipo, area, limit = 300 } = req.query;
+router.get('/movimientos/todos', async (req, res) => {
+  const { tipo, area, limit = 300 } = req.query;
   try {
-    const today = fecha || new Date().toISOString().slice(0, 10);
-    const cap   = Math.min(parseInt(limit) || 300, 500);
+    const hoy = new Date().toISOString().slice(0, 10);
+    // Rango de fechas: ?fecha= (un día), ?desde=&hasta=, o por defecto últimos 7 días.
+    let desde, hasta;
+    if (req.query.fecha)                         { desde = hasta = req.query.fecha; }
+    else if (req.query.desde || req.query.hasta) { desde = req.query.desde || '2000-01-01'; hasta = req.query.hasta || hoy; }
+    else { const d = new Date(); d.setDate(d.getDate() - 6); desde = d.toISOString().slice(0, 10); hasta = hoy; }
+    const cap = Math.min(parseInt(limit) || 300, 500);
 
     const rows = getDb().prepare(`
       SELECT
@@ -340,7 +345,7 @@ router.get('/movimientos/todos', (req, res) => {
         m.usuario,
         m.created_at             AS fecha
       FROM almacen_movimientos m
-      WHERE m.tipo = 'entrada' AND DATE(m.created_at) = ?
+      WHERE m.tipo = 'entrada' AND DATE(m.created_at) BETWEEN ? AND ?
 
       UNION ALL
 
@@ -359,7 +364,7 @@ router.get('/movimientos/todos', (req, res) => {
         m.usuario,
         m.created_at
       FROM almacen_movimientos m
-      WHERE m.tipo = 'salida' AND DATE(m.created_at) = ?
+      WHERE m.tipo = 'salida' AND DATE(m.created_at) BETWEEN ? AND ?
 
       UNION ALL
 
@@ -378,7 +383,7 @@ router.get('/movimientos/todos', (req, res) => {
         mr.usuario,
         mr.created_at
       FROM merma_registros mr
-      WHERE DATE(mr.created_at) = ?
+      WHERE DATE(mr.created_at) BETWEEN ? AND ?
 
       UNION ALL
 
@@ -397,14 +402,53 @@ router.get('/movimientos/todos', (req, res) => {
         'Bodega',
         st.created_at
       FROM surtido_transfers st
-      WHERE st.autorizado = 1 AND DATE(st.created_at) = ?
+      WHERE st.autorizado = 1 AND DATE(st.created_at) BETWEEN ? AND ?
 
       ORDER BY fecha DESC
       LIMIT ${cap}
-    `).all(today, today, today, today);
+    `).all(desde, hasta, desde, hasta, desde, hasta, desde, hasta);
 
-    // Filtros opcionales en JS (tipo y area)
-    let resultado = rows;
+    // ── Movimientos del TC52 (MSSQL movimientos_bodega) — lo que escanea la zebra
+    let tc52Rows = [];
+    try {
+      const r = await mssql.query(`
+        SELECT
+          CONCAT('tc52-', m.id)                    AS uid,
+          LOWER(LTRIM(RTRIM(m.tipo)))              AS tipo,
+          m.codigo_barras                          AS codigo,
+          ISNULL(NULLIF(a.Art_Descripcion, ''), '') AS nombre,
+          m.cantidad                               AS cantidad,
+          m.ubicacion                              AS ubicacion,
+          m.stock_antes                            AS stock_antes,
+          m.stock_despues                          AS stock_despues,
+          m.motivo                                 AS motivo,
+          m.notas                                  AS notas,
+          CONVERT(varchar(19), m.fecha, 120)       AS fecha
+        FROM [compucaja].[dbo].[movimientos_bodega] m WITH (NOLOCK)
+        LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = m.codigo_barras
+        WHERE CAST(m.fecha AS DATE) BETWEEN '${esc(desde)}' AND '${esc(hasta)}'
+        ORDER BY m.fecha DESC
+        OPTION (MAXDOP 1)
+      `);
+      tc52Rows = (r.recordset || []).map(m => {
+        const areaKey = String(m.ubicacion || 'Bodega').toLowerCase().replace(/\s+/g, '_');
+        const esEntrada = m.tipo === 'entrada';
+        return {
+          uid: m.uid, tipo: m.tipo, codigo: m.codigo, nombre: m.nombre || null,
+          cantidad: m.cantidad,
+          area_origen:  esEntrada ? null : areaKey,
+          area_destino: esEntrada ? areaKey : null,
+          stock_antes: m.stock_antes, stock_despues: m.stock_despues,
+          motivo: m.motivo || null, notas: m.notas || null, usuario: 'TC52',
+          fecha: m.fecha,
+        };
+      });
+    } catch (e) { console.error('movimientos TC52:', e.message); }
+
+    // Unir TC52 (MSSQL) + admin (SQLite), ordenar y limitar
+    let resultado = [...tc52Rows, ...rows]
+      .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))
+      .slice(0, cap);
     if (tipo && tipo !== 'todos') resultado = resultado.filter(r => r.tipo === tipo);
     if (area) resultado = resultado.filter(r => r.area_origen === area || r.area_destino === area);
 

@@ -2075,9 +2075,12 @@ function Tc52StockPanel() {
 function ZebraView() {
   const { areas, areaMap } = useAreasCtx();
   const today = new Date().toISOString().slice(0, 10);
+  const diasAtras = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
   const [movimientos, setMovimientos] = useState<MovimientoUnificado[]>([]);
   const [loading,     setLoading]     = useState(false);
-  const [fecha,       setFecha]       = useState(today);
+  // Rango de fechas (por defecto: últimos 7 días, para ver los movimientos recientes)
+  const [desde,       setDesde]       = useState(diasAtras(6));
+  const [hasta,       setHasta]       = useState(today);
   const [tipo,        setTipo]        = useState<TipoMovimiento | 'todos'>('todos');
   const [areaFiltro,  setAreaFiltro]  = useState('todas');
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -2085,14 +2088,14 @@ function ZebraView() {
   const fetchMovimientos = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ fecha });
+      const params = new URLSearchParams({ desde, hasta });
       if (tipo !== 'todos') params.set('tipo', tipo);
       if (areaFiltro !== 'todas') params.set('area', areaFiltro);
       const data = await fetch(`/api/almacen/movimientos/todos?${params}`).then(r => r.json());
       if (Array.isArray(data)) { setMovimientos(data); setLastRefresh(new Date()); }
     } catch { /* silent */ }
     finally { setLoading(false); }
-  }, [fecha, tipo, areaFiltro]);
+  }, [desde, hasta, tipo, areaFiltro]);
 
   useEffect(() => { fetchMovimientos(); }, [fetchMovimientos]);
 
@@ -2102,10 +2105,12 @@ function ZebraView() {
     return acc;
   }, [movimientos]);
 
-  const setPresetFecha = (days: number) => {
-    const d = new Date(); d.setDate(d.getDate() - days);
-    setFecha(d.toISOString().slice(0, 10));
-  };
+  const PRESETS_FECHA = [
+    { label: 'Hoy',    desde: today,        hasta: today },
+    { label: 'Ayer',   desde: diasAtras(1), hasta: diasAtras(1) },
+    { label: '7 días', desde: diasAtras(6), hasta: today },
+    { label: 'Todo',   desde: '2000-01-01', hasta: today },
+  ];
 
   const TIPOS_FILTER: { id: TipoMovimiento | 'todos'; label: string }[] = [
     { id: 'todos',        label: 'Todos' },
@@ -2123,17 +2128,26 @@ function ZebraView() {
       {/* Filtros movimientos */}
       <div className="flex flex-wrap items-end gap-3 mb-5">
         <div>
-          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha</label>
-          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Desde</label>
+          <input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Hasta</label>
+          <input type="date" value={hasta} min={desde} onChange={e => setHasta(e.target.value)}
             className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
         </div>
         <div className="flex gap-1.5">
-          {[{ label: 'Hoy', days: 0 }, { label: 'Ayer', days: 1 }, { label: '7d', days: 7 }].map(p => (
-            <button key={p.label} onClick={() => setPresetFecha(p.days)}
-              className="px-3 py-2 bg-surface-container-low text-stone-500 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest hover:bg-primary/10 hover:text-primary transition-all border border-outline-variant/20">
-              {p.label}
-            </button>
-          ))}
+          {PRESETS_FECHA.map(p => {
+            const activo = desde === p.desde && hasta === p.hasta;
+            return (
+              <button key={p.label} onClick={() => { setDesde(p.desde); setHasta(p.hasta); }}
+                className={cn('px-3 py-2 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest transition-all border',
+                  activo ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-low text-stone-500 hover:bg-primary/10 hover:text-primary border-outline-variant/20')}>
+                {p.label}
+              </button>
+            );
+          })}
         </div>
         <div className="flex gap-1 flex-wrap">
           {TIPOS_FILTER.map(t => (
@@ -2264,7 +2278,7 @@ function ZebraView() {
           </div>
           <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
             <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-              {movimientos.length} movimientos · {fecha}
+              {movimientos.length} movimientos · {desde === hasta ? desde : `${desde} a ${hasta}`}
             </p>
             <div className="flex gap-3 text-[10px] font-label text-stone-400">
               {(['entrada', 'salida', 'merma', 'transferencia'] as TipoMovimiento[]).map(t =>
