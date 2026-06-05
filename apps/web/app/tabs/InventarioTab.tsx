@@ -35,6 +35,8 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   // ── Area assignments (from SQLite) ────────────────────────────────────────────
   const [locationMap, setLocationMap] = useState<Map<string, Area>>(new Map());
   const [areaOptions, setAreaOptions] = useState<{ area: string; nombre: string }[]>([]);
+  // Stock por ubicación (lo que cuenta el TC52): art_codigo → [{area, cantidad}]
+  const [ubicMap, setUbicMap] = useState<Map<string, { area: string; cantidad: number }[]>>(new Map());
 
   // ── Edit side-panel ───────────────────────────────────────────────────────────
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -68,7 +70,25 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         if (Array.isArray(data)) setAreaOptions(data);
       })
       .catch(() => {});
+
+    // Stock por ubicación (TC52) → mapa por producto, ignorando ceros
+    fetch('/api/almacen/ubicaciones')
+      .then(r => r.json())
+      .then((data: { art_codigo: string; area: string; cantidad: number }[]) => {
+        if (!Array.isArray(data)) return;
+        const m = new Map<string, { area: string; cantidad: number }[]>();
+        for (const r of data) {
+          if (!r.cantidad) continue;
+          const arr = m.get(r.art_codigo) ?? [];
+          arr.push({ area: r.area, cantidad: r.cantidad });
+          m.set(r.art_codigo, arr);
+        }
+        setUbicMap(m);
+      })
+      .catch(() => {});
   }, []);
+
+  const areaName = (area: string) => areaOptions.find(a => a.area === area)?.nombre ?? area;
 
   // ── Fetch products — debounced on search/category, immediate on page ──────────
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -371,23 +391,23 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-on-surface font-body text-sm truncate max-w-[150px] sm:max-w-[280px]">{p.name}</p>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase">
-                              {p.category || 'Sin categoría'}
-                            </p>
-                            {(() => {
-                              const area = locationMap.get(String(p.id));
-                              if (area && area !== 'bodega') {
-                                const opt = areaOptions.find(a => a.area === area);
-                                return (
-                                  <span className="text-[8px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary">
-                                    {opt?.nombre ?? area}
+                          <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase mt-0.5">
+                            {p.category || 'Sin categoría'}
+                          </p>
+                          {(() => {
+                            const locs = ubicMap.get(String(p.id));
+                            if (!locs || locs.length === 0) return null;
+                            return (
+                              <div className="flex flex-wrap items-center gap-1 mt-1">
+                                {locs.map(l => (
+                                  <span key={l.area}
+                                    className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary inline-flex items-center gap-0.5">
+                                    <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
                                   </span>
-                                );
-                              }
-                              return null;
-                            })()}
-                          </div>
+                                ))}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
                     </td>
@@ -477,6 +497,20 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                   </div>
                   <p className="text-xl font-serif text-primary">${Number(p.salePrice).toFixed(2)}</p>
                 </div>
+                {(() => {
+                  const locs = ubicMap.get(String(p.id));
+                  if (!locs || locs.length === 0) return null;
+                  return (
+                    <div className="flex flex-wrap items-center gap-1 mt-3 pt-3 border-t border-outline-variant/10">
+                      {locs.map(l => (
+                        <span key={l.area}
+                          className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary inline-flex items-center gap-0.5">
+                          <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           </div>

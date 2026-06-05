@@ -13,11 +13,11 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'recepcion' | 'gestion-areas' | 'surtido' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
-  { id: 'stock-surtido',  label: 'Stock & Surtido',   icon: 'inventory_2'    },
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
+  { id: 'surtido',        label: 'Surtido',            icon: 'swap_horiz'     },
   { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
@@ -3502,9 +3502,9 @@ function PendientesView() {
       {/* Header + filtro */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h3 className="font-serif text-xl text-primary">Productos nuevos (pendientes de código)</h3>
+          <h3 className="font-serif text-xl text-primary">Productos nuevos</h3>
           <p className="text-[11px] font-body text-stone-400 mt-0.5">
-            Productos detectados en facturas/TC52 que aún no existen en NovaCaja. Asígnales su código de barras al llegar a la bodega.
+            Los que registra el empleado en el TC52 ya tienen su stock en la bodega. Aquí solo les pones el <b>precio</b>. (El alta en NovaCaja sigue siendo manual en el POS.)
           </p>
         </div>
         <div className="flex bg-surface-container rounded-xl p-1">
@@ -3534,6 +3534,7 @@ function PendientesView() {
                 <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Proveedor / SKU</th>
                 <th className="text-right px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Pzas/caja</th>
                 <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Estado</th>
+                <th className="text-left px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Precio</th>
                 <th className="text-right px-3 py-2 text-[10px] font-label uppercase tracking-widest text-stone-500">Acción</th>
               </tr>
             </thead>
@@ -3558,6 +3559,11 @@ function PendientesView() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-2 align-top">
+                      {p.estado === 'resuelto'
+                        ? <PrecioPendiente pendiente={p} onNotify={notify} onSaved={fetchLista} />
+                        : <span className="text-[11px] font-body text-stone-300">—</span>}
+                    </td>
                     <td className="px-3 py-2 text-right align-top">
                       {p.estado === 'pendiente' && (
                         <div className="inline-flex gap-1">
@@ -3574,7 +3580,7 @@ function PendientesView() {
                     </td>
                   </tr>
                   {resolIdx === idx && p.estado === 'pendiente' && (
-                    <tr><td colSpan={5} className="px-3 pb-2">
+                    <tr><td colSpan={6} className="px-3 pb-2">
                       <ResolverPendiente pendiente={p} onNotify={notify}
                         onCancel={() => setResolIdx(null)}
                         onResolved={() => { setResolIdx(null); fetchLista(); }} />
@@ -3637,6 +3643,50 @@ function ResolverPendiente({ pendiente, onResolved, onCancel, onNotify }: {
       </button>
       <button onClick={onCancel} className="px-2 py-2 text-stone-400 hover:text-stone-600 rounded-lg">
         <Icon name="close" className="text-base" />
+      </button>
+    </div>
+  );
+}
+
+// Editor de precio para un producto ya resuelto (con stock en la bodega).
+// El admin solo le pone el precio de venta; no toca NovaCaja.
+function PrecioPendiente({ pendiente, onNotify, onSaved }: {
+  pendiente: Pendiente;
+  onNotify: (m: string, t?: 'success' | 'error') => void;
+  onSaved: () => void;
+}) {
+  const [precio, setPrecio] = useState(pendiente.precio_unitario != null ? String(pendiente.precio_unitario) : '');
+  const [saving, setSaving] = useState(false);
+  const tiene = pendiente.precio_unitario != null;
+
+  const guardar = async () => {
+    const val = parseFloat(precio);
+    if (!(val >= 0)) { onNotify('Escribe un precio válido', 'error'); return; }
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/almacen/productos-pendientes/${pendiente.id}/precio`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ precio_unitario: val }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) { onNotify('Precio guardado'); onSaved(); }
+      else onNotify(j.error || 'Error al guardar precio', 'error');
+    } catch { onNotify('Error de conexión', 'error'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="inline-flex items-center gap-1">
+      <span className="text-stone-400 text-[11px]">$</span>
+      <input type="number" min="0" step="0.01" value={precio}
+        onChange={e => setPrecio(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') guardar(); }}
+        placeholder="0.00"
+        className={cn('w-20 px-2 py-1 bg-background border rounded-lg text-sm font-body text-right outline-none focus:border-primary',
+          tiene ? 'border-emerald-300' : 'border-outline-variant/20')} />
+      <button onClick={guardar} disabled={saving}
+        className="px-2 py-1 bg-primary text-on-primary rounded-lg text-[10px] font-label font-bold uppercase tracking-wider disabled:opacity-50">
+        {saving ? '...' : tiene ? 'Cambiar' : 'Guardar'}
       </button>
     </div>
   );
@@ -4382,7 +4432,7 @@ function CaducidadesView() {
 
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
-  const [view,      setView]      = useState<SubView>('stock-surtido');
+  const [view,      setView]      = useState<SubView>('recepcion');
   const [areasData, setAreasData] = useState<AreaConfig[]>([]);
 
   const loadAreas = useCallback(async () => {
@@ -4445,7 +4495,7 @@ export default function BodegaTab() {
 
       {/* Content */}
       <div className="min-h-[400px]">
-        {view === 'stock-surtido'  && <StockSurtidoView />}
+        {view === 'surtido'        && <SurtidoView />}
         {view === 'recepcion'      && <RecepcionYNuevosView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
         {view === 'merma'          && <MermaYCaducidadesView />}
