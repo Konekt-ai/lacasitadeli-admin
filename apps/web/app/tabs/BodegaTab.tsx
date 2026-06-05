@@ -13,16 +13,14 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'caducidades' | 'discrepancias' | 'facturas' | 'pendientes' | 'zebra';
+type SubView = 'stock-surtido' | 'gestion-areas' | 'recepcion' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'stock-surtido',  label: 'Stock & Surtido',   icon: 'inventory_2'    },
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
   { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
-  { id: 'caducidades',    label: 'Caducidades',        icon: 'hourglass_bottom'},
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
-  { id: 'pendientes',     label: 'Productos nuevos',   icon: 'pending_actions'},
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
 ];
 
@@ -2301,6 +2299,53 @@ const SEMAFORO_META: Record<SemaforoCaducidad, { label: string; color: string; b
 
 interface ItemForm { codigo_barras: string; nombre: string; cajas_esperadas: string; piezas_por_caja: string; }
 
+// Selector interno (segmentado) para las pestañas combinadas
+function SubSegment({ value, onChange, options }: {
+  value: string; onChange: (v: string) => void;
+  options: { id: string; label: string; icon: string }[];
+}) {
+  return (
+    <div className="flex gap-1 bg-surface-container rounded-xl p-1 mb-5 w-fit">
+      {options.map(o => (
+        <button key={o.id} onClick={() => onChange(o.id)}
+          className={cn('px-3 sm:px-4 py-1.5 rounded-lg text-[11px] font-label uppercase tracking-widest flex items-center gap-1.5 transition-all',
+            value === o.id ? 'bg-primary text-on-primary' : 'text-stone-500 hover:text-stone-700')}>
+          <Icon name={o.icon} className="text-sm" /> {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Recepción + Productos nuevos (al recibir, los empleados registran productos
+// nuevos que no estaban contemplados).
+function RecepcionYNuevosView() {
+  const [sub, setSub] = useState<'recepcion' | 'nuevos'>('recepcion');
+  return (
+    <div>
+      <SubSegment value={sub} onChange={v => setSub(v as 'recepcion' | 'nuevos')} options={[
+        { id: 'recepcion', label: 'Recepción',       icon: 'local_shipping' },
+        { id: 'nuevos',    label: 'Productos nuevos', icon: 'pending_actions' },
+      ]} />
+      {sub === 'recepcion' ? <RecepcionView /> : <PendientesView />}
+    </div>
+  );
+}
+
+// Merma + Caducidades (son prácticamente lo mismo: producto que se pierde/vence).
+function MermaYCaducidadesView() {
+  const [sub, setSub] = useState<'merma' | 'caducidades'>('merma');
+  return (
+    <div>
+      <SubSegment value={sub} onChange={v => setSub(v as 'merma' | 'caducidades')} options={[
+        { id: 'merma',       label: 'Merma',       icon: 'event_busy' },
+        { id: 'caducidades', label: 'Caducidades', icon: 'hourglass_bottom' },
+      ]} />
+      {sub === 'merma' ? <MermaView /> : <CaducidadesView />}
+    </div>
+  );
+}
+
 function RecepcionView() {
   const [pedidos,       setPedidos]       = useState<RecepcionEsperada[]>([]);
   const [selected,      setSelected]      = useState<RecepcionEsperadaConDetalle | null>(null);
@@ -4401,13 +4446,11 @@ export default function BodegaTab() {
       {/* Content */}
       <div className="min-h-[400px]">
         {view === 'stock-surtido'  && <StockSurtidoView />}
-        {view === 'recepcion'      && <RecepcionView />}
+        {view === 'recepcion'      && <RecepcionYNuevosView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
-        {view === 'merma'          && <MermaView />}
-        {view === 'caducidades'    && <CaducidadesView />}
+        {view === 'merma'          && <MermaYCaducidadesView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
-        {view === 'pendientes'     && <PendientesView />}
         {view === 'zebra'          && <ZebraView />}
       </div>
     </section>
