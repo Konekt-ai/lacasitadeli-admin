@@ -50,13 +50,14 @@ echo  [2/3] TC52 Bodega - no encontrado, omitiendo
 :FinBodega
 echo.
 
-:: Abrir navegador cuando compile (~25 seg)
-start /B cmd /c "timeout /t 25 /nobreak >nul && start http://localhost:3001"
+:: NO se abre el navegador automaticamente (evita llenar el navegador de pestanas
+:: y sobrecargar la PC). Abre el panel desde el icono de la bandeja del sistema
+:: (iconos ocultos -> doble clic) o entra a la direccion de abajo.
 
 :: [3/3] Next.js en ESTA ventana - cerrar aqui detiene todo
 echo  [3/3] Panel web (puerto 3001) - espera 20-30 seg hasta "Ready"...
 echo.
-echo  Panel admin :  http://localhost:3001
+echo  Panel admin :  http://localhost:3001  (abrelo desde el icono de la bandeja)
 echo  API         :  http://localhost:3002/api/health
 echo  TC52 Bodega :  http://[IP-de-esta-PC]:3003
 echo.

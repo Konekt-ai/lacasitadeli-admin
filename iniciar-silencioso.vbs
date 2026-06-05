@@ -49,9 +49,11 @@ oShell.Run "pythonw.exe """ & DIR_APP & "\tray-monitor.py""", 0, False
 ' ── 6. Frontend Next.js (puerto 3001) ─────────────────────────────────────────
 oShell.Run """" & DIR_APP & "\apps\web\start.bat""", 0, False
 
-' ── 7. Abrir navegador cuando termine de compilar (~30 seg) ───────────────────
-WScript.Sleep 30000
-oShell.Run "http://localhost:3001"
+' NO se abre el navegador automaticamente. Cada arranque/actualizacion abria una
+' pestana de localhost:3001 y, con el watchdog reintentando, se llenaba el
+' navegador y sobrecargaba la PC (cajas lentas). El panel queda corriendo en
+' http://localhost:3001 y el usuario lo abre cuando lo necesita (icono de la
+' bandeja del sistema / "iconos ocultos").
 
 Set fso    = Nothing
 Set oShell = Nothing
