@@ -72,6 +72,32 @@ export default function Dashboard() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Auto-recuperación de ChunkLoadError: cuando el sistema se actualiza/recompila
+  // y una pestaña vieja quedó abierta, al navegar a un tab puede fallar la carga
+  // de su "chunk" (el archivo ya cambió). En vez de morir, recargamos la página
+  // (toma los archivos nuevos). El guardado por tiempo evita recargas en bucle.
+  useEffect(() => {
+    const esChunk = (m: string) =>
+      /ChunkLoadError|Loading chunk\s.*failed|Loading CSS chunk|Failed to fetch dynamically imported module/i.test(m || '');
+    const recargarUnaVez = () => {
+      try {
+        const last = Number(sessionStorage.getItem('lcd_chunkReloadAt') || 0);
+        if (Date.now() - last > 10000) {
+          sessionStorage.setItem('lcd_chunkReloadAt', String(Date.now()));
+          window.location.reload();
+        }
+      } catch { window.location.reload(); }
+    };
+    const onError = (e: ErrorEvent) => { if (esChunk(e?.message) || esChunk((e?.error as Error)?.message)) recargarUnaVez(); };
+    const onRejection = (e: PromiseRejectionEvent) => { if (esChunk((e?.reason as Error)?.message || String(e?.reason))) recargarUnaVez(); };
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onRejection);
+    };
+  }, []);
+
   // ── Tab content ─────────────────────────────────────────────────────────────
   const renderContent = () => {
     if (loading) return (

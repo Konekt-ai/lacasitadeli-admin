@@ -52,9 +52,11 @@ if errorlevel 1 (
 call :say "  Instalando dependencias API..."
 cd /d "%~dp0apps\api"
 call npm install --omit=dev >> "%LOG%" 2>&1
-call :say "  Instalando dependencias Web..."
+call :say "  Instalando y construyendo Web (modo produccion)..."
 cd /d "%~dp0apps\web"
-call npm install --omit=dev >> "%LOG%" 2>&1
+call npm install >> "%LOG%" 2>&1
+rmdir /s /q ".next" >nul 2>&1
+call npm run build >> "%LOG%" 2>&1
 cd /d "%~dp0"
 set ADMIN_EST=ACTUALIZADO
 call :say "  Admin actualizado."
