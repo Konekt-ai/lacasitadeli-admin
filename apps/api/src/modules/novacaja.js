@@ -32,6 +32,20 @@ const _cache = new Map();
 const _get = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
 const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
 
+// Consulta PESADA: la limitamos a 1 núcleo (MAXDOP 1) para no acaparar la CPU del
+// servidor que comparte NovaCaja (POS). Tarda un poco más, pero no lo ahoga.
+const heavy = (sql) => mssql.query(sql + '\n    OPTION (MAXDOP 1)');
+
+// Devuelve el valor cacheado o lo calcula con fn() (que resuelve al valor FINAL,
+// ya extraído) y lo guarda. Evita re-escanear en cada visita.
+async function getCached(key, fn, ttlMs) {
+  const c = _get(key);
+  if (c !== null) return c;
+  const v = await fn();
+  _set(key, v, ttlMs);
+  return v;
+}
+
 // ── getMaxDateString — cached 10 min (data is historical, never changes) ─────
 let _maxDate = null;
 let _maxDateExp = 0;
@@ -139,11 +153,11 @@ router.get('/analytics', async (req, res) => {
     const maxDate = await getMaxDateString();
 
     const [byHour, byMonth, byWeekday, byCategory, topProducts] = await Promise.all([
-      mssql.query(buildSalesByHourQuery({ months: m, maxDate })),
-      mssql.query(buildSalesByMonthQuery({ months: m, maxDate })),
-      mssql.query(buildSalesByWeekdayQuery({ months: m, maxDate })),
-      mssql.query(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate })),
-      mssql.query(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate })),
+      heavy(buildSalesByHourQuery({ months: m, maxDate })),
+      heavy(buildSalesByMonthQuery({ months: m, maxDate })),
+      heavy(buildSalesByWeekdayQuery({ months: m, maxDate })),
+      heavy(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate })),
+      heavy(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate })),
     ]);
 
     const result = {
@@ -174,7 +188,7 @@ router.get('/sin-costo', async (req, res) => {
     LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] lp WITH (NOLOCK) ON lp.Art_Codigo = a.Art_Codigo AND lp.LP_Codigo = 1`;
   try {
     const [itemsRes, catRes] = await Promise.all([
-      mssql.query(`
+      heavy(`
         SELECT TOP 500
           a.Art_Codigo                                AS codigo,
           a.Art_Descripcion                           AS nombre,
@@ -187,7 +201,7 @@ router.get('/sin-costo', async (req, res) => {
         WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> '' AND ${SIN_COSTO}
         ORDER BY ISNULL(lp.LPA_PrecioVentaImp,0) DESC
       `),
-      mssql.query(`
+      heavy(`
         SELECT ISNULL(NULLIF(a.Org_Descripcion,''),'Sin categoría') AS categoria, COUNT(*) AS n
         FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
         LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK) ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
@@ -231,18 +245,19 @@ router.get('/dashboard', async (req, res) => {
     const kpiQuery  = esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate });
     const topQuery  = esDia ? buildTopProductsRealtimeQuery({ period, limit: 10 }) : buildTopProductsQuery({ period, limit: 10, maxDate });
 
-    const [kpiRes, costRes, topRes, byDayRes, bySupplierRes, prodCountRes, lowStockRes] = await Promise.all([
-      mssql.query(kpiQuery),
-      esDia ? mssql.query(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
-      mssql.query(topQuery),
-      mssql.query(buildSalesByDayQuery({ days, maxDate })),
-      mssql.query(buildSalesBySupplierQuery({ period, maxDate })),
-      mssql.query(buildDashboardProductsCountQuery()),
-      mssql.query(buildDashboardLowStockCountQuery()),
+    // Tendencia 30 días, por proveedor y los conteos cambian lento y son PESADOS
+    // (escanean pólizas/catálogo). Se leen de cache largo (los pre-calcula el
+    // scheduler en segundo plano) → no se escanean en cada visita al dashboard.
+    const [kpiRes, costRes, topRes, byDayData, bySupplierData, totalProducts, lowStockAlerts] = await Promise.all([
+      heavy(kpiQuery),
+      esDia ? heavy(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
+      heavy(topQuery),
+      getCached('dash:byDay',                  () => heavy(buildSalesByDayQuery({ days: 30, maxDate })).then(r => r.recordset || []),        600_000),
+      getCached(`dash:bySupplier:${period}`,   () => heavy(buildSalesBySupplierQuery({ period, maxDate })).then(r => r.recordset || []),     600_000),
+      getCached('dash:prodCount', () => mssql.query(buildDashboardProductsCountQuery()).then(r => r.recordset[0]?.totalProducts  || 0), 1800_000),
+      getCached('dash:lowStock',  () => mssql.query(buildDashboardLowStockCountQuery()).then(r => r.recordset[0]?.lowStockAlerts || 0),  600_000),
     ]);
 
-    const totalProducts  = prodCountRes.recordset[0]?.totalProducts  || 0;
-    const lowStockAlerts = lowStockRes.recordset[0]?.lowStockAlerts  || 0;
     const kpi  = kpiRes.recordset[0]  || {};
     const cost = costRes.recordset[0] || {};
 
@@ -272,13 +287,13 @@ router.get('/dashboard', async (req, res) => {
       alerts:       lowStockAlerts,
       productos:    totalProducts,
       alertas:      lowStockAlerts,
-      topProducts:  topRes.recordset        || [],
-      byDay:        byDayRes.recordset      || [],
-      bySupplier:   bySupplierRes.recordset || [],
+      topProducts:  topRes.recordset || [],
+      byDay:        byDayData,
+      bySupplier:   bySupplierData,
     };
 
-    // Día: cache corto (tiempo real). Semana/mes: 5 min (histórico, consulta pesada).
-    _set(cacheKey, result, esDia ? 20_000 : 300_000);
+    // Día: cache 45 s (suficiente; el panel refresca cada 2 min). Semana/mes: 5 min.
+    _set(cacheKey, result, esDia ? 45_000 : 300_000);
     res.json(result);
   } catch (err) {
     console.error('Error dashboard:', err.message);
@@ -327,7 +342,7 @@ router.get('/proveedores', async (req, res) => {
     else                         joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
 
     const [suppRes, totalRes] = await Promise.all([
-      mssql.query(`
+      heavy(`
         SELECT TOP ${topLimit}
           p.Pro_Codigo                                               AS id,
           ISNULL(CAST(p.Pro_Nombre          AS NVARCHAR(500)), '')  AS nombre,
@@ -636,14 +651,17 @@ router.get('/poliza-ventas/export', async (req, res) => {
   }
 });
 
-// ── GET /api/novacaja/tickets/recent — no cache, real-time ───────────────────
+// ── GET /api/novacaja/tickets/recent — cache 30 s (varios clientes/refrescos) ──
 router.get('/tickets/recent', async (req, res) => {
-  const { limit = 50 } = req.query;
+  const limit    = Math.min(parseInt(req.query.limit) || 50, 100);
+  const cacheKey = `recent:${limit}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
   try {
-    const result = await mssql.query(
-      buildRecentTicketsQuery({ limit: Math.min(parseInt(limit) || 50, 100) })
-    );
-    res.json(result.recordset || []);
+    const result = await mssql.query(buildRecentTicketsQuery({ limit }));
+    const data   = result.recordset || [];
+    _set(cacheKey, data, 30_000); // 30 s — el feed no necesita ser al segundo
+    res.json(data);
   } catch (err) {
     console.error('Error tickets recientes:', err.message);
     res.status(500).json({ error: err.message });
@@ -766,5 +784,37 @@ router.get('/tables/:table/preview', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ── Pre-cálculo en segundo plano ──────────────────────────────────────────────
+// Cada 5 min refresca en cache las consultas PESADAS y de cambio lento (tendencia
+// 30 días, por proveedor, conteos y Análisis), corriéndolas de forma SECUENCIAL y
+// con MAXDOP 1. Así el panel se sirve de cache (instantáneo) y NO se escanean las
+// tablas grandes de compucaja en cada visita ni se acapara la CPU del POS.
+async function prewarm() {
+  try {
+    const maxDate = await getMaxDateString();
+    await heavy(buildSalesByDayQuery({ days: 30, maxDate })).then(r => _set('dash:byDay', r.recordset || [], 600_000));
+    for (const period of ['day', 'week', 'month']) {
+      await heavy(buildSalesBySupplierQuery({ period, maxDate })).then(r => _set(`dash:bySupplier:${period}`, r.recordset || [], 600_000));
+    }
+    await mssql.query(buildDashboardProductsCountQuery()).then(r => _set('dash:prodCount', r.recordset[0]?.totalProducts  || 0, 1800_000));
+    await mssql.query(buildDashboardLowStockCountQuery()).then(r => _set('dash:lowStock',  r.recordset[0]?.lowStockAlerts || 0,  600_000));
+
+    // Análisis (3 meses) — la vista por defecto. Secuencial para no acaparar CPU.
+    const m = 3;
+    const byHour     = (await heavy(buildSalesByHourQuery({ months: m, maxDate }))).recordset || [];
+    const byMonth    = (await heavy(buildSalesByMonthQuery({ months: m, maxDate }))).recordset || [];
+    const byWeekday  = (await heavy(buildSalesByWeekdayQuery({ months: m, maxDate }))).recordset || [];
+    const byCategory = (await heavy(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate }))).recordset || [];
+    const topProds   = (await heavy(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate }))).recordset || [];
+    _set(`analytics:${m}`, { byHour, byMonth, byWeekday, byCategory, topProducts: topProds }, 600_000);
+  } catch (e) {
+    console.error('prewarm:', e.message);
+  }
+}
+// Arranca 20 s después (deja calentar la conexión) y luego cada 8 min (los caches
+// duran 10 min, así siempre se sirven calientes sin escaneo en vivo).
+setTimeout(prewarm, 20_000);
+setInterval(prewarm, 480_000);
 
 module.exports = router;

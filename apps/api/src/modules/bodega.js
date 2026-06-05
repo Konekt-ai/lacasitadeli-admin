@@ -9,6 +9,8 @@ const _cache = new Map();
 const _cacheGet = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
 const _cacheSet = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
 let _sinPrecioRunning = false; // evita disparar la consulta pesada en paralelo
+// Consulta pesada limitada a 1 núcleo (no acapara la CPU que usa NovaCaja).
+const heavy = (sql) => mssql.query(sql + '\n    OPTION (MAXDOP 1)');
 
 function getValidAreas(db) {
   return db.prepare(
@@ -439,7 +441,7 @@ router.get('/alerts', async (req, res) => {
       sinPrecioRaw = []; // aún no calculado; se llena en segundo plano para la próxima
       if (!_sinPrecioRunning) {
         _sinPrecioRunning = true;
-        mssql.query(`
+        heavy(`
           SELECT TOP 200
             a.Art_Codigo                              AS id,
             a.Art_Descripcion                         AS name,
@@ -466,7 +468,7 @@ router.get('/alerts', async (req, res) => {
     let stagnant = [], noSales = [];
     try {
       const [sRes, nRes] = await Promise.all([
-        mssql.query(`
+        heavy(`
           SELECT TOP 100
             a.Art_Codigo              AS id,
             a.Art_Descripcion         AS name,
@@ -481,7 +483,7 @@ router.get('/alerts', async (req, res) => {
             AND (a.Art_FechaUltimaVenta < DATEADD(day, -30, GETDATE()) OR a.Art_FechaUltimaVenta IS NULL)
           ORDER BY aa.AA_ExistenciaActualU DESC
         `),
-        mssql.query(`
+        heavy(`
           SELECT TOP 100
             a.Art_Codigo              AS id,
             a.Art_Descripcion         AS name,

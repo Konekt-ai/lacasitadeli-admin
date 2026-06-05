@@ -1,6 +1,10 @@
 // ── Mapeo real de compucaja — vistas y tablas confirmadas
 const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 
+// Limita nuestras consultas pesadas a 1 núcleo de CPU para NO acaparar el
+// servidor que también usa NovaCaja (POS). Va al final de cada SELECT.
+const MAXDOP1 = '\n    OPTION (MAXDOP 1)';
+
 function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null } = {}) {
   const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
@@ -242,6 +246,7 @@ function buildDashboardCostQuery({ period = 'day' } = {}) {
       LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
       LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
       WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+        AND ${_ticketDateFilter(period, 'ps.[FechaHora]')}
     ) x
   `;
 }
@@ -262,6 +267,7 @@ function buildTopProductsRealtimeQuery({ period = 'day', limit = 10 } = {}) {
      AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
     WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+      AND ${_ticketDateFilter(period, 'ps.[FechaHora]')}
       AND ps.[Codigo] IS NOT NULL AND ps.[Codigo] <> ''
     GROUP BY ps.[Codigo]
     ORDER BY SUM(ps.[Cantidad]) DESC

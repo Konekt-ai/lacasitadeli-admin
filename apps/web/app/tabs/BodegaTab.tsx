@@ -2354,10 +2354,11 @@ function RecepcionView() {
 
   useEffect(() => { fetchPedidos(); }, [fetchPedidos]);
 
-  // Auto-refresh del detalle cada 8s mientras la orden sigue activa (Pendiente/Parcial)
+  // Auto-refresh del detalle cada 20s mientras la orden sigue activa, solo si la
+  // pestaña está visible (menos carga a compucaja).
   useEffect(() => {
     if (!selected || selected.estatus === 'Recibida' || selected.estatus === 'Cancelada') return;
-    const t = setInterval(() => fetchDetalle(selected.id), 8000);
+    const t = setInterval(() => { if (!document.hidden) fetchDetalle(selected.id); }, 20000);
     return () => clearInterval(t);
   }, [selected?.id, selected?.estatus, fetchDetalle]);
 

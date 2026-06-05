@@ -95,11 +95,16 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     finally { setLoading(false); }
   }, []);
 
-  // Carga inicial + auto-refresh cada 60 s mientras el tab está abierto
+  // Carga inicial + auto-refresh cada 2 min SOLO si la pestaña está visible
+  // (para no cargar la BD de compucaja cuando el panel está en segundo plano).
+  // Además refresca al volver a la pestaña.
   useEffect(() => {
     fetchDash(period);
-    const id = setInterval(() => fetchDash(period), 60_000);
-    return () => clearInterval(id);
+    const tick  = () => { if (!document.hidden) fetchDash(period); };
+    const id    = setInterval(tick, 120_000);
+    const onVis = () => { if (!document.hidden) fetchDash(period); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [period, fetchDash]);
 
   const fetchRecentTickets = useCallback(async () => {
@@ -115,8 +120,11 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
 
   useEffect(() => {
     fetchRecentTickets();
-    const id = setInterval(fetchRecentTickets, 30_000);
-    return () => clearInterval(id);
+    const tick  = () => { if (!document.hidden) fetchRecentTickets(); };
+    const id    = setInterval(tick, 90_000);
+    const onVis = () => { if (!document.hidden) fetchRecentTickets(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [fetchRecentTickets]);
 
   const fmt  = (n: number) => `$${Number(n).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

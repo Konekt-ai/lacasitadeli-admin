@@ -793,8 +793,12 @@ export default function ReportesTab({ timeFilter }: Props) {
 
   useEffect(() => {
     fetchLiveTickets();
-    const id = setInterval(fetchLiveTickets, 30_000);
-    return () => clearInterval(id);
+    // Cada 90 s y SOLO si la pestaña está visible (menos carga a compucaja).
+    const tick  = () => { if (!document.hidden) fetchLiveTickets(); };
+    const id    = setInterval(tick, 90_000);
+    const onVis = () => { if (!document.hidden) fetchLiveTickets(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [fetchLiveTickets]);
 
   const limitReached = tickets.length >= config.limit && totalTickets > config.limit;
