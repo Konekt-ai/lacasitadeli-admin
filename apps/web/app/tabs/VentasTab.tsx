@@ -215,8 +215,8 @@ export default function VentasTab() {
                 </p>
               </div>
             </div>
-            <div className="h-64 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-              <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height={256}>
                 <AreaChart data={hourLineData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="gradUnidades" x1="0" y1="0" x2="0" y2="1">
@@ -273,8 +273,8 @@ export default function VentasTab() {
                 </div>
               )}
             </div>
-            <div className="h-64 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-              <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height={256}>
                 <BarChart data={weekdayData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 11, fontFamily: 'Inter', fill: '#78716c' }} tickLine={false} axisLine={false} />
@@ -306,8 +306,8 @@ export default function VentasTab() {
                 </p>
               </div>
             </div>
-            <div className="h-72 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-              <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height={288}>
                 <BarChart data={monthChartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0ede8" vertical={false} />
                   <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} />
@@ -343,7 +343,7 @@ export default function VentasTab() {
               ) : (
                 <div className="flex flex-col sm:flex-row items-center gap-6">
                   <div className="relative h-56 w-56 flex-shrink-0">
-                    <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+                    <ResponsiveContainer width="100%" height={224}>
                       <PieChart>
                         <Pie data={categoryData} dataKey="value" nameKey="name" cx="50%" cy="50%"
                           innerRadius={58} outerRadius={88} paddingAngle={2} stroke="none">

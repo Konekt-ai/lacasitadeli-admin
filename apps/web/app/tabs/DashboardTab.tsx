@@ -264,8 +264,8 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
               <p className="text-xs font-label uppercase tracking-widest">Sin datos {PERIOD_LABEL[period]}</p>
             </div>
           ) : (
-            <div className="h-64 w-full" style={{ minWidth: 0, minHeight: 0 }}>
-              <ResponsiveContainer width="99%" height="100%" minWidth={1} minHeight={1}>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height={256}>
                 <BarChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 40 }}>
                   <XAxis dataKey="name" tick={{ fontSize: 9, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} angle={-35} textAnchor="end" interval={0} />
                   <YAxis tick={{ fontSize: 9, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={35} />
