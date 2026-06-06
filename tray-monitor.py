@@ -16,6 +16,16 @@ import subprocess
 import pystray
 from PIL import Image, ImageDraw
 
+# ── Instancia ÚNICA ─────────────────────────────────────────────────────────────
+# Si ya hay un tray-monitor corriendo, este se cierra de inmediato. Evita que cada
+# arranque/reintento del watchdog acumule cientos de iconos en la bandeja y sature
+# la PC del cliente. (Se guarda la referencia al mutex para que viva todo el proceso.)
+if sys.platform == "win32":
+    import ctypes
+    _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, "LaCasitaDeliTrayMonitor")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        sys.exit(0)
+
 # ── Rutas ─────────────────────────────────────────────────────────────────────
 APP_DIR  = os.path.dirname(os.path.abspath(sys.argv[0]))
 LOGS_DIR = os.path.join(APP_DIR, "logs")
