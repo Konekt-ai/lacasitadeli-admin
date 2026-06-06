@@ -47,10 +47,19 @@ async function getAreaClaves() {
 // ── GET /api/bodega/area-counts ───────────────────────────────────────────────
 router.get('/area-counts', async (req, res) => {
   try {
-    const db     = getDb();
-    const areas  = await getAreaList();  // lista unificada desde MSSQL
-    const counts = db.prepare(`SELECT area, COUNT(*) AS total FROM product_locations GROUP BY area`).all();
-    const map    = Object.fromEntries(counts.map(r => [r.area, r.total]));
+    const areas = await getAreaList();  // lista unificada desde MSSQL
+    // Conteo desde el stock REAL del TC52 (inventario_bodega), no de asignaciones manuales.
+    const r = await mssql.query(`
+      SELECT ubicacion, COUNT(DISTINCT codigo_barras) AS total
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE cantidad <> 0
+      GROUP BY ubicacion
+    `);
+    const map = {};
+    for (const row of (r.recordset || [])) {
+      const c = areaClave(row.ubicacion);
+      map[c] = (map[c] || 0) + Number(row.total);
+    }
     res.json(areas.map(a => ({ area: a.clave, nombre: a.nombre, total: map[a.clave] || 0 })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -58,12 +67,14 @@ router.get('/area-counts', async (req, res) => {
 });
 
 // ── GET /api/bodega/products-by-area — all location assignments (for badge display) ──
-router.get('/products-by-area', (req, res) => {
+router.get('/products-by-area', async (req, res) => {
   try {
-    const rows = getDb().prepare(
-      `SELECT art_codigo, area, notas, updated_at FROM product_locations`
-    ).all();
-    res.json(rows);
+    const r = await mssql.query(`
+      SELECT codigo_barras, ubicacion
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE cantidad <> 0
+    `);
+    res.json((r.recordset || []).map(x => ({ art_codigo: x.codigo_barras, area: areaClave(x.ubicacion) })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -75,69 +86,30 @@ router.get('/areas/:area/products', async (req, res) => {
   const { area } = req.params;
   const search   = (req.query.search || '').trim();
   try {
-    const db         = getDb();
-    const validAreas = await getAreaClaves();
-    if (!validAreas.includes(area)) return res.status(400).json({ error: 'Área inválida' });
+    const areas = await getAreaList();
+    const match = areas.find(a => a.clave === area);
+    if (!match) return res.status(400).json({ error: 'Área inválida' });
+
     const searchClause = search
-      ? `AND (a.Art_Descripcion LIKE '%${esc(search)}%' OR a.Art_Codigo LIKE '%${esc(search)}%')`
+      ? `AND (ISNULL(a.Art_Descripcion, ib.nombre) LIKE '%${esc(search)}%' OR ib.codigo_barras LIKE '%${esc(search)}%')`
       : '';
 
-    if (area === 'bodega') {
-      const assignedElsewhere = db.prepare(
-        `SELECT art_codigo FROM product_locations WHERE area != 'bodega'`
-      ).all().map(r => r.art_codigo);
-
-      const excludeClause = assignedElsewhere.length > 0
-        ? `AND a.Art_Codigo NOT IN (${assignedElsewhere.map(c => `'${esc(c)}'`).join(',')})`
-        : '';
-
-      const result = await mssql.query(`
-        SELECT TOP 200
-          a.Art_Codigo            AS id,
-          a.Art_Descripcion       AS name,
-          aa.AA_ExistenciaActualU AS stock,
-          a.Org_Descripcion       AS category
-        FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
-        JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-          ON aa.Art_Codigo = a.Art_Codigo
-        WHERE a.Art_Descripcion IS NOT NULL AND a.Art_Descripcion <> ''
-          ${excludeClause}
-          ${searchClause}
-        ORDER BY aa.AA_ExistenciaActualU DESC
-      `);
-      return res.json(result.recordset || []);
-    }
-
-    // Other areas: only explicitly assigned products
-    const assigned = db.prepare(
-      `SELECT art_codigo, notas FROM product_locations WHERE area = ?`
-    ).all(area);
-
-    if (assigned.length === 0) return res.json([]);
-
-    const codes    = assigned.map(r => `'${esc(r.art_codigo)}'`).join(',');
-    const notesMap = new Map(assigned.map(r => [r.art_codigo, r.notas]));
-
+    // Productos FÍSICAMENTE en esta área = lo que cuenta el TC52 (inventario_bodega).
     const result = await mssql.query(`
       SELECT
-        a.Art_Codigo            AS id,
-        a.Art_Descripcion       AS name,
-        aa.AA_ExistenciaActualU AS stock,
-        a.Org_Descripcion       AS category
-      FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
-      JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-        ON aa.Art_Codigo = a.Art_Codigo
-      WHERE a.Art_Codigo IN (${codes}) ${searchClause}
-      ORDER BY aa.AA_ExistenciaActualU DESC
+        ib.codigo_barras                                 AS id,
+        ISNULL(NULLIF(a.Art_Descripcion, ''), ib.nombre) AS name,
+        ib.cantidad                                      AS stock,
+        a.Org_Descripcion                                AS category
+      FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+        ON a.Art_Codigo = ib.codigo_barras
+      WHERE ib.ubicacion = '${esc(match.nombre)}' AND ib.cantidad <> 0 ${searchClause}
+      ORDER BY ib.cantidad DESC
     `);
-
-    const rows = (result.recordset || []).map(r => ({
-      ...r,
-      notas: notesMap.get(r.id) || null,
-    }));
-    res.json(rows);
+    res.json(result.recordset || []);
   } catch (err) {
-    console.error('Error products-by-area:', err.message);
+    console.error('Error areas/:area/products:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
