@@ -145,7 +145,7 @@ function buildDashboardCostPolizaQuery({ period = 'month' } = {}) {
   return `
     SELECT
       ISNULL(SUM(v.cantidad), 0) AS unidadesVendidas,
-      ISNULL(SUM(CASE WHEN ${COSTO_LINEA} > v.importe THEN v.importe ELSE ${COSTO_LINEA} END), 0) AS totalCosto
+      ISNULL(SUM(${COSTO_LINEA}), 0) AS totalCosto
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
     ${JOIN_CP_A}
     WHERE ${_ticketDateFilter(period, 'v.Fecha')}
@@ -215,13 +215,15 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
   // (Art_UltimoCosto). Así el margen deja de depender del Costo de las pólizas,
   // que viene incompleto/inconsistente. ticketPromedio se calcula en el handler
   // como ventas/tickets (exacto).
-  const costoCap = `SUM(CASE WHEN ${COSTO_LINEA} > v.importe THEN v.importe ELSE ${COSTO_LINEA} END)`;
+  // GANANCIA = ventas - costos (costo real por pieza, SIN tope). Lo que se vendió
+  // menos lo que costó comprarlo.
+  const costoReal = `SUM(${COSTO_LINEA})`;
   return `
     SELECT
       COUNT(DISTINCT v.ticket)                  AS totalTickets,
       SUM(v.importe)                            AS totalVentas,
-      ${costoCap}                               AS totalCosto,
-      SUM(v.importe) - ${costoCap}              AS ganancia,
+      ${costoReal}                              AS totalCosto,
+      SUM(v.importe) - ${costoReal}             AS ganancia,
       SUM(v.cantidad)                           AS unidadesVendidas
     FROM [compucaja].[dbo].[VBasePolizaVentas] v WITH (NOLOCK)
     ${JOIN_CP_A}
@@ -231,14 +233,13 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
 
 // Costo + unidades en TIEMPO REAL desde los renglones de los tickets (TicketsPS),
 // MISMA fuente y fecha que las ventas (tabla Tickets). Costo por pieza:
-// factura -> Art_UltimoCosto -> reposicion. Tope por renglón: el costo no puede
-// exceder la venta del renglón (evita margen negativo absurdo por costo en otra
-// unidad o mal capturado en NovaCaja).
+// factura -> Art_UltimoCosto -> reposicion. GANANCIA = ventas - costos reales
+// (sin tope), igual que en Analisis.
 function buildDashboardCostQuery({ period = 'day' } = {}) {
   return `
     SELECT
       ISNULL(SUM(x.cantidad), 0) AS unidadesVendidas,
-      ISNULL(SUM(CASE WHEN x.costoLinea > x.ventaLinea THEN x.ventaLinea ELSE x.costoLinea END), 0) AS totalCosto
+      ISNULL(SUM(x.costoLinea), 0) AS totalCosto
     FROM (
       SELECT
         ps.[Cantidad] AS cantidad,

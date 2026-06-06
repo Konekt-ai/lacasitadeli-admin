@@ -2223,7 +2223,7 @@ function ZebraView() {
               </thead>
               <tbody className="divide-y divide-surface-container">
                 {movimientos.map(m => {
-                  const meta = TIPO_META[m.tipo];
+                  const meta = TIPO_META[m.tipo] ?? { label: m.tipo || 'Movimiento', sign: '', badgeCls: 'bg-stone-100 text-stone-600', iconCls: 'text-stone-500' };
                   const areaOrigen  = m.area_origen  ? areaMap[m.area_origen as Area]?.label  ?? m.area_origen  : null;
                   const areaDestino = m.area_destino ? areaMap[m.area_destino as Area]?.label ?? m.area_destino : null;
                   return (
