@@ -4218,24 +4218,71 @@ function FacturasView() {
 }
 
 // ── Áreas combinado: Asignar + Configurar ─────────────────────────────────────
+// Busca en go-upc.com el nombre de los productos que la zebra metió pero no
+// existen en NovaCaja (salen en blanco) y los rellena.
+function RellenarNombresBtn() {
+  const [faltan,  setFaltan]  = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [msg,     setMsg]     = useState<string | null>(null);
+
+  const contar = useCallback(() => {
+    fetch('/api/almacen/nombres-faltantes/contar')
+      .then(r => r.json())
+      .then(d => { if (typeof d.total === 'number') setFaltan(d.total); })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { contar(); }, [contar]);
+
+  const rellenar = async () => {
+    if (loading) return;
+    setLoading(true);
+    setMsg('Buscando nombres en go-upc… (puede tardar ~½ min)');
+    try {
+      const r = await fetch('/api/almacen/nombres-faltantes/rellenar', { method: 'POST' });
+      const d = await r.json();
+      if (d.error) setMsg('Error: ' + d.error);
+      else setMsg(`Listo: ${d.rellenados} de ${d.revisados} rellenados${d.sinResultado ? ` · ${d.sinResultado} sin coincidencia en go-upc` : ''}`);
+      contar();
+    } catch { setMsg('Error de conexión'); }
+    finally { setLoading(false); }
+  };
+
+  // Nada que rellenar y sin mensaje previo → no mostrar el botón
+  if (faltan === 0 && !msg && !loading) return null;
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {msg && <span className="text-[11px] font-label text-stone-500 max-w-[280px]">{msg}</span>}
+      <button onClick={rellenar} disabled={loading}
+        className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-primary/90 disabled:opacity-50 transition-all shrink-0">
+        <Icon name={loading ? 'autorenew' : 'auto_fix_high'} className={cn('text-base', loading && 'animate-spin')} />
+        {loading ? 'Buscando…' : `Rellenar nombres${faltan ? ` (${faltan})` : ''}`}
+      </button>
+    </div>
+  );
+}
+
 function GestionAreasView() {
   const [inner, setInner] = useState<'asignar' | 'config'>('asignar');
   return (
     <div>
-      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
-        {([
-          { id: 'asignar', label: 'Asignar Áreas',    icon: 'warehouse' },
-          { id: 'config',  label: 'Configurar Áreas', icon: 'tune'      },
-        ] as const).map(t => (
-          <button key={t.id} onClick={() => setInner(t.id)}
-            className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
-              inner === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600'
-            )}>
-            <Icon name={t.icon} className="text-base" />
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+        <div className="flex gap-1 bg-surface-container-low p-1 rounded-xl w-fit">
+          {([
+            { id: 'asignar', label: 'Asignar Áreas',    icon: 'warehouse' },
+            { id: 'config',  label: 'Configurar Áreas', icon: 'tune'      },
+          ] as const).map(t => (
+            <button key={t.id} onClick={() => setInner(t.id)}
+              className={cn(
+                'flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
+                inner === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600'
+              )}>
+              <Icon name={t.icon} className="text-base" />
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <RellenarNombresBtn />
       </div>
       {inner === 'asignar' && <AreasView />}
       {inner === 'config'  && <ConfiguracionAreasView />}

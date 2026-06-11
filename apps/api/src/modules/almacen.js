@@ -1346,4 +1346,95 @@ router.get('/tc52/ubicaciones', async (req, res) => {
   }
 });
 
+// ── Auto-rellenar nombres desde go-upc.com ───────────────────────────────────
+// Para productos que la zebra metió pero no existen en NovaCaja (sin nombre),
+// busca el nombre en go-upc.com por su código de barras y lo guarda en
+// inventario_bodega.nombre. Así dejan de salir en blanco.
+const GOUPC_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
+
+function _decodeEntities(s) {
+  return String(s || '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+    .trim();
+}
+
+async function buscarNombreGoUpc(codigo) {
+  try {
+    if (typeof fetch !== 'function') return null;
+    const r = await fetch(`https://go-upc.com/search?q=${encodeURIComponent(codigo)}`, {
+      headers: { 'User-Agent': GOUPC_UA },
+      redirect: 'follow',
+    });
+    if (!r.ok) return null;
+    const html = await r.text();
+    const m = html.match(/<h1 class="product-name">([^<]+)<\/h1>/i);
+    if (!m) return null;
+    const nombre = _decodeEntities(m[1]);
+    return nombre && nombre.length > 1 ? nombre.slice(0, 200) : null;
+  } catch {
+    return null;
+  }
+}
+
+const _sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// GET: cuántos productos sin nombre hay (para mostrar el botón con el número)
+router.get('/nombres-faltantes/contar', async (req, res) => {
+  try {
+    const r = await mssql.query(`
+      SELECT COUNT(DISTINCT ib.codigo_barras) AS total
+      FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ib.codigo_barras
+      WHERE (ib.nombre IS NULL OR LTRIM(RTRIM(ib.nombre)) = '')
+        AND (a.Art_Descripcion IS NULL OR LTRIM(RTRIM(a.Art_Descripcion)) = '')
+        AND ib.cantidad <> 0
+    `);
+    res.json({ total: r.recordset[0]?.total || 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST: busca en go-upc y rellena los nombres faltantes (lote, con pausa entre cada uno)
+let _rellenoEnCurso = false;
+router.post('/nombres-faltantes/rellenar', async (req, res) => {
+  if (_rellenoEnCurso) return res.status(409).json({ error: 'Ya hay un proceso de relleno en curso' });
+  _rellenoEnCurso = true;
+  try {
+    const max = Math.min(parseInt(req.body?.max || req.query?.max || 20) || 20, 60);
+    const r = await mssql.query(`
+      SELECT DISTINCT ib.codigo_barras AS codigo
+      FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ib.codigo_barras
+      WHERE (ib.nombre IS NULL OR LTRIM(RTRIM(ib.nombre)) = '')
+        AND (a.Art_Descripcion IS NULL OR LTRIM(RTRIM(a.Art_Descripcion)) = '')
+        AND ib.cantidad <> 0
+    `);
+    const codigos = (r.recordset || []).map(x => x.codigo).slice(0, max);
+    const results = [];
+    for (const codigo of codigos) {
+      const nombre = await buscarNombreGoUpc(codigo);
+      if (nombre) {
+        await mssql.query(`UPDATE [compucaja].[dbo].[inventario_bodega] SET nombre = '${esc(nombre)}' WHERE codigo_barras = '${esc(codigo)}'`);
+        results.push({ codigo, nombre, ok: true });
+      } else {
+        results.push({ codigo, nombre: null, ok: false });
+      }
+      await _sleep(900); // pausa para no saturar go-upc
+    }
+    res.json({
+      revisados: codigos.length,
+      rellenados: results.filter(x => x.ok).length,
+      sinResultado: results.filter(x => !x.ok).length,
+      results,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    _rellenoEnCurso = false;
+  }
+});
+
 module.exports = router;
