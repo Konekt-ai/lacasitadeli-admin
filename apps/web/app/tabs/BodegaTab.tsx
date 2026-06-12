@@ -2105,6 +2105,19 @@ function ZebraView() {
     return acc;
   }, [movimientos]);
 
+  // Opciones del filtro de Área: las configuradas + las que REALMENTE aparecen en
+  // los movimientos (p.ej. una mal escrita como "Bogeda"), para poder filtrarlas.
+  const areaOpciones = useMemo<[string, string][]>(() => {
+    const map = new Map<string, string>();
+    for (const a of areas) map.set(a, areaMap[a]?.label ?? a);
+    for (const m of movimientos) {
+      for (const k of [m.area_origen, m.area_destino]) {
+        if (k && !map.has(k)) map.set(k, k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, ' '));
+      }
+    }
+    return Array.from(map.entries());
+  }, [areas, areaMap, movimientos]);
+
   const PRESETS_FECHA = [
     { label: 'Hoy',    desde: today,        hasta: today },
     { label: 'Ayer',   desde: diasAtras(1), hasta: diasAtras(1) },
@@ -2165,7 +2178,7 @@ function ZebraView() {
           <select value={areaFiltro} onChange={e => setAreaFiltro(e.target.value)}
             className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors">
             <option value="todas">Todas las áreas</option>
-            {areas.map(a => <option key={a} value={a}>{areaMap[a].label}</option>)}
+            {areaOpciones.map(([clave, label]) => <option key={clave} value={clave}>{label}</option>)}
           </select>
         </div>
         <div className="flex items-center gap-2 ml-auto">
@@ -2224,8 +2237,9 @@ function ZebraView() {
               <tbody className="divide-y divide-surface-container">
                 {movimientos.map(m => {
                   const meta = TIPO_META[m.tipo] ?? { label: m.tipo || 'Movimiento', sign: '', badgeCls: 'bg-stone-100 text-stone-600', iconCls: 'text-stone-500' };
-                  const areaOrigen  = m.area_origen  ? areaMap[m.area_origen as Area]?.label  ?? m.area_origen  : null;
-                  const areaDestino = m.area_destino ? areaMap[m.area_destino as Area]?.label ?? m.area_destino : null;
+                  const pretty = (k: string) => areaMap[k as Area]?.label ?? (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, ' '));
+                  const areaOrigen  = m.area_origen  ? pretty(m.area_origen)  : null;
+                  const areaDestino = m.area_destino ? pretty(m.area_destino) : null;
                   return (
                     <tr key={m.uid} className="hover:bg-background transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap">

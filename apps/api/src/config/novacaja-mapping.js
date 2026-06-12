@@ -20,7 +20,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
   // Stock EFECTIVO (para mostrar) = lo que cuenta el TC52 en inventario_bodega; si
   // el producto no está ahí, cae al de NovaCaja. Es una SUBCONSULTA escalar: solo
   // se evalúa para los renglones de la página (rápido), sin unir todo el catálogo.
-  const stockExpr = `ISNULL((SELECT SUM(ibx.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ibx WITH (NOLOCK) WHERE ibx.codigo_barras = a.Art_Codigo), ISNULL(SUM(aa.AA_ExistenciaActualU), 0))`;
+  const stockExpr = `ISNULL((SELECT SUM(ibx.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ibx WITH (NOLOCK) WHERE ibx.codigo_barras IN (a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo)), ISNULL(SUM(aa.AA_ExistenciaActualU), 0))`;
   // El filtro de "stock bajo" usa el de NovaCaja (barato sobre todo el catálogo).
   const havingLowStock  = lowStockThreshold !== null
     ? `HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= ${parseInt(lowStockThreshold)}`
