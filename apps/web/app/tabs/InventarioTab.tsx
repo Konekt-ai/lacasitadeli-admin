@@ -30,6 +30,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   const [searchQuery,    setSearchQuery]    = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [areaFilter,     setAreaFilter]     = useState('');
+  const [sinPrecio,      setSinPrecio]      = useState(false);
   const [inventoryView,  setInventoryView]  = useState<'list' | 'grid'>('list');
 
   // ── Area assignments (from SQLite) ────────────────────────────────────────────
@@ -92,10 +93,12 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
 
   // ── Fetch products — debounced on search/category, immediate on page ──────────
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const searchRef   = useRef(searchQuery);
-  const categoryRef = useRef(categoryFilter);
-  searchRef.current   = searchQuery;
-  categoryRef.current = categoryFilter;
+  const searchRef    = useRef(searchQuery);
+  const categoryRef  = useRef(categoryFilter);
+  const sinPrecioRef = useRef(sinPrecio);
+  searchRef.current    = searchQuery;
+  categoryRef.current  = categoryFilter;
+  sinPrecioRef.current = sinPrecio;
 
   const fetchProducts = useCallback(async (pg: number) => {
     setLoading(true);
@@ -106,6 +109,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         page:     String(pg),
         pageSize: String(PAGE_SIZE),
       });
+      if (sinPrecioRef.current) params.set('sinPrecio', 'true');
       const res  = await fetch(`/api/products?${params}`);
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -130,7 +134,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       fetchProducts(1);
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [searchQuery, categoryFilter, fetchProducts]);
+  }, [searchQuery, categoryFilter, sinPrecio, fetchProducts]);
 
   // Page change → fetch immediately
   const prevPage = useRef(1);
@@ -335,7 +339,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                 onChange={e => setSearchQuery(e.target.value)}
               />
             </div>
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
               <select
                 value={categoryFilter}
                 onChange={e => setCategoryFilter(e.target.value)}
@@ -354,6 +358,16 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                   <option key={a.area} value={a.area}>{a.nombre}</option>
                 ))}
               </select>
+              <button
+                onClick={() => { setSinPrecio(v => !v); setPage(1); }}
+                title="Mostrar solo productos sin precio de venta registrado"
+                className={cn(
+                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                  sinPrecio ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary'
+                )}>
+                <Icon name="price_change" className="text-base" />
+                Sin precio
+              </button>
             </div>
           </div>
           <div className="flex bg-background p-1 rounded-lg border border-outline-variant/10 shrink-0">

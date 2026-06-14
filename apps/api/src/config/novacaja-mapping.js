@@ -5,7 +5,7 @@ const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 // servidor que también usa NovaCaja (POS). Va al final de cada SELECT.
 const MAXDOP1 = '\n    OPTION (MAXDOP 1)';
 
-function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null } = {}) {
+function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null, sinPrecio = false } = {}) {
   const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
@@ -17,6 +17,8 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       )`
     : '';
   const whereCategory   = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  // Productos SIN precio de venta registrado (para que el cliente los corrija fácil)
+  const wherePrecio     = sinPrecio ? `AND ISNULL(p.LPA_PrecioVentaImp, 0) = 0` : '';
   // Stock EFECTIVO (para mostrar) = lo que cuenta el TC52 en inventario_bodega; si
   // el producto no está ahí, cae al de NovaCaja. Es una SUBCONSULTA escalar: solo
   // se evalúa para los renglones de la página (rápido), sin unir todo el catálogo.
@@ -53,6 +55,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
       ${whereCategory}
+      ${wherePrecio}
     GROUP BY
       a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo,
       a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto, a.Art_CostoReposicion, cpf.precio_compra,
@@ -65,7 +68,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
   `;
 }
 
-function buildProductsCountQuery({ search = '', category = '' } = {}) {
+function buildProductsCountQuery({ search = '', category = '', sinPrecio = false } = {}) {
   const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
@@ -76,13 +79,17 @@ function buildProductsCountQuery({ search = '', category = '' } = {}) {
       )`
     : '';
   const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  const joinPrecio  = sinPrecio ? `LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] p WITH (NOLOCK) ON p.Art_Codigo = a.Art_Codigo AND p.LP_Codigo = 1` : '';
+  const wherePrecio = sinPrecio ? `AND ISNULL(p.LPA_PrecioVentaImp, 0) = 0` : '';
   return `
     SELECT COUNT(*) AS total
     FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+    ${joinPrecio}
     WHERE a.Art_Descripcion <> ''
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
       ${whereCategory}
+      ${wherePrecio}
   `;
 }
 

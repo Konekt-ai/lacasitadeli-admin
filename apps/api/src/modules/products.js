@@ -34,11 +34,12 @@ router.get('/categories', async (req, res) => {
 
 // ── GET /api/products — cached 2 min for full list, no cache for search ───────
 router.get('/', async (req, res) => {
-  const { q = '', category = '', page = 1, pageSize = 50, lowStock } = req.query;
+  const { q = '', category = '', page = 1, pageSize = 50, lowStock, sinPrecio } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(pageSize);
+  const soloSinPrecio = sinPrecio === 'true';
 
   // Cache only the fully unfiltered default page
-  const isDefaultPage = !q && !category && lowStock !== 'true' && parseInt(page) === 1 && parseInt(pageSize) <= 50;
+  const isDefaultPage = !q && !category && lowStock !== 'true' && !soloSinPrecio && parseInt(page) === 1 && parseInt(pageSize) <= 50;
   const cacheKey = isDefaultPage ? `products:default` : null;
   if (cacheKey) {
     const cached = _get(cacheKey);
@@ -82,8 +83,8 @@ router.get('/', async (req, res) => {
       total = rows.length;
     } else {
       const [dataRes, countRes] = await Promise.all([
-        mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
-        mssql.query(buildProductsCountQuery({ search: q, category })),
+        mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize), sinPrecio: soloSinPrecio })),
+        mssql.query(buildProductsCountQuery({ search: q, category, sinPrecio: soloSinPrecio })),
       ]);
       rows  = dataRes.recordset.map(toRow);
       total = countRes.recordset[0]?.total || 0;

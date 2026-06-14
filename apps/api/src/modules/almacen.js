@@ -1309,8 +1309,8 @@ router.get('/tc52/stock', async (req, res) => {
   try {
     const result = await mssql.query(`
       SELECT
-        i.codigo_barras                                      AS art_codigo,
-        ISNULL(v.Art_Descripcion, i.codigo_barras)           AS nombre,
+        i.codigo_barras                                                   AS art_codigo,
+        COALESCE(NULLIF(v.Art_Descripcion, ''), NULLIF(i.nombre, ''), i.codigo_barras) AS nombre,
         i.ubicacion,
         i.cantidad,
         CONVERT(VARCHAR(23), ISNULL(i.ultima_entrada, i.creado), 120) AS updated_at
@@ -1318,7 +1318,9 @@ router.get('/tc52/stock', async (req, res) => {
       OUTER APPLY (
         SELECT TOP 1 Art_Descripcion
         FROM [compucaja].[dbo].[VArticulosUnificados]
-        WHERE Art_GTIN = i.codigo_barras OR CodAlt_Codigo = i.codigo_barras
+        WHERE Art_Codigo = i.codigo_barras
+           OR Art_GTIN = i.codigo_barras
+           OR CodAlt_Codigo = i.codigo_barras
       ) v
       WHERE i.cantidad > 0
       ORDER BY nombre, i.ubicacion
