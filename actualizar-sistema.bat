@@ -122,6 +122,11 @@ taskkill /F /IM pythonw.exe >> "%LOG%" 2>&1
 timeout /t 2 /nobreak >nul
 wscript.exe "%~dp0iniciar-silencioso.vbs"
 
+:: Limpiar iconos "fantasma" de la bandeja (deja la bandeja limpia tras cada update)
+call :say "Limpiando iconos de la bandeja..."
+timeout /t 6 /nobreak >nul
+call "%~dp0limpiar-iconos.bat" >> "%LOG%" 2>&1
+
 :: ── RESUMEN ──────────────────────────────────────────────────────────────────
 echo.
 echo  ------------------------------------------------------------
