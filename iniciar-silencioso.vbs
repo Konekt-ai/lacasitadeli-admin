@@ -23,8 +23,10 @@ Const SQL_SVC = "MSSQLSERVER"
 oShell.Run "cmd /c if not exist """ & DIR_APP & "\logs"" mkdir """ & DIR_APP & "\logs""", 0, True
 
 ' ── 0. Cerrar procesos previos (evita conflictos de puertos) ──────────────────
+' Solo se reinicia node. El monitor de bandeja (pythonw) NO se mata: es de
+' instancia unica (mutex) y matarlo a la fuerza dejaba iconos "fantasma" en la
+' bandeja. Si ya esta corriendo, el nuevo intento se cierra solo.
 oShell.Run "cmd /c taskkill /F /IM node.exe >nul 2>&1", 0, True
-oShell.Run "cmd /c taskkill /F /IM pythonw.exe >nul 2>&1", 0, True
 WScript.Sleep 1500
 
 ' ── 1. SQL Server ─────────────────────────────────────────────────────────────
