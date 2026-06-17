@@ -33,7 +33,17 @@ echo.
 call :say "[ADMIN] Panel y API"
 git fetch origin main >> "%LOG%" 2>&1
 if errorlevel 1 (
-    call :say "  ERROR: No se pudo conectar a GitHub (admin)."
+    call :say "  Sin conexion, reintentando (2/3)..."
+    timeout /t 6 /nobreak >nul
+    git fetch origin main >> "%LOG%" 2>&1
+)
+if errorlevel 1 (
+    call :say "  Sin conexion, reintentando (3/3)..."
+    timeout /t 10 /nobreak >nul
+    git fetch origin main >> "%LOG%" 2>&1
+)
+if errorlevel 1 (
+    call :say "  ERROR: No se pudo conectar a GitHub (admin) tras 3 intentos."
     goto :Fin
 )
 for /f "tokens=*" %%i in ('git rev-parse HEAD') do set LOCAL_HASH=%%i
@@ -75,8 +85,10 @@ if not exist "%ALMACEN%\.git" goto :ClonAlmacen
 
 cd /d "%ALMACEN%"
 git fetch origin main >> "%LOG%" 2>&1
+if errorlevel 1 ( timeout /t 6 /nobreak >nul & git fetch origin main >> "%LOG%" 2>&1 )
+if errorlevel 1 ( timeout /t 10 /nobreak >nul & git fetch origin main >> "%LOG%" 2>&1 )
 if errorlevel 1 (
-    call :say "  AVISO: No se pudo conectar a GitHub (bodega)."
+    call :say "  AVISO: No se pudo conectar a GitHub (bodega) tras 3 intentos."
     cd /d "%~dp0"
     goto :FinBodega
 )
@@ -148,6 +160,7 @@ exit /b
 
 :Fin
 echo.
-echo  La actualizacion se detuvo. Revisa logs\actualizaciones.log
->>"%LOG%" echo [%date% %time%] Actualizacion abortada.
+echo  La actualizacion se detuvo. Reiniciando servicios para NO dejar el sistema caido...
+>>"%LOG%" echo [%date% %time%] Actualizacion abortada. Reiniciando servicios para recuperar.
+wscript.exe "%~dp0iniciar-silencioso.vbs"
 exit /b 1

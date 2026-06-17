@@ -1,5 +1,5 @@
 const express   = require('express');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const path = require('path');
 const fs   = require('fs');
 
@@ -77,8 +77,15 @@ router.post('/sistema/lanzar-actualizacion', (_req, res) => {
   const vbsPath = path.join(ROOT, 'actualizar-silencioso.vbs');
   if (!fs.existsSync(vbsPath))
     return res.status(404).json({ ok: false, error: 'No se encontró actualizar-silencioso.vbs' });
-  exec(`wscript.exe "${vbsPath}"`, { cwd: ROOT });
-  res.json({ ok: true, mensaje: 'Script lanzado en segundo plano.' });
+  // DESPRENDIDO del proceso de la API: el actualizador mata node (incluida esta
+  // API), así que debe correr independiente para que no se interrumpa a sí mismo.
+  try {
+    const child = spawn('wscript.exe', [vbsPath], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+  res.json({ ok: true, mensaje: 'Actualización lanzada en segundo plano. El sistema se reiniciará solo en ~1-2 min.' });
 });
 
 // ── POST /api/admin/sistema/reiniciar — responde rápido y se autokill ──────────
