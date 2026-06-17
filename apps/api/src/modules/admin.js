@@ -88,14 +88,11 @@ router.post('/sistema/lanzar-actualizacion', (_req, res) => {
   const vbsPath = path.join(ROOT, 'actualizar-silencioso.vbs');
   if (!fs.existsSync(vbsPath))
     return res.status(404).json({ ok: false, error: 'No se encontró actualizar-silencioso.vbs' });
-  // DESPRENDIDO del proceso de la API: el actualizador mata node (incluida esta
-  // API), así que debe correr independiente para que no se interrumpa a sí mismo.
-  try {
-    const child = spawn('wscript.exe', [vbsPath], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true });
-    child.unref();
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: e.message });
-  }
+  // wscript corre el .bat. Aunque el .bat mate node (esta API), el proceso
+  // wscript->cmd->bat sobrevive (no es node.exe) y completa la actualización +
+  // reinicio. Probado: este lanzamiento simple SÍ funciona (el "spawn detached"
+  // lo rompió, por eso se revierte).
+  exec(`wscript.exe "${vbsPath}"`, { cwd: ROOT });
   res.json({ ok: true, mensaje: 'Actualización lanzada en segundo plano. El sistema se reiniciará solo en ~1-2 min.' });
 });
 
