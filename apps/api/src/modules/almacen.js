@@ -1451,6 +1451,54 @@ router.get('/ventas-sync/tickets-info', async (req, res) => {
   res.json(out);
 });
 
+// ── GET /api/almacen/ventas-sync/estaciones-cajeros — SOLO LECTURA (enfocado) ──
+// Lista chica: qué cajas (estaciones) y cajeros están vendiendo, con sus nombres,
+// para mapear caja/cajero -> área de bodega. (El dump completo era demasiado.)
+router.get('/ventas-sync/estaciones-cajeros', async (req, res) => {
+  const out = { estaciones: [], cajeros: [], estacionCajero: [], errores: {} };
+
+  try {
+    const r = await mssql.query(`
+      SELECT t.FolEst_Codigo AS est, MAX(e.Est_Nombre) AS nombre, COUNT(*) AS tickets,
+             CONVERT(varchar(19), MAX(t.T_Fecha), 120) AS ultima
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[Estaciones] e WITH (NOLOCK) ON e.Est_Codigo = t.FolEst_Codigo
+      WHERE t.T_Fecha >= DATEADD(DAY, -7, GETDATE())
+      GROUP BY t.FolEst_Codigo
+      ORDER BY COUNT(*) DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.estaciones = r.recordset || [];
+  } catch (e) { out.errores.estaciones = e.message; }
+
+  try {
+    const r = await mssql.query(`
+      SELECT t.T_Cajero AS cajero, COUNT(*) AS tickets,
+             CONVERT(varchar(19), MAX(t.T_Fecha), 120) AS ultima
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+      WHERE t.T_Fecha >= DATEADD(DAY, -7, GETDATE())
+      GROUP BY t.T_Cajero
+      ORDER BY COUNT(*) DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.cajeros = r.recordset || [];
+  } catch (e) { out.errores.cajeros = e.message; }
+
+  try {
+    const r = await mssql.query(`
+      SELECT t.FolEst_Codigo AS est, t.T_Cajero AS cajero, COUNT(*) AS tickets
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+      WHERE t.T_Fecha >= DATEADD(DAY, -7, GETDATE())
+      GROUP BY t.FolEst_Codigo, t.T_Cajero
+      ORDER BY COUNT(*) DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.estacionCajero = r.recordset || [];
+  } catch (e) { out.errores.estacionCajero = e.message; }
+
+  res.json(out);
+});
+
 // ── Auto-rellenar nombres desde go-upc.com ───────────────────────────────────
 // Para productos que la zebra metió pero no existen en NovaCaja (sin nombre),
 // busca el nombre en go-upc.com por su código de barras y lo guarda en
