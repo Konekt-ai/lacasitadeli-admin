@@ -379,7 +379,11 @@ CREATE TABLE ventas_sync_config (
 );
 GO
 IF NOT EXISTS (SELECT 1 FROM ventas_sync_config WHERE id = 1)
-  INSERT INTO ventas_sync_config (id, activo, area, tda) VALUES (1, 0, 'Casita 1', '1');
+  INSERT INTO ventas_sync_config (id, activo, area, tda, fecha_inicio) VALUES (1, 1, 'Casita 1', '1', GETDATE());
+GO
+-- AUTOMATICO: dejar siempre activo y con fecha_inicio (sin re-procesar historico:
+-- ISNULL conserva la fecha si ya estaba puesta).
+UPDATE ventas_sync_config SET activo = 1, fecha_inicio = ISNULL(fecha_inicio, GETDATE()) WHERE id = 1;
 GO
 
 -- Tickets ya procesados (idempotencia: nunca descontar dos veces).

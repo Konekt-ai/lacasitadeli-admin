@@ -153,7 +153,12 @@ async function tick() {
     _running = false;
   }
 }
-function startScheduler() { setInterval(tick, 180_000); }
+function startScheduler() {
+  // Automatico: corre solo. Arranca 30s despues de prender y luego cada 90s,
+  // para que el descuento se refleje casi en tiempo real en el inventario.
+  setTimeout(tick, 30_000);
+  setInterval(tick, 90_000);
+}
 
 // ── Rutas ─────────────────────────────────────────────────────────────────────
 router.get('/config', async (req, res) => {

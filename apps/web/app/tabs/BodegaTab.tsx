@@ -13,13 +13,12 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'recepcion' | 'gestion-areas' | 'surtido' | 'merma' | 'discrepancias' | 'facturas' | 'zebra' | 'ventas';
+type SubView = 'recepcion' | 'gestion-areas' | 'surtido' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
   { id: 'surtido',        label: 'Surtido',            icon: 'swap_horiz'     },
   { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
-  { id: 'ventas',         label: 'Ventas → Stock',     icon: 'point_of_sale'  },
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
@@ -4773,7 +4772,6 @@ export default function BodegaTab() {
         {view === 'recepcion'      && <RecepcionYNuevosView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
         {view === 'merma'          && <MermaYCaducidadesView />}
-        {view === 'ventas'         && <VentasSyncView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
         {view === 'zebra'          && <ZebraView />}
