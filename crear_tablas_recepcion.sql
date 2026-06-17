@@ -395,6 +395,21 @@ CREATE TABLE ventas_procesadas (
 );
 GO
 
+-- Mapeo CAJA (estacion) -> AREA de bodega. La venta se descuenta del area de su
+-- caja. Caja 21 = entrada (Casita 1), Caja 7 = Casita 2. Las cajas no mapeadas se
+-- ignoran (no descuentan).
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='estacion_area_map' AND xtype='U')
+CREATE TABLE estacion_area_map (
+  est_codigo VARCHAR(20) NOT NULL PRIMARY KEY,
+  area       VARCHAR(50) NOT NULL
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM estacion_area_map WHERE est_codigo = '21')
+  INSERT INTO estacion_area_map (est_codigo, area) VALUES ('21', 'Casita 1');
+IF NOT EXISTS (SELECT 1 FROM estacion_area_map WHERE est_codigo = '7')
+  INSERT INTO estacion_area_map (est_codigo, area) VALUES ('7', 'Casita 2');
+GO
+
 -- ============================================================
 -- FIN. Ejemplo de uso del flujo completo:
 --

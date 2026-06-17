@@ -4234,30 +4234,33 @@ function FacturasView() {
 
 // ── Áreas combinado: Asignar + Configurar ─────────────────────────────────────
 // ── Ventas → Stock: liga las ventas de NovaCaja al inventario de bodega ────────
-interface VsConfig { activo: boolean; area: string; tda: string; fecha_inicio: string | null; ultima_fecha: string | null; ultimo_run: string | null; }
-interface VsRow { codigo: string; nombre: string | null; vendido: number; stockActual: number; stockNuevo: number; }
+interface VsConfig { activo: boolean; fecha_inicio: string | null; ultima_fecha: string | null; ultimo_run: string | null; }
+interface VsRow { codigo: string; nombre: string | null; area: string; vendido: number; stockActual: number; stockNuevo: number; }
+interface VsMapa { est_codigo: string; area: string; }
 
 function VentasSyncView() {
   const { areas, areaMap } = useAreasCtx();
   const [cfg,     setCfg]     = useState<VsConfig | null>(null);
+  const [mapa,    setMapa]    = useState<VsMapa[]>([]);
   const [prev,    setPrev]    = useState<VsRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [msg,     setMsg]     = useState<string | null>(null);
+  const [nCaja,   setNCaja]   = useState('');
+  const [nArea,   setNArea]   = useState('');
 
-  const loadCfg = useCallback(() => {
-    fetch('/api/ventas-sync/config').then(r => r.json()).then(c => { if (c && !c.error) setCfg(c); }).catch(() => {});
+  const load = useCallback(() => {
+    fetch('/api/ventas-sync/config').then(r => r.json()).then(d => {
+      if (d && !d.error) { if (d.config) setCfg(d.config); if (d.mapa) setMapa(d.mapa); }
+    }).catch(() => {});
   }, []);
-  useEffect(() => { loadCfg(); }, [loadCfg]);
-
-  const post = (body: Record<string, unknown>) =>
-    fetch('/api/ventas-sync/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+  useEffect(() => { load(); }, [load]);
 
   const verPreview = async () => {
     setLoading(true); setMsg(null);
     try {
       const p = await fetch('/api/ventas-sync/preview').then(r => r.json());
       if (p.error) setMsg('Error: ' + p.error);
-      else { setPrev(p.productos || []); if (p.config) setCfg(p.config); }
+      else { setPrev(p.productos || []); if (p.config) setCfg(p.config); if (p.mapa) setMapa(p.mapa); }
     } catch { setMsg('Error de conexión'); }
     finally { setLoading(false); }
   };
@@ -4265,13 +4268,13 @@ function VentasSyncView() {
   const toggleActivo = async () => {
     if (!cfg) return;
     const nuevo = !cfg.activo;
-    if (nuevo && !window.confirm(`Al activar, las ventas en caja empezarán a DESCONTAR del inventario de bodega (área "${cfg.area}"), de aquí en adelante. ¿Continuar?`)) return;
+    if (nuevo && !window.confirm('Al activar, las ventas en caja empezarán a DESCONTAR del inventario de bodega según la caja, de aquí en adelante. ¿Continuar?')) return;
     setLoading(true);
     try {
       const body: Record<string, unknown> = { activo: nuevo };
       if (nuevo && !cfg.fecha_inicio) body.fecha_inicio = 'ahora';
-      const c = await post(body);
-      if (!c.error) setCfg(c);
+      const d = await fetch('/api/ventas-sync/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+      if (d.config) setCfg(d.config);
     } finally { setLoading(false); }
   };
 
@@ -4279,15 +4282,24 @@ function VentasSyncView() {
     setLoading(true); setMsg('Procesando ventas...');
     try {
       const r = await fetch('/api/ventas-sync/run', { method: 'POST' }).then(r => r.json());
-      setMsg(r.error ? 'Error: ' + r.error : `Listo: ${r.tickets} ticket(s) · ${r.productosDescontados} producto(s) · ${r.unidadesDescontadas} uds descontadas de "${cfg?.area}"`);
-      setPrev(null); loadCfg();
+      setMsg(r.error ? 'Error: ' + r.error : `Listo: ${r.tickets} ticket(s) · ${r.productosDescontados} producto(s) · ${r.unidadesDescontadas} uds descontadas`);
+      setPrev(null); load();
     } catch { setMsg('Error de conexión'); }
     finally { setLoading(false); }
   };
 
-  const cambiarArea = async (area: string) => {
+  const addMapa = async () => {
+    if (!nCaja.trim() || !nArea) return;
     setLoading(true);
-    try { const c = await post({ area }); if (!c.error) setCfg(c); }
+    try {
+      const m = await fetch('/api/ventas-sync/mapa', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ est_codigo: nCaja.trim(), area: nArea }) }).then(r => r.json());
+      if (Array.isArray(m)) setMapa(m);
+      setNCaja(''); setNArea('');
+    } finally { setLoading(false); }
+  };
+  const delMapa = async (est: string) => {
+    setLoading(true);
+    try { const m = await fetch(`/api/ventas-sync/mapa/${encodeURIComponent(est)}`, { method: 'DELETE' }).then(r => r.json()); if (Array.isArray(m)) setMapa(m); }
     finally { setLoading(false); }
   };
 
@@ -4298,12 +4310,12 @@ function VentasSyncView() {
       <div className="mb-5">
         <h3 className="font-serif text-xl text-primary">Ventas → Stock</h3>
         <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
-          Descuenta del inventario de bodega lo que se vende en caja (NovaCaja)
+          Descuenta del inventario de bodega lo que se vende en caja, según la caja del ticket
         </p>
       </div>
 
-      {/* Estado / config */}
       <div className="grid sm:grid-cols-2 gap-4 mb-5">
+        {/* Estado */}
         <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-5">
           <div className="flex items-center justify-between mb-4">
             <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">Estado</span>
@@ -4317,18 +4329,39 @@ function VentasSyncView() {
               cfg?.activo ? 'bg-error-container text-on-error-container' : 'bg-primary text-on-primary')}>
             {cfg?.activo ? 'Desactivar' : 'Activar (descontar ventas)'}
           </button>
-        </div>
-        <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-5 space-y-3">
-          <div>
-            <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 block mb-1">Descontar del área</label>
-            <select value={cfg?.area || 'Casita 1'} onChange={e => cambiarArea(e.target.value)} disabled={loading}
-              className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary">
-              {areas.map(k => <option key={k} value={areaMap[k]?.label || k}>{areaMap[k]?.label || k}</option>)}
-            </select>
-          </div>
-          <div className="text-[11px] font-label text-stone-500 space-y-0.5">
+          <div className="text-[11px] font-label text-stone-500 space-y-0.5 mt-3">
             <p>Cuenta ventas desde: <span className="text-on-surface font-bold">{fmt(cfg?.fecha_inicio ?? null)}</span></p>
             <p>Último procesado: <span className="text-on-surface font-bold">{fmt(cfg?.ultimo_run ?? null)}</span></p>
+          </div>
+        </div>
+
+        {/* Mapeo caja -> área */}
+        <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-5">
+          <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">Caja → Área</span>
+          <div className="mt-3 space-y-1.5">
+            {mapa.length === 0 && <p className="text-[11px] font-label text-stone-400">Sin cajas mapeadas — agrega abajo.</p>}
+            {mapa.map(m => (
+              <div key={m.est_codigo} className="flex items-center gap-2 text-sm">
+                <span className="font-label text-stone-500">Caja {m.est_codigo}</span>
+                <Icon name="arrow_forward" className="text-xs text-stone-400" />
+                <span className="font-body text-on-surface font-bold">{m.area}</span>
+                <button onClick={() => delMapa(m.est_codigo)} disabled={loading}
+                  className="ml-auto p-1 text-stone-400 hover:text-error rounded"><Icon name="close" className="text-sm" /></button>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-outline-variant/10">
+            <input value={nCaja} onChange={e => setNCaja(e.target.value)} placeholder="Caja #"
+              className="w-20 px-2 py-1.5 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary" />
+            <select value={nArea} onChange={e => setNArea(e.target.value)}
+              className="flex-1 px-2 py-1.5 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary">
+              <option value="">Área…</option>
+              {areas.map(k => <option key={k} value={areaMap[k]?.label || k}>{areaMap[k]?.label || k}</option>)}
+            </select>
+            <button onClick={addMapa} disabled={loading || !nCaja.trim() || !nArea}
+              className="px-3 py-1.5 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest disabled:opacity-40">
+              +
+            </button>
           </div>
         </div>
       </div>
@@ -4349,9 +4382,9 @@ function VentasSyncView() {
       {/* Preview */}
       {prev && (
         <div className="rounded-xl border border-outline-variant/10 overflow-hidden">
-          <div className="px-4 py-2.5 bg-surface-container-low/60 flex items-center justify-between">
+          <div className="px-4 py-2.5 bg-surface-container-low/60">
             <span className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">
-              Preview · {prev.length} producto(s) que se descontarían de "{cfg?.area}"
+              Preview · {prev.length} producto(s) que se descontarían
             </span>
           </div>
           {prev.length === 0 ? (
@@ -4364,6 +4397,7 @@ function VentasSyncView() {
                 <thead className="bg-surface-container-low/40 text-stone-500 font-label uppercase tracking-widest text-[10px] sticky top-0">
                   <tr>
                     <th className="px-4 py-2">Producto</th>
+                    <th className="px-4 py-2">Área</th>
                     <th className="px-4 py-2 text-center">Vendido</th>
                     <th className="px-4 py-2 text-center">Stock actual</th>
                     <th className="px-4 py-2 text-center">Quedaría</th>
@@ -4371,11 +4405,12 @@ function VentasSyncView() {
                 </thead>
                 <tbody className="divide-y divide-surface-container">
                   {prev.map((r, i) => (
-                    <tr key={`${r.codigo}-${i}`} className="hover:bg-background">
+                    <tr key={`${r.codigo}-${r.area}-${i}`} className="hover:bg-background">
                       <td className="px-4 py-2">
                         <p className="font-body text-on-surface">{r.nombre || r.codigo}</p>
                         <p className="text-[9px] font-label text-stone-400">{r.codigo}</p>
                       </td>
+                      <td className="px-4 py-2 text-[11px] font-label text-stone-500">{r.area}</td>
                       <td className="px-4 py-2 text-center font-serif text-red-600">−{r.vendido}</td>
                       <td className="px-4 py-2 text-center font-serif text-stone-500">{r.stockActual}</td>
                       <td className="px-4 py-2 text-center font-serif font-bold text-on-surface">{r.stockNuevo}</td>
@@ -4389,8 +4424,8 @@ function VentasSyncView() {
       )}
 
       <p className="text-[10px] font-label text-stone-400 mt-4 leading-relaxed">
-        Solo procesa la tienda configurada (Tda {cfg?.tda || '1'}). Los productos que no estén
-        contados en el área "{cfg?.area}" se ignoran. Es idempotente: nunca descuenta un ticket dos veces.
+        Cada venta se descuenta del área de SU caja (caja 21 → Casita 1, caja 7 → Casita 2…). Las cajas
+        no mapeadas y los productos no contados en esa área se ignoran. Idempotente: nunca descuenta un ticket dos veces.
       </p>
     </div>
   );
