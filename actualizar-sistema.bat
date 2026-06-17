@@ -120,7 +120,7 @@ if not exist "%BODEGA%\package.json" goto :FinBodega
 for /f %%i in ('git -C "%ALMACEN%" rev-parse --short HEAD') do set BODEGA_VER=%%i
 call :say "  Reconstruyendo PWA del TC52..."
 cd /d "%BODEGA%"
-call npm install --omit=dev >> "%LOG%" 2>&1
+call npm install >> "%LOG%" 2>&1
 call npm run build >> "%LOG%" 2>&1
 cd /d "%~dp0"
 call :say "  PWA del TC52 reconstruida."
