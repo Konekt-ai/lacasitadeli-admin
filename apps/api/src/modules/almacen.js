@@ -1348,6 +1348,56 @@ router.get('/tc52/ubicaciones', async (req, res) => {
   }
 });
 
+// ── GET /api/almacen/ventas-sync/diagnostico — SOLO LECTURA ───────────────────
+// Muestra los datos de producción para ligar ventas (tickets NovaCaja) al
+// inventario de bodega: qué tiendas (Tda) venden y si los códigos vendidos casan
+// con inventario_bodega. NO escribe nada. Es el paso 1 antes del motor real.
+router.get('/ventas-sync/diagnostico', async (req, res) => {
+  const out = { tiendas: [], tiendasTabla: null, ventasMuestra: [], resumen: {}, errores: {} };
+
+  // 1) Tiendas que venden (últimos 7 días) — usa FolTda_Codigo de Tickets
+  try {
+    const r = await mssql.query(`
+      SELECT FolTda_Codigo AS tda, COUNT(*) AS tickets, CONVERT(varchar(19), MAX(T_Fecha), 120) AS ultima
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE T_Fecha >= DATEADD(DAY, -7, GETDATE())
+      GROUP BY FolTda_Codigo
+      ORDER BY COUNT(*) DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.tiendas = r.recordset || [];
+  } catch (e) { out.errores.tiendas = e.message; }
+
+  // 2) Tabla Tiendas (best-effort: para ver columnas y nombres reales)
+  try {
+    const r = await mssql.query(`SELECT TOP 50 * FROM [compucaja].[dbo].[Tiendas] WITH (NOLOCK)`);
+    out.tiendasTabla = r.recordset || [];
+  } catch (e) { out.errores.tiendasTabla = e.message; }
+
+  // 3) Muestra de productos vendidos (últimas líneas) cruzado con inventario_bodega
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 40
+        ps.FolTda_Codigo AS tda,
+        ps.Codigo        AS codigo,
+        ps.Concepto      AS concepto,
+        ps.Cantidad      AS cantidad,
+        CONVERT(varchar(19), ps.FechaHora, 120) AS fecha,
+        (SELECT TOP 1 ib.ubicacion FROM [compucaja].[dbo].[inventario_bodega] ib WHERE ib.codigo_barras = ps.Codigo) AS areaBodega,
+        (SELECT SUM(ib.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ib WHERE ib.codigo_barras = ps.Codigo) AS stockBodega
+      FROM [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+      WHERE ps.FechaHora >= DATEADD(DAY, -2, GETDATE())
+      ORDER BY ps.FechaHora DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.ventasMuestra = r.recordset || [];
+    const enBodega = out.ventasMuestra.filter(v => v.stockBodega != null).length;
+    out.resumen = { lineasMuestra: out.ventasMuestra.length, enBodega, sinBodega: out.ventasMuestra.length - enBodega };
+  } catch (e) { out.errores.ventasMuestra = e.message; }
+
+  res.json(out);
+});
+
 // ── Auto-rellenar nombres desde go-upc.com ───────────────────────────────────
 // Para productos que la zebra metió pero no existen en NovaCaja (sin nombre),
 // busca el nombre en go-upc.com por su código de barras y lo guarda en
