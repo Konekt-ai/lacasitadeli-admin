@@ -1398,6 +1398,59 @@ router.get('/ventas-sync/diagnostico', async (req, res) => {
   res.json(out);
 });
 
+// ── GET /api/almacen/ventas-sync/tickets-info — SOLO LECTURA (exploración) ─────
+// Muestra TODOS los campos de los tickets + descubre las tablas de estaciones/
+// cajeros, para ver si la ubicación de la venta se puede sacar de la caja/cajero.
+router.get('/ventas-sync/tickets-info', async (req, res) => {
+  const out = { tablasRelevantes: [], ticketEjemplo: [], ticketPSEjemplo: [], estaciones: null, estacionesEnTickets: [], errores: {} };
+
+  // 1) Descubrir tablas relacionadas (estacion / caja / cajero / empleado / usuario / terminal / vendedor)
+  try {
+    const r = await mssql.query(`
+      SELECT name FROM sys.tables
+      WHERE name LIKE '%stacion%' OR name LIKE '%aja%' OR name LIKE '%ajero%'
+         OR name LIKE '%mplead%'  OR name LIKE '%suario%' OR name LIKE '%erminal%'
+         OR name LIKE '%endedor%' OR name LIKE '%Pdv%' OR name LIKE '%POS%'
+      ORDER BY name
+    `);
+    out.tablasRelevantes = (r.recordset || []).map(x => x.name);
+  } catch (e) { out.errores.tablasRelevantes = e.message; }
+
+  // 2) Ticket completo (TODOS los campos) — para ver si hay caja/cajero/estacion
+  try {
+    const r = await mssql.query(`SELECT TOP 3 * FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK) ORDER BY T_Fecha DESC`);
+    out.ticketEjemplo = r.recordset || [];
+  } catch (e) { out.errores.ticketEjemplo = e.message; }
+
+  // 3) Linea de ticket completa (TicketsPS)
+  try {
+    const r = await mssql.query(`SELECT TOP 2 * FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK) ORDER BY FechaHora DESC`);
+    out.ticketPSEjemplo = r.recordset || [];
+  } catch (e) { out.errores.ticketPSEjemplo = e.message; }
+
+  // 4) Tabla Estaciones (best-effort)
+  try {
+    const r = await mssql.query(`SELECT TOP 50 * FROM [compucaja].[dbo].[Estaciones] WITH (NOLOCK)`);
+    out.estaciones = r.recordset || [];
+  } catch (e) { out.errores.estaciones = e.message; }
+
+  // 5) Estaciones que aparecen en tickets recientes (por tienda) + volumen
+  try {
+    const r = await mssql.query(`
+      SELECT FolTda_Codigo AS tda, FolEst_Codigo AS est, COUNT(*) AS tickets,
+             CONVERT(varchar(19), MAX(T_Fecha), 120) AS ultima
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE T_Fecha >= DATEADD(DAY, -7, GETDATE())
+      GROUP BY FolTda_Codigo, FolEst_Codigo
+      ORDER BY COUNT(*) DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.estacionesEnTickets = r.recordset || [];
+  } catch (e) { out.errores.estacionesEnTickets = e.message; }
+
+  res.json(out);
+});
+
 // ── Auto-rellenar nombres desde go-upc.com ───────────────────────────────────
 // Para productos que la zebra metió pero no existen en NovaCaja (sin nombre),
 // busca el nombre en go-upc.com por su código de barras y lo guarda en
