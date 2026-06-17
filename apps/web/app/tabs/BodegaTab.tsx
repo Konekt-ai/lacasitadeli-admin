@@ -13,12 +13,13 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'recepcion' | 'gestion-areas' | 'surtido' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'recepcion' | 'gestion-areas' | 'surtido' | 'merma' | 'discrepancias' | 'facturas' | 'zebra' | 'ventas';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
   { id: 'surtido',        label: 'Surtido',            icon: 'swap_horiz'     },
   { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
+  { id: 'ventas',         label: 'Ventas → Stock',     icon: 'point_of_sale'  },
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
@@ -4232,6 +4233,169 @@ function FacturasView() {
 }
 
 // ── Áreas combinado: Asignar + Configurar ─────────────────────────────────────
+// ── Ventas → Stock: liga las ventas de NovaCaja al inventario de bodega ────────
+interface VsConfig { activo: boolean; area: string; tda: string; fecha_inicio: string | null; ultima_fecha: string | null; ultimo_run: string | null; }
+interface VsRow { codigo: string; nombre: string | null; vendido: number; stockActual: number; stockNuevo: number; }
+
+function VentasSyncView() {
+  const { areas, areaMap } = useAreasCtx();
+  const [cfg,     setCfg]     = useState<VsConfig | null>(null);
+  const [prev,    setPrev]    = useState<VsRow[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [msg,     setMsg]     = useState<string | null>(null);
+
+  const loadCfg = useCallback(() => {
+    fetch('/api/ventas-sync/config').then(r => r.json()).then(c => { if (c && !c.error) setCfg(c); }).catch(() => {});
+  }, []);
+  useEffect(() => { loadCfg(); }, [loadCfg]);
+
+  const post = (body: Record<string, unknown>) =>
+    fetch('/api/ventas-sync/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+
+  const verPreview = async () => {
+    setLoading(true); setMsg(null);
+    try {
+      const p = await fetch('/api/ventas-sync/preview').then(r => r.json());
+      if (p.error) setMsg('Error: ' + p.error);
+      else { setPrev(p.productos || []); if (p.config) setCfg(p.config); }
+    } catch { setMsg('Error de conexión'); }
+    finally { setLoading(false); }
+  };
+
+  const toggleActivo = async () => {
+    if (!cfg) return;
+    const nuevo = !cfg.activo;
+    if (nuevo && !window.confirm(`Al activar, las ventas en caja empezarán a DESCONTAR del inventario de bodega (área "${cfg.area}"), de aquí en adelante. ¿Continuar?`)) return;
+    setLoading(true);
+    try {
+      const body: Record<string, unknown> = { activo: nuevo };
+      if (nuevo && !cfg.fecha_inicio) body.fecha_inicio = 'ahora';
+      const c = await post(body);
+      if (!c.error) setCfg(c);
+    } finally { setLoading(false); }
+  };
+
+  const procesar = async () => {
+    setLoading(true); setMsg('Procesando ventas...');
+    try {
+      const r = await fetch('/api/ventas-sync/run', { method: 'POST' }).then(r => r.json());
+      setMsg(r.error ? 'Error: ' + r.error : `Listo: ${r.tickets} ticket(s) · ${r.productosDescontados} producto(s) · ${r.unidadesDescontadas} uds descontadas de "${cfg?.area}"`);
+      setPrev(null); loadCfg();
+    } catch { setMsg('Error de conexión'); }
+    finally { setLoading(false); }
+  };
+
+  const cambiarArea = async (area: string) => {
+    setLoading(true);
+    try { const c = await post({ area }); if (!c.error) setCfg(c); }
+    finally { setLoading(false); }
+  };
+
+  const fmt = (d: string | null) => d ? new Date(d).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+
+  return (
+    <div>
+      <div className="mb-5">
+        <h3 className="font-serif text-xl text-primary">Ventas → Stock</h3>
+        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
+          Descuenta del inventario de bodega lo que se vende en caja (NovaCaja)
+        </p>
+      </div>
+
+      {/* Estado / config */}
+      <div className="grid sm:grid-cols-2 gap-4 mb-5">
+        <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-5">
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">Estado</span>
+            <span className={cn('px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest',
+              cfg?.activo ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-500')}>
+              {cfg?.activo ? '● Activo' : '○ Apagado'}
+            </span>
+          </div>
+          <button onClick={toggleActivo} disabled={loading || !cfg}
+            className={cn('w-full py-3 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
+              cfg?.activo ? 'bg-error-container text-on-error-container' : 'bg-primary text-on-primary')}>
+            {cfg?.activo ? 'Desactivar' : 'Activar (descontar ventas)'}
+          </button>
+        </div>
+        <div className="rounded-xl border border-outline-variant/15 bg-surface-container-low p-5 space-y-3">
+          <div>
+            <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 block mb-1">Descontar del área</label>
+            <select value={cfg?.area || 'Casita 1'} onChange={e => cambiarArea(e.target.value)} disabled={loading}
+              className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary">
+              {areas.map(k => <option key={k} value={areaMap[k]?.label || k}>{areaMap[k]?.label || k}</option>)}
+            </select>
+          </div>
+          <div className="text-[11px] font-label text-stone-500 space-y-0.5">
+            <p>Cuenta ventas desde: <span className="text-on-surface font-bold">{fmt(cfg?.fecha_inicio ?? null)}</span></p>
+            <p>Último procesado: <span className="text-on-surface font-bold">{fmt(cfg?.ultimo_run ?? null)}</span></p>
+          </div>
+        </div>
+      </div>
+
+      {/* Acciones */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <button onClick={verPreview} disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 bg-surface-container text-on-surface rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-surface-container-high disabled:opacity-50">
+          <Icon name="visibility" className="text-base" /> Ver qué descontaría (preview)
+        </button>
+        <button onClick={procesar} disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-primary/90 disabled:opacity-50">
+          <Icon name="play_arrow" className="text-base" /> Procesar ahora
+        </button>
+        {msg && <span className="text-[11px] font-label text-stone-600">{msg}</span>}
+      </div>
+
+      {/* Preview */}
+      {prev && (
+        <div className="rounded-xl border border-outline-variant/10 overflow-hidden">
+          <div className="px-4 py-2.5 bg-surface-container-low/60 flex items-center justify-between">
+            <span className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">
+              Preview · {prev.length} producto(s) que se descontarían de "{cfg?.area}"
+            </span>
+          </div>
+          {prev.length === 0 ? (
+            <p className="py-10 text-center text-sm font-label uppercase tracking-widest text-stone-300">
+              Nada que descontar por ahora
+            </p>
+          ) : (
+            <div className="overflow-x-auto max-h-[460px]">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-surface-container-low/40 text-stone-500 font-label uppercase tracking-widest text-[10px] sticky top-0">
+                  <tr>
+                    <th className="px-4 py-2">Producto</th>
+                    <th className="px-4 py-2 text-center">Vendido</th>
+                    <th className="px-4 py-2 text-center">Stock actual</th>
+                    <th className="px-4 py-2 text-center">Quedaría</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-container">
+                  {prev.map((r, i) => (
+                    <tr key={`${r.codigo}-${i}`} className="hover:bg-background">
+                      <td className="px-4 py-2">
+                        <p className="font-body text-on-surface">{r.nombre || r.codigo}</p>
+                        <p className="text-[9px] font-label text-stone-400">{r.codigo}</p>
+                      </td>
+                      <td className="px-4 py-2 text-center font-serif text-red-600">−{r.vendido}</td>
+                      <td className="px-4 py-2 text-center font-serif text-stone-500">{r.stockActual}</td>
+                      <td className="px-4 py-2 text-center font-serif font-bold text-on-surface">{r.stockNuevo}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="text-[10px] font-label text-stone-400 mt-4 leading-relaxed">
+        Solo procesa la tienda configurada (Tda {cfg?.tda || '1'}). Los productos que no estén
+        contados en el área "{cfg?.area}" se ignoran. Es idempotente: nunca descuenta un ticket dos veces.
+      </p>
+    </div>
+  );
+}
+
 // Busca en go-upc.com el nombre de los productos que la zebra metió pero no
 // existen en NovaCaja (salen en blanco) y los rellena.
 function RellenarNombresBtn() {
@@ -4574,6 +4738,7 @@ export default function BodegaTab() {
         {view === 'recepcion'      && <RecepcionYNuevosView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
         {view === 'merma'          && <MermaYCaducidadesView />}
+        {view === 'ventas'         && <VentasSyncView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
         {view === 'zebra'          && <ZebraView />}

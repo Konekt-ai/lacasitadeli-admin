@@ -359,6 +359,42 @@ GO
 DELETE FROM costos_producto WHERE fuente = 'estimado';
 GO
 
+-- =====================================================================
+-- 9. SINCRONIZACION DE VENTAS (tickets NovaCaja -> inventario_bodega)
+--    Al vender un producto en caja (Tda configurada), se descuenta del area
+--    configurada en inventario_bodega. Tablas NUEVAS, no se toca nada de NovaCaja.
+-- =====================================================================
+
+-- Config (una sola fila). Apagado por defecto: NO descuenta nada hasta activarlo.
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='ventas_sync_config' AND xtype='U')
+CREATE TABLE ventas_sync_config (
+  id            INT          NOT NULL PRIMARY KEY,
+  activo        BIT          NOT NULL DEFAULT 0,
+  area          VARCHAR(50)  NOT NULL DEFAULT 'Casita 1',  -- de donde se descuenta
+  tda           VARCHAR(20)  NOT NULL DEFAULT '1',          -- tienda del ticket a procesar
+  fecha_inicio  DATETIME     NULL,                          -- desde cuando contar ventas
+  ultima_fecha  DATETIME     NULL,                          -- marca de avance
+  ultimo_run    DATETIME     NULL,
+  CONSTRAINT CK_vsc_id CHECK (id = 1)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM ventas_sync_config WHERE id = 1)
+  INSERT INTO ventas_sync_config (id, activo, area, tda) VALUES (1, 0, 'Casita 1', '1');
+GO
+
+-- Tickets ya procesados (idempotencia: nunca descontar dos veces).
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='ventas_procesadas' AND xtype='U')
+CREATE TABLE ventas_procesadas (
+  FolTda_Codigo   VARCHAR(20) NOT NULL,
+  FolEst_Codigo   VARCHAR(20) NOT NULL,
+  FolDoc_Codigo   VARCHAR(20) NOT NULL,
+  FolConsecutivo  VARCHAR(20) NOT NULL,
+  fecha           DATETIME    NULL,
+  procesado_at    DATETIME    NOT NULL DEFAULT GETDATE(),
+  CONSTRAINT PK_ventas_procesadas PRIMARY KEY (FolTda_Codigo, FolEst_Codigo, FolDoc_Codigo, FolConsecutivo)
+);
+GO
+
 -- ============================================================
 -- FIN. Ejemplo de uso del flujo completo:
 --

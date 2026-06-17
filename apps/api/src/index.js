@@ -21,6 +21,8 @@ app.use('/api/bodega',   require('./modules/bodega'));
 app.use('/api/almacen',  require('./modules/almacen'));
 app.use('/api/facturas', require('./modules/facturas'));
 app.use('/api/admin',   require('./modules/admin'));
+const ventasSync = require('./modules/ventas-sync');
+app.use('/api/ventas-sync', ventasSync.router);
 setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
@@ -49,6 +51,10 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('[unhandledRejection]', reason instanceof Error ? reason.message : reason);
 });
+
+// Sincronización de ventas (tickets -> inventario_bodega). Solo actúa si está
+// activada en ventas_sync_config (apagada por defecto).
+ventasSync.startScheduler();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);
