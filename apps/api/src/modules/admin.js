@@ -72,6 +72,17 @@ router.post('/sistema/actualizar', (req, res) => {
   });
 });
 
+// ── GET /api/admin/sistema/log-actualizacion — ver el log de la última corrida ─
+router.get('/sistema/log-actualizacion', (_req, res) => {
+  try {
+    const logPath = path.join(ROOT, 'logs', 'actualizaciones.log');
+    const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8').slice(-8000) : '(sin log todavía)';
+    res.type('text/plain').send(log);
+  } catch (e) {
+    res.status(500).type('text/plain').send('Error leyendo log: ' + e.message);
+  }
+});
+
 // ── POST /api/admin/sistema/lanzar-actualizacion — lanza el VBS silencioso ─────
 router.post('/sistema/lanzar-actualizacion', (_req, res) => {
   const vbsPath = path.join(ROOT, 'actualizar-silencioso.vbs');
