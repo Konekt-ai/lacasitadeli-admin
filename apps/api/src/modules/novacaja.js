@@ -604,6 +604,44 @@ router.get('/poliza-ventas', async (req, res) => {
   }
 });
 
+// ── GET /api/novacaja/poliza-diag — SOLO LECTURA: por qué difiere el costo ─────
+// Compara Costo vs CostoImp (las 2 columnas de costo de la póliza) en tickets CON
+// factura vs SIN factura, para ver por qué el desglose de los de factura sale mal.
+router.get('/poliza-diag', async (req, res) => {
+  const out = { resumen: [], muestraFactura: [], errores: {} };
+  try {
+    const r = await mssql.query(`
+      SELECT
+        CASE WHEN factura IS NOT NULL AND LTRIM(RTRIM(CONVERT(varchar(50),factura))) <> '' THEN 'CON_FACTURA' ELSE 'SIN_FACTURA' END AS tipo,
+        COUNT(DISTINCT ticket)  AS tickets,
+        COUNT(*)                AS renglones,
+        SUM(importe)            AS importe,
+        SUM(Costo)              AS costo,
+        SUM(CostoImp)           AS costoImp
+      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
+      WHERE Fecha >= DATEADD(DAY, -3, GETDATE())
+      GROUP BY CASE WHEN factura IS NOT NULL AND LTRIM(RTRIM(CONVERT(varchar(50),factura))) <> '' THEN 'CON_FACTURA' ELSE 'SIN_FACTURA' END
+      OPTION (MAXDOP 1)
+    `);
+    out.resumen = r.recordset || [];
+  } catch (e) { out.errores.resumen = e.message; }
+
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 25 ticket, CONVERT(varchar(50),factura) AS factura, producto, importe, Costo, CostoImp,
+             CONVERT(varchar(19), Fecha, 120) AS fecha
+      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
+      WHERE factura IS NOT NULL AND LTRIM(RTRIM(CONVERT(varchar(50),factura))) <> ''
+        AND Fecha >= DATEADD(DAY, -4, GETDATE())
+      ORDER BY Fecha DESC
+      OPTION (MAXDOP 1)
+    `);
+    out.muestraFactura = r.recordset || [];
+  } catch (e) { out.errores.muestraFactura = e.message; }
+
+  res.json(out);
+});
+
 // ── GET /api/novacaja/poliza-ventas/export ────────────────────────────────────
 router.get('/poliza-ventas/export', async (req, res) => {
   const { period = 'day', startDate, endDate } = req.query;
