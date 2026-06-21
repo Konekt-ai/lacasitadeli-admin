@@ -571,42 +571,104 @@ router.get('/merma', (req, res) => {
   }
 });
 
+// Lee mermas UNIFICADAS de las DOS fuentes y las normaliza:
+//  · TC52 → MSSQL movimientos_bodega (tipo='merma') — donde la PWA registra de verdad.
+//  · Panel admin → SQLite merma_registros (POST /merma).
+// Antes /merma/stats e /historial SOLO leían SQLite (vacío), por eso "no salía nada"
+// aunque en Movimientos TC52 sí aparecían. Fechas en formato YYYY-MM-DD.
+async function fetchMermaRows({ desde, hasta, motivo = null, area = null } = {}) {
+  const out = [];
+
+  // TC52 (MSSQL movimientos_bodega)
+  try {
+    const r = await mssql.query(`
+      SELECT
+        m.id, m.codigo_barras AS codigo,
+        ISNULL(NULLIF(a.Art_Descripcion, ''), m.codigo_barras) AS nombre,
+        LOWER(LTRIM(RTRIM(ISNULL(m.motivo, 'otro')))) AS motivo,
+        m.ubicacion, m.cantidad, m.stock_antes, m.stock_despues, m.notas,
+        CONVERT(varchar(19), m.fecha, 120) AS fecha
+      FROM [compucaja].[dbo].[movimientos_bodega] m WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = m.codigo_barras
+      WHERE LOWER(LTRIM(RTRIM(m.tipo))) = 'merma'
+        AND CAST(m.fecha AS DATE) BETWEEN '${esc(desde)}' AND '${esc(hasta)}'
+      OPTION (MAXDOP 1)
+    `);
+    for (const m of (r.recordset || [])) {
+      out.push({
+        id:           `tc52-${m.id}`,
+        codigo:       m.codigo,
+        nombre:       m.nombre || null,
+        motivo:       m.motivo,
+        area:         String(m.ubicacion || 'bodega').toLowerCase().replace(/\s+/g, '_'),
+        cantidad:     Math.abs(Number(m.cantidad) || 0),
+        stock_antes:  m.stock_antes,
+        stock_despues: m.stock_despues,
+        notas:        m.notas || null,
+        usuario:      'TC52',
+        fecha:        m.fecha,
+      });
+    }
+  } catch (e) { console.error('merma MSSQL:', e.message); }
+
+  // Panel admin (SQLite merma_registros)
+  try {
+    const rows = getDb().prepare(`
+      SELECT id, art_codigo AS codigo, nombre, motivo, area, cantidad,
+             stock_antes, stock_despues, notas, usuario, created_at AS fecha
+      FROM merma_registros
+      WHERE DATE(created_at) BETWEEN ? AND ?
+    `).all(desde, hasta);
+    for (const m of rows) {
+      out.push({ ...m, id: `adm-${m.id}`, cantidad: Math.abs(Number(m.cantidad) || 0) });
+    }
+  } catch (e) { console.error('merma SQLite:', e.message); }
+
+  let res = out;
+  if (motivo && MOTIVOS_VALIDOS.includes(motivo)) res = res.filter(r => r.motivo === motivo);
+  if (area) res = res.filter(r => r.area === area);
+  res.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
+  return res;
+}
+
+// Agrupa filas de merma por una clave y suma registros/unidades.
+function _agruparMerma(rows, keyFn, extraFn) {
+  const map = new Map();
+  for (const r of rows) {
+    const k = keyFn(r);
+    if (!map.has(k)) map.set(k, { num_registros: 0, total_unidades: 0, ...(extraFn ? extraFn(r) : {}) });
+    const g = map.get(k);
+    g.num_registros  += 1;
+    g.total_unidades += Number(r.cantidad) || 0;
+  }
+  return [...map.values()].sort((a, b) => b.total_unidades - a.total_unidades);
+}
+
 // ── GET /api/almacen/merma/stats — estadísticas por período ──────────────────
-router.get('/merma/stats', (req, res) => {
+router.get('/merma/stats', async (req, res) => {
   const periodo = (req.query.mes || new Date().toISOString().slice(0, 7));
   try {
-    const db = getDb();
+    const [y, mo] = periodo.split('-').map(Number);
+    if (!y || !mo) return res.status(400).json({ error: 'mes inválido (YYYY-MM)' });
+    const lastDay = new Date(y, mo, 0).getDate();                 // último día del mes
+    const desde   = `${periodo}-01`;
+    const hasta   = `${periodo}-${String(lastDay).padStart(2, '0')}`;
+    // Rango ampliado (5 meses incl. el actual) para la tendencia
+    const d5     = new Date(y, mo - 1 - 4, 1);
+    const desde5 = `${d5.getFullYear()}-${String(d5.getMonth() + 1).padStart(2, '0')}-01`;
 
-    const totales = db.prepare(`
-      SELECT COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
-      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
-    `).get(periodo);
+    const todas   = await fetchMermaRows({ desde: desde5, hasta });
+    const mesRows = todas.filter(r => String(r.fecha).slice(0, 7) === periodo);
 
-    const porMotivo = db.prepare(`
-      SELECT motivo, COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
-      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
-      GROUP BY motivo ORDER BY total_unidades DESC
-    `).all(periodo);
-
-    const topProductos = db.prepare(`
-      SELECT art_codigo AS codigo, COALESCE(nombre, art_codigo) AS nombre,
-             COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
-      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
-      GROUP BY art_codigo ORDER BY total_unidades DESC LIMIT 10
-    `).all(periodo);
-
-    const porArea = db.prepare(`
-      SELECT area, COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
-      FROM merma_registros WHERE strftime('%Y-%m', created_at) = ?
-      GROUP BY area ORDER BY total_unidades DESC
-    `).all(periodo);
-
-    const tendencia = db.prepare(`
-      SELECT strftime('%Y-%m', created_at) AS mes,
-             COUNT(*) AS num_registros, COALESCE(SUM(cantidad),0) AS total_unidades
-      FROM merma_registros WHERE created_at >= date('now','-5 months','start of month')
-      GROUP BY strftime('%Y-%m', created_at) ORDER BY mes ASC
-    `).all();
+    const totales = {
+      num_registros:  mesRows.length,
+      total_unidades: mesRows.reduce((s, r) => s + (Number(r.cantidad) || 0), 0),
+    };
+    const porMotivo    = _agruparMerma(mesRows, r => r.motivo, r => ({ motivo: r.motivo }));
+    const porArea      = _agruparMerma(mesRows, r => r.area,   r => ({ area: r.area }));
+    const topProductos = _agruparMerma(mesRows, r => r.codigo, r => ({ codigo: r.codigo, nombre: r.nombre || r.codigo })).slice(0, 10);
+    const tendencia    = _agruparMerma(todas, r => String(r.fecha).slice(0, 7), r => ({ mes: String(r.fecha).slice(0, 7) }))
+      .sort((a, b) => a.mes.localeCompare(b.mes));
 
     res.json({ periodo, totales, porMotivo, topProductos, porArea, tendencia });
   } catch (err) {
@@ -614,28 +676,13 @@ router.get('/merma/stats', (req, res) => {
   }
 });
 
-router.get('/merma/historial', (req, res) => {
+router.get('/merma/historial', async (req, res) => {
   const { fecha, motivo, area, limit = 300 } = req.query;
   try {
-    const conditions = [];
-    const params     = [];
-
-    if (fecha)  { conditions.push('DATE(created_at) = ?'); params.push(fecha); }
-    if (motivo && MOTIVOS_VALIDOS.includes(motivo)) { conditions.push('motivo = ?'); params.push(motivo); }
-    if (area)   { conditions.push('area = ?'); params.push(area); }
-
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const cap   = Math.min(parseInt(limit) || 300, 500);
-
-    const rows = getDb().prepare(`
-      SELECT id, art_codigo AS codigo, nombre, motivo, area, cantidad,
-             stock_antes, stock_despues, notas, usuario, created_at AS fecha
-      FROM merma_registros
-      ${where}
-      ORDER BY created_at DESC
-      LIMIT ${cap}
-    `).all(...params);
-    res.json(rows);
+    const dia = fecha || new Date().toISOString().slice(0, 10);
+    const cap = Math.min(parseInt(limit) || 300, 500);
+    const rows = await fetchMermaRows({ desde: dia, hasta: dia, motivo, area });
+    res.json(rows.slice(0, cap));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
