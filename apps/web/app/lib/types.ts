@@ -24,6 +24,7 @@ export interface TopProduct {
 
 export interface PolizaTicket {
   ticket: string; fecha: string; factura: string;
+  folTda?: number | string; folEst?: number | string; folDoc?: number | string; folConsecutivo?: number | string;
   totalImporte: number; totalCosto: number; ganancia: number; numProductos: number;
 }
 

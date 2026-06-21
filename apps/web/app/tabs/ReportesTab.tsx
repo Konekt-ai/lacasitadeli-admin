@@ -300,6 +300,11 @@ function ConteoView() {
 }
 
 // ── Modal de detalle de ticket ────────────────────────────────────────────────
+// Llave completa de un ticket físico. FolConsecutivo se recicla entre cajas/días,
+// por eso el modal necesita los 4 campos para abrir el ticket EXACTO (no otro con
+// el mismo número). tda/est/doc opcionales = modo legacy (el más reciente).
+type TicketKey = { folio: number; tda?: number; est?: number; doc?: number };
+
 interface DetalleLinea {
   codigo:       string;
   concepto:     string;
@@ -311,14 +316,18 @@ interface DetalleLinea {
   montoIva:     number;
 }
 
-function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => void }) {
+function TicketDetalleModal({ tk, onClose }: { tk: TicketKey; onClose: () => void }) {
+  const folio = tk.folio;
   const [lineas,       setLineas]       = useState<DetalleLinea[]>([]);
   const [importeTotal, setImporteTotal] = useState<number | null>(null);
   const [sumaPoliza,   setSumaPoliza]   = useState<number | null>(null);
   const [loading,      setLoading]      = useState(true);
 
   useEffect(() => {
-    fetch(`/api/novacaja/tickets/${folio}/detalle`)
+    // Llave completa cuando viene del desglose/feed → abre ESE ticket físico exacto.
+    const qs = (tk.tda != null && tk.est != null && tk.doc != null)
+      ? `?tda=${tk.tda}&est=${tk.est}&doc=${tk.doc}` : '';
+    fetch(`/api/novacaja/tickets/${folio}/detalle${qs}`)
       .then(r => r.ok ? r.json() : {})
       .then((data: any) => {
         if (Array.isArray(data)) {
@@ -331,7 +340,7 @@ function TicketDetalleModal({ folio, onClose }: { folio: number; onClose: () => 
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [folio]);
+  }, [folio, tk.tda, tk.est, tk.doc]);
 
   const sumaLineas    = lineas.reduce((s, l) => s + Number(l.importe), 0);
   const totalMostrado = sumaLineas;
@@ -704,6 +713,9 @@ function SalidaView() {
 
 interface LiveTicket {
   folio:        number;
+  folTda?:      number | string;
+  folEst?:      number | string;
+  folDoc?:      number | string;
   fecha:        string;
   cajero:       string | null;
   vendedor:     string | null;
@@ -724,7 +736,7 @@ interface Props {
 
 export default function ReportesTab({ timeFilter }: Props) {
   const [reportView, setReportView] = useState<'polizas' | 'conteo' | 'salida'>('polizas');
-  const [ticketModal, setTicketModal] = useState<number | null>(null);
+  const [ticketModal, setTicketModal] = useState<TicketKey | null>(null);
   const [tickets,          setTickets]          = useState<PolizaTicket[]>([]);
   const [summary,          setSummary]          = useState<PolizaSummary | null>(null);
   const [totalTickets,     setTotalTickets]      = useState(0);
@@ -806,7 +818,7 @@ export default function ReportesTab({ timeFilter }: Props) {
   return (
     <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
       {showExport && <ExportModal onClose={() => setShowExport(false)} />}
-      {ticketModal !== null && <TicketDetalleModal folio={ticketModal} onClose={() => setTicketModal(null)} />}
+      {ticketModal !== null && <TicketDetalleModal tk={ticketModal} onClose={() => setTicketModal(null)} />}
 
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4 mb-6 lg:mb-8">
@@ -949,7 +961,10 @@ export default function ReportesTab({ timeFilter }: Props) {
                   </tr>
                 ) : liveTickets.map((t, i) => (
                   <tr key={t.folio}
-                    onClick={() => setTicketModal(t.folio)}
+                    onClick={() => setTicketModal({
+                      folio: Number(t.folio),
+                      tda: Number(t.folTda), est: Number(t.folEst), doc: Number(t.folDoc),
+                    })}
                     className={cn('hover:bg-background transition-colors cursor-pointer', i === 0 && 'bg-emerald-50/30')}>
                     <td className="px-4 py-2.5">
                       <span className="font-label font-bold text-[10px] text-primary bg-primary-fixed/30 px-2 py-0.5 rounded">#{t.folio}</span>
@@ -1014,7 +1029,10 @@ export default function ReportesTab({ timeFilter }: Props) {
                       const margen = t.totalImporte > 0 ? (t.ganancia / t.totalImporte) * 100 : 0;
                       return (
                         <tr key={i}
-                          onClick={() => setTicketModal(Number(t.ticket))}
+                          onClick={() => setTicketModal({
+                            folio: Number(t.folConsecutivo ?? t.ticket),
+                            tda: Number(t.folTda), est: Number(t.folEst), doc: Number(t.folDoc),
+                          })}
                           className="hover:bg-background transition-colors cursor-pointer">
                           <td className="px-5 py-3">
                             <span className="font-label font-bold text-primary text-[10px] tracking-widest bg-primary-fixed/30 px-2 py-1 rounded">

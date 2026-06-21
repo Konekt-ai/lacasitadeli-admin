@@ -264,6 +264,79 @@ function buildDashboardCostQuery({ period = 'day' } = {}) {
   `;
 }
 
+// ── DESGLOSE DE COSTOS POR TICKET (lista de Reportes) ────────────────────────
+// Se construye desde los TICKETS REALES (Tickets + TicketsPS), NO desde
+// VBasePolizaVentas. Esa vista: (1) DUPLICA renglones, (2) usa códigos genéricos
+// en facturas (el costo no casa), y (3) su columna `ticket` (=FolConsecutivo) se
+// RECICLA y colisiona entre cajas/días -> mostraba importes/identidad de otro
+// ticket físico. Aquí cada fila es UN ticket físico por su llave COMPLETA de 4
+// campos, así la fila coincide EXACTO con el modal de detalle (mismo importe,
+// items e identidad) y el costo sale igual que el Dashboard (costo real/pieza).
+function _desgloseWhere({ period = 'day', date = null, startDate = null, endDate = null } = {}) {
+  if (startDate && endDate) return `CAST(t.T_Fecha AS DATE) BETWEEN '${startDate}' AND '${endDate}'`;
+  if (startDate)            return `CAST(t.T_Fecha AS DATE) >= '${startDate}'`;
+  if (date)                 return `CAST(t.T_Fecha AS DATE) = '${date}'`;
+  return _ticketDateFilter(period, 't.T_Fecha');
+}
+
+// Estrategia 2 fases (a prueba de timeout): (1) TOP N tickets MÁS RECIENTES desde
+// Tickets (indexado por T_Fecha) a #tk; (2) unir SOLO sus renglones de TicketsPS.
+// Nunca escanea todo TicketsPS del mes. numProductos cuenta IGUAL que el modal
+// (código+concepto+precio unitario), para que la columna "Items" cuadre 1:1.
+function buildDesgloseTicketsQuery({ period = 'day', date = null, startDate = null, endDate = null, topLimit = 2000 } = {}) {
+  const whereFecha   = _desgloseWhere({ period, date, startDate, endDate });
+  const ventaLinea   = `(ps.[Importe] + ISNULL(ps.[MontoIva],0) + ISNULL(ps.[MontoIeps],0))`;
+  const costoLinea   = `(ps.[Cantidad] * ${COSTO_PZA})`;
+  const itemKey      = `ISNULL(CONVERT(varchar(60),ps.[Codigo]),'') + '|' + ISNULL(ps.[Concepto],'') + '|' + ISNULL(CONVERT(varchar(40),ps.[ValorUnitario]),'')`;
+  return `
+    SET NOCOUNT ON;
+    IF OBJECT_ID('tempdb..#tk') IS NOT NULL DROP TABLE #tk;
+    SELECT TOP (${topLimit})
+      t.FolTda_Codigo, t.FolEst_Codigo, t.FolDoc_Codigo, t.FolConsecutivo,
+      t.T_Fecha, t.T_Cajero, NULLIF(t.FaConsecutivo, 0) AS factura
+    INTO #tk
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    WHERE ${whereFecha}
+    ORDER BY t.T_Fecha DESC;
+
+    SELECT
+      k.FolTda_Codigo                            AS folTda,
+      k.FolEst_Codigo                            AS folEst,
+      k.FolDoc_Codigo                            AS folDoc,
+      k.FolConsecutivo                           AS folConsecutivo,
+      k.FolConsecutivo                           AS ticket,
+      CONVERT(varchar(19), MAX(k.T_Fecha), 120)  AS fecha,
+      MAX(k.T_Cajero)                            AS cajero,
+      MAX(k.factura)                             AS factura,
+      COUNT(DISTINCT ${itemKey})                 AS numProductos,
+      SUM(ps.[Cantidad])                         AS totalArticulos,
+      SUM(${ventaLinea})                         AS totalImporte,
+      SUM(${costoLinea})                         AS totalCosto,
+      SUM(${ventaLinea}) - SUM(${costoLinea})    AS ganancia
+    FROM #tk k
+    JOIN [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+      ON ps.FolTda_Codigo = k.FolTda_Codigo AND ps.FolEst_Codigo = k.FolEst_Codigo
+     AND ps.FolDoc_Codigo = k.FolDoc_Codigo AND ps.FolConsecutivo = k.FolConsecutivo
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
+    GROUP BY k.FolTda_Codigo, k.FolEst_Codigo, k.FolDoc_Codigo, k.FolConsecutivo
+    ORDER BY MAX(k.T_Fecha) DESC
+    OPTION (MAXDOP 1);
+
+    DROP TABLE #tk;
+  `;
+}
+
+// Conteo REAL de tickets del periodo (mismo filtro que el desglose).
+function buildDesgloseCountQuery({ period = 'day', date = null, startDate = null, endDate = null } = {}) {
+  return `
+    SELECT COUNT(*) AS totalTickets
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    WHERE ${_desgloseWhere({ period, date, startDate, endDate })}
+    OPTION (MAXDOP 1)
+  `;
+}
+
 // Top productos en TIEMPO REAL (TicketsPS), misma fecha que las ventas.
 function buildTopProductsRealtimeQuery({ period = 'day', limit = 10 } = {}) {
   return `
@@ -441,6 +514,9 @@ function buildRecentTicketsQuery({ limit = 50 } = {}) {
   return `
     SELECT TOP ${limit}
       t.FolConsecutivo                        AS folio,
+      t.FolTda_Codigo                         AS folTda,
+      t.FolEst_Codigo                         AS folEst,
+      t.FolDoc_Codigo                         AS folDoc,
       CONVERT(varchar(19), t.T_Fecha, 120)    AS fecha,
       t.T_Cajero                              AS cajero,
       t.T_Vendedor                            AS vendedor,
@@ -490,6 +566,8 @@ module.exports = {
   buildTicketKPIsQuery,
   buildDashboardCostQuery,
   buildDashboardCostPolizaQuery,
+  buildDesgloseTicketsQuery,
+  buildDesgloseCountQuery,
   buildTopProductsRealtimeQuery,
   // Helpers de costo exacto (para consultas inline en otros módulos)
   COSTO_PZA,

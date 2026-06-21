@@ -19,6 +19,8 @@ const {
   buildTicketKPIsQuery,
   buildDashboardCostQuery,
   buildDashboardCostPolizaQuery,
+  buildDesgloseTicketsQuery,
+  buildDesgloseCountQuery,
   buildTopProductsRealtimeQuery,
   COSTO_LINEA,
   JOIN_CP,
@@ -35,12 +37,6 @@ const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
 // Consulta PESADA: la limitamos a 1 núcleo (MAXDOP 1) para no acaparar la CPU del
 // servidor que comparte NovaCaja (POS). Tarda un poco más, pero no lo ahoga.
 const heavy = (sql) => mssql.query(sql + '\n    OPTION (MAXDOP 1)');
-
-// Costo del desglose de pólizas (VBasePolizaVentas). En ventas SIN factura usa
-// Costo (idéntico a hoy: NO toca lo que ya sale bien). En renglones CON factura,
-// la columna Costo viene 0/NULL, así que cae a CostoImp (que sí trae el valor en
-// facturas), restaurando como aparecía bien antes del commit 9600bf9.
-const COSTO_POLIZA = `CASE WHEN factura IS NOT NULL AND LTRIM(RTRIM(CONVERT(varchar(50),factura))) <> '' THEN COALESCE(NULLIF(Costo,0), CostoImp) ELSE Costo END`;
 
 // Devuelve el valor cacheado o lo calcula con fn() (que resuelve al valor FINAL,
 // ya extraído) y lo guarda. Evita re-escanear en cada visita.
@@ -558,49 +554,16 @@ router.get('/poliza-ventas', async (req, res) => {
   if (cached) return res.json(cached);
 
   try {
-    const maxDate = await getMaxDateString();
+    const topLimit = date ? 2000 : (period === 'week' ? 5000 : period === 'month' ? 7000 : 2000);
+    const opts     = date ? { date, topLimit } : { period, topLimit };
 
-    let whereClause, topLimit;
-
-    if (date) {
-      whereClause = `WHERE CAST(Fecha AS DATE) = '${date}'`;
-      topLimit    = 2000;
-    } else {
-      switch (period) {
-        case 'week':
-          whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`;
-          topLimit    = 5000;
-          break;
-        case 'month':
-          whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`;
-          topLimit    = 7000;
-          break;
-        default:
-          whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
-          topLimit    = 2000;
-      }
-    }
-
+    // Desglose desde TICKETS REALES (Tickets + TicketsPS) por la llave de 4 campos:
+    // la fila coincide EXACTO con el modal de detalle y el costo sale igual que el
+    // Dashboard. Se abandona VBasePolizaVentas (duplica renglones, códigos genéricos
+    // en facturas, y su `ticket`/FolConsecutivo se recicla y colisiona).
     const [dataRes, countRes] = await Promise.all([
-      mssql.query(`
-        SELECT TOP ${topLimit}
-          ticket,
-          MAX(Fecha)                AS fecha,
-          MAX(factura)              AS factura,
-          SUM(importe)              AS totalImporte,
-          SUM(${COSTO_POLIZA})      AS totalCosto,
-          SUM(importe) - SUM(${COSTO_POLIZA}) AS ganancia,
-          COUNT(*)                  AS numProductos
-        FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-        ${whereClause}
-        GROUP BY ticket
-        ORDER BY MAX(Fecha) DESC
-      `),
-      mssql.query(`
-        SELECT COUNT(DISTINCT ticket) AS totalTickets
-        FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-        ${whereClause}
-      `),
+      mssql.query(buildDesgloseTicketsQuery(opts)),
+      mssql.query(buildDesgloseCountQuery(opts)),
     ]);
 
     const rows         = dataRes.recordset || [];
@@ -769,36 +732,11 @@ router.get('/poliza-ventas/export', async (req, res) => {
   if (endDate   && !dateRx.test(endDate))   return res.status(400).json({ error: 'endDate inválido' });
 
   try {
-    const maxDate = await getMaxDateString();
-
-    let whereClause;
-    if (startDate && endDate) {
-      whereClause = `WHERE CAST(Fecha AS DATE) BETWEEN '${startDate}' AND '${endDate}'`;
-    } else if (startDate) {
-      whereClause = `WHERE CAST(Fecha AS DATE) >= '${startDate}'`;
-    } else {
-      switch (period) {
-        case 'week':  whereClause = `WHERE Fecha >= DATEADD(day, -7, '${maxDate}')`; break;
-        case 'month': whereClause = `WHERE Fecha >= DATEADD(month, -1, '${maxDate}')`; break;
-        default:      whereClause = `WHERE CAST(Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
-      }
-    }
-
-    const result = await mssql.query(`
-      SELECT TOP 50000
-        ticket,
-        CONVERT(varchar(19), MAX(Fecha), 120)  AS fecha,
-        MAX(factura)                            AS factura,
-        SUM(cantidad)                           AS totalArticulos,
-        SUM(importe)                            AS totalImporte,
-        SUM(${COSTO_POLIZA})                    AS totalCosto,
-        SUM(importe) - SUM(${COSTO_POLIZA})     AS ganancia,
-        COUNT(*)                                AS numLineas
-      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
-      ${whereClause}
-      GROUP BY ticket
-      ORDER BY MAX(Fecha) DESC
-    `);
+    // Mismo origen REAL que el desglose en pantalla (Tickets + TicketsPS por la
+    // llave de 4 campos), para que el Excel cuadre con lo que se ve.
+    const result = await mssql.query(buildDesgloseTicketsQuery({
+      period, startDate: startDate || null, endDate: endDate || null, topLimit: 50000,
+    }));
 
     res.json({ tickets: result.recordset || [], count: result.recordset?.length || 0 });
   } catch (err) {
@@ -845,14 +783,27 @@ router.get('/tickets/kpis', async (req, res) => {
 router.get('/tickets/:folio/detalle', async (req, res) => {
   const folio = parseInt(req.params.folio);
   if (!folio) return res.status(400).json({ error: 'Folio inválido' });
+
+  // Llave COMPLETA de 4 campos (la pasan el desglose y el feed). FolConsecutivo se
+  // RECICLA entre cajas/días, así que con la llave exacta abrimos ESE ticket físico
+  // (no "el más reciente con ese folio"). Si no viene, modo legacy (TOP 1 reciente).
+  const tda = parseInt(req.query.tda), est = parseInt(req.query.est), doc = parseInt(req.query.doc);
+  const llaveCompleta = Number.isInteger(tda) && Number.isInteger(est) && Number.isInteger(doc);
+
   try {
-    // Paso 1: obtener el registro exacto de Tickets (igual que la lista: el más reciente)
-    const ticketRes = await mssql.query(`
+    // Paso 1: obtener el registro exacto de Tickets
+    const ticketRes = await mssql.query(llaveCompleta ? `
       SELECT TOP 1
-        FolTda_Codigo,
-        FolEst_Codigo,
-        FolDoc_Codigo,
-        FolConsecutivo,
+        FolTda_Codigo, FolEst_Codigo, FolDoc_Codigo, FolConsecutivo,
+        ISNULL(T_ImporteTotal, 0)          AS importeTotal,
+        CONVERT(varchar(19), T_Fecha, 120) AS fecha,
+        T_Cajero                           AS cajero
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE FolTda_Codigo = ${tda} AND FolEst_Codigo = ${est}
+        AND FolDoc_Codigo = ${doc} AND FolConsecutivo = ${folio}
+    ` : `
+      SELECT TOP 1
+        FolTda_Codigo, FolEst_Codigo, FolDoc_Codigo, FolConsecutivo,
         ISNULL(T_ImporteTotal, 0)          AS importeTotal,
         CONVERT(varchar(19), T_Fecha, 120) AS fecha,
         T_Cajero                           AS cajero
