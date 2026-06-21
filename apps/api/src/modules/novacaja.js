@@ -660,6 +660,106 @@ router.get('/poliza-diag', async (req, res) => {
   res.json(out);
 });
 
+// ── GET /api/novacaja/ticket-diag?folio=13080 — SOLO LECTURA ──────────────────
+// Diagnóstico para entender por qué el desglose (póliza, agrupado por `ticket`) NO
+// coincide con el detalle real (Tickets/TicketsPS). Captura en un solo tiro: el
+// esquema de las tablas, dónde vive el folio de factura, y la comparación del
+// ticket de ejemplo (póliza vs tickets reales) para probar la colisión de folios.
+router.get('/ticket-diag', async (req, res) => {
+  const folio = parseInt(req.query.folio) || 13080;
+  const out = {
+    folio, ticketsCols: [], polizaCols: [], facturaCols: [],
+    ticketsReales: [], polizaRows: [], lineasMasReciente: [], errores: {},
+  };
+
+  // 1) Columnas de la tabla Tickets (¿tiene folio de factura? ¿qué llaves?)
+  try {
+    const r = await mssql.query(`
+      SELECT COLUMN_NAME, DATA_TYPE
+      FROM [compucaja].[INFORMATION_SCHEMA].[COLUMNS]
+      WHERE TABLE_NAME = 'Tickets'
+      ORDER BY ORDINAL_POSITION
+      OPTION (MAXDOP 1)`);
+    out.ticketsCols = r.recordset || [];
+  } catch (e) { out.errores.ticketsCols = e.message; }
+
+  // 2) Columnas de la vista de pólizas (¿trae FolTda/FolEst/FolDoc para casar?)
+  try {
+    const r = await mssql.query(`
+      SELECT COLUMN_NAME, DATA_TYPE
+      FROM [compucaja].[INFORMATION_SCHEMA].[COLUMNS]
+      WHERE TABLE_NAME = 'VBasePolizaVentas'
+      ORDER BY ORDINAL_POSITION
+      OPTION (MAXDOP 1)`);
+    out.polizaCols = r.recordset || [];
+  } catch (e) { out.errores.polizaCols = e.message; }
+
+  // 3) Toda columna que huela a factura / folio fiscal / serie (para ubicar de
+  //    dónde sacar el número de factura del desglose con un origen confiable).
+  try {
+    const r = await mssql.query(`
+      SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE
+      FROM [compucaja].[INFORMATION_SCHEMA].[COLUMNS]
+      WHERE COLUMN_NAME LIKE '%actura%' OR COLUMN_NAME LIKE '%CFDI%'
+         OR COLUMN_NAME LIKE '%Serie%'  OR COLUMN_NAME LIKE '%FolioF%'
+      ORDER BY TABLE_NAME, COLUMN_NAME
+      OPTION (MAXDOP 1)`);
+    out.facturaCols = r.recordset || [];
+  } catch (e) { out.errores.facturaCols = e.message; }
+
+  // 4) Tickets REALES con ese FolConsecutivo → prueba la colisión (varios físicos
+  //    con el mismo número, distinto Tda/Est/Doc/Fecha/Total).
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 20
+        FolTda_Codigo, FolEst_Codigo, FolDoc_Codigo, FolConsecutivo,
+        ISNULL(T_ImporteTotal,0) AS importeTotal,
+        CONVERT(varchar(19), T_Fecha, 120) AS fecha, T_Cajero
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE FolConsecutivo = ${folio}
+      ORDER BY T_Fecha DESC
+      OPTION (MAXDOP 1)`);
+    out.ticketsReales = r.recordset || [];
+  } catch (e) { out.errores.ticketsReales = e.message; }
+
+  // 5) Renglones reales (TicketsPS) del ticket MÁS RECIENTE con ese folio = lo que
+  //    muestra el modal de detalle (el que sí sale bien).
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 1 FolTda_Codigo, FolEst_Codigo, FolDoc_Codigo, FolConsecutivo
+      FROM [compucaja].[dbo].[Tickets] WITH (NOLOCK)
+      WHERE FolConsecutivo = ${folio}
+      ORDER BY T_Fecha DESC
+      OPTION (MAXDOP 1)`);
+    const k = r.recordset[0];
+    if (k) {
+      const l = await mssql.query(`
+        SELECT [Codigo] AS codigo, [Concepto] AS concepto, [Cantidad] AS cantidad,
+               [Importe] + ISNULL([MontoIva],0) + ISNULL([MontoIeps],0) AS importe
+        FROM [compucaja].[dbo].[TicketsPS] WITH (NOLOCK)
+        WHERE FolTda_Codigo=${k.FolTda_Codigo} AND FolEst_Codigo=${k.FolEst_Codigo}
+          AND FolDoc_Codigo=${k.FolDoc_Codigo} AND FolConsecutivo=${k.FolConsecutivo}
+        OPTION (MAXDOP 1)`);
+      out.lineasMasReciente = l.recordset || [];
+    }
+  } catch (e) { out.errores.lineasMasReciente = e.message; }
+
+  // 6) Filas de la PÓLIZA para ese `ticket` (ve duplicados + importe + factura).
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 40 CONVERT(varchar(50),ticket) AS ticket, CONVERT(varchar(50),factura) AS factura,
+             producto, cantidad, importe, Costo, CostoImp,
+             CONVERT(varchar(19), Fecha, 120) AS fecha
+      FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
+      WHERE CONVERT(varchar(50),ticket) = '${folio}'
+      ORDER BY Fecha DESC
+      OPTION (MAXDOP 1)`);
+    out.polizaRows = r.recordset || [];
+  } catch (e) { out.errores.polizaRows = e.message; }
+
+  res.json(out);
+});
+
 // ── GET /api/novacaja/poliza-ventas/export ────────────────────────────────────
 router.get('/poliza-ventas/export', async (req, res) => {
   const { period = 'day', startDate, endDate } = req.query;
