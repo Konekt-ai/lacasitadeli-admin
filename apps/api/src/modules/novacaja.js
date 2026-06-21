@@ -36,6 +36,12 @@ const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
 // servidor que comparte NovaCaja (POS). Tarda un poco más, pero no lo ahoga.
 const heavy = (sql) => mssql.query(sql + '\n    OPTION (MAXDOP 1)');
 
+// Costo del desglose de pólizas (VBasePolizaVentas). En ventas SIN factura usa
+// Costo (idéntico a hoy: NO toca lo que ya sale bien). En renglones CON factura,
+// la columna Costo viene 0/NULL, así que cae a CostoImp (que sí trae el valor en
+// facturas), restaurando como aparecía bien antes del commit 9600bf9.
+const COSTO_POLIZA = `CASE WHEN factura IS NOT NULL AND LTRIM(RTRIM(CONVERT(varchar(50),factura))) <> '' THEN COALESCE(NULLIF(Costo,0), CostoImp) ELSE Costo END`;
+
 // Devuelve el valor cacheado o lo calcula con fn() (que resuelve al valor FINAL,
 // ya extraído) y lo guarda. Evita re-escanear en cada visita.
 async function getCached(key, fn, ttlMs) {
@@ -570,8 +576,8 @@ router.get('/poliza-ventas', async (req, res) => {
           MAX(Fecha)                AS fecha,
           MAX(factura)              AS factura,
           SUM(importe)              AS totalImporte,
-          SUM(Costo)                AS totalCosto,
-          SUM(importe) - SUM(Costo) AS ganancia,
+          SUM(${COSTO_POLIZA})      AS totalCosto,
+          SUM(importe) - SUM(${COSTO_POLIZA}) AS ganancia,
           COUNT(*)                  AS numProductos
         FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
         ${whereClause}
@@ -673,8 +679,8 @@ router.get('/poliza-ventas/export', async (req, res) => {
         MAX(factura)                            AS factura,
         SUM(cantidad)                           AS totalArticulos,
         SUM(importe)                            AS totalImporte,
-        SUM(Costo)                              AS totalCosto,
-        SUM(importe) - SUM(Costo)               AS ganancia,
+        SUM(${COSTO_POLIZA})                    AS totalCosto,
+        SUM(importe) - SUM(${COSTO_POLIZA})     AS ganancia,
         COUNT(*)                                AS numLineas
       FROM [compucaja].[dbo].[VBasePolizaVentas] WITH (NOLOCK)
       ${whereClause}
