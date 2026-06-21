@@ -251,10 +251,17 @@ router.get('/dashboard', async (req, res) => {
     const kpiQuery  = esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate });
     const topQuery  = esDia ? buildTopProductsRealtimeQuery({ period, limit: 10 }) : buildTopProductsQuery({ period, limit: 10, maxDate });
 
+    // Semana/Mes: el CONTEO de tickets REAL sale de la tabla Tickets (mismo origen
+    // y ventana que el día, que ya cuenta bien). La póliza agrupa varias ventas en
+    // pocos folios, así que COUNT(DISTINCT v.ticket) daba un número absurdo (p.ej.
+    // 82 tickets/semana, promedio $25,000). Ventas, costo y margen se quedan de
+    // pólizas (no se tocan: ya cuadran con Análisis). El día ya cuenta de Tickets.
+    const realCountQuery = esDia ? null : buildTicketKPIsQuery({ period, maxDate });
+
     // Tendencia 30 días, por proveedor y los conteos cambian lento y son PESADOS
     // (escanean pólizas/catálogo). Se leen de cache largo (los pre-calcula el
     // scheduler en segundo plano) → no se escanean en cada visita al dashboard.
-    const [kpiRes, costRes, topRes, byDayData, bySupplierData, totalProducts, lowStockAlerts] = await Promise.all([
+    const [kpiRes, costRes, topRes, byDayData, bySupplierData, totalProducts, lowStockAlerts, realCountRes] = await Promise.all([
       heavy(kpiQuery),
       esDia ? heavy(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
       heavy(topQuery),
@@ -262,14 +269,19 @@ router.get('/dashboard', async (req, res) => {
       getCached(`dash:bySupplier:${period}`,   () => heavy(buildSalesBySupplierQuery({ period, maxDate })).then(r => r.recordset || []),     600_000),
       getCached('dash:prodCount', () => mssql.query(buildDashboardProductsCountQuery()).then(r => r.recordset[0]?.totalProducts  || 0), 1800_000),
       getCached('dash:lowStock',  () => mssql.query(buildDashboardLowStockCountQuery()).then(r => r.recordset[0]?.lowStockAlerts || 0),  600_000),
+      realCountQuery ? heavy(realCountQuery) : Promise.resolve(null),
     ]);
 
     const kpi  = kpiRes.recordset[0]  || {};
     const cost = costRes.recordset[0] || {};
+    const realCount = realCountRes?.recordset?.[0] || null;
 
     // Todo reconcilia: ganancia = ventas - costo; ticketPromedio = ventas/tickets.
     const totalVentasN  = Number(kpi.totalVentas)  || 0;
-    const totalTicketsN = Number(kpi.totalTickets) || 0;
+    // Día: kpi ya viene de la tabla Tickets (conteo real). Semana/mes: usar el
+    // conteo REAL de Tickets (la póliza agrupaba -> 82/semana). Si algo falla, cae
+    // al de la póliza para no romper el dashboard.
+    const totalTicketsN = Number(esDia ? kpi.totalTickets : (realCount?.totalTickets ?? kpi.totalTickets)) || 0;
     const totalCostoN   = Number(esDia ? cost.totalCosto       : kpi.totalCosto)       || 0;
     const unidadesN     = Number(esDia ? cost.unidadesVendidas : kpi.unidadesVendidas) || 0;
     const kpisFull = {
