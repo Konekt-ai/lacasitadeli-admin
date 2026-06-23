@@ -56,7 +56,7 @@ const HoraTooltip = ({ active, payload, label }: any) => {
   );
 };
 
-export default function HistorialTab() {
+export default function HistorialView() {
   const today    = useMemo(() => new Date(), []);
   const todayISO = toISO(today);
 
@@ -116,16 +116,7 @@ export default function HistorialTab() {
   ] : [];
 
   return (
-    <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
-      {/* Title */}
-      <div className="mb-6">
-        <h2 className="text-3xl font-serif italic text-primary">Historial</h2>
-        <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
-          Elige un día para ver sus ventas, costos y ganancia
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
 
         {/* ── Calendario ──────────────────────────────────────────────────────── */}
         <div className="lg:col-span-1">
@@ -276,6 +267,5 @@ export default function HistorialTab() {
           )}
         </div>
       </div>
-    </section>
   );
 }

@@ -13,7 +13,6 @@ const DashboardTab  = dynamic(() => import('./tabs/DashboardTab'),  { ssr: false
 const InventarioTab = dynamic(() => import('./tabs/InventarioTab'), { ssr: false });
 const VentasTab     = dynamic(() => import('./tabs/VentasTab'),     { ssr: false });
 const ReportesTab   = dynamic(() => import('./tabs/ReportesTab'),   { ssr: false });
-const HistorialTab  = dynamic(() => import('./tabs/HistorialTab'),  { ssr: false });
 const AlertasTab      = dynamic(() => import('./tabs/AlertasTab'),      { ssr: false });
 const ProveedoresTab  = dynamic(() => import('./tabs/ProveedoresTab'),  { ssr: false });
 const BodegaTab        = dynamic(() => import('./tabs/BodegaTab'),        { ssr: false });
@@ -24,7 +23,6 @@ const TABS = [
   { id: 'Inventario',    label: 'Inventario', icon: 'inventory_2' },
   { id: 'Ventas',        label: 'Análisis',   icon: 'bar_chart' },
   { id: 'Reportes',      label: 'Reportes',   icon: 'receipt_long' },
-  { id: 'Historial',     label: 'Historial',  icon: 'calendar_month' },
   { id: 'Alertas',       label: 'Alertas',    icon: 'notifications' },
   { id: 'Proveedores',   label: 'Proveedores', icon: 'local_shipping' },
   { id: 'Bodega',        label: 'Bodega',     icon: 'warehouse' },
@@ -114,7 +112,6 @@ export default function Dashboard() {
         {activeTab === 'Inventario' && <InventarioTab lowStockProducts={lowStockProducts} categories={categories} onRefresh={fetchData} />}
         {activeTab === 'Ventas'     && <VentasTab />}
         {activeTab === 'Reportes'   && <ReportesTab timeFilter={timeFilter} />}
-        {activeTab === 'Historial'  && <HistorialTab />}
         {activeTab === 'Alertas'     && <AlertasTab     lowStockProducts={lowStockProducts} onRefresh={fetchData} />}
         {activeTab === 'Proveedores' && <ProveedoresTab timeFilter={timeFilter} />}
         {activeTab === 'Bodega'       && <BodegaTab />}

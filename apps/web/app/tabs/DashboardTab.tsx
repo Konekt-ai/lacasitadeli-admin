@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
+import HistorialView from './HistorialTab';
 import type { Product } from '../lib/types';
 
 // ── Types locales del endpoint /api/novacaja/dashboard ─────────────────────────
@@ -73,6 +74,7 @@ interface Props {
 }
 
 export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, setActiveTab }: Props) {
+  const [dashView,       setDashView]       = useState<'resumen' | 'historial'>('resumen');
   const [kpis,           setKpis]           = useState<DashKPI | null>(null);
   const [topProducts,    setTopProducts]    = useState<DashProduct[]>([]);
   const [loading,        setLoading]        = useState(false);
@@ -186,6 +188,26 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
           </p>
         </div>
       )}
+
+      {/* Toggle Resumen / Historial */}
+      <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
+        {([
+          { id: 'resumen',   label: 'Resumen',   icon: 'dashboard' },
+          { id: 'historial', label: 'Historial', icon: 'calendar_month' },
+        ] as const).map(t => (
+          <button key={t.id} onClick={() => setDashView(t.id)}
+            className={cn(
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all',
+              dashView === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600'
+            )}>
+            <Icon name={t.icon} className="text-base" />
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {dashView === 'historial' ? <HistorialView /> : (
+      <>
 
       {/* ── KPI Cards ─────────────────────────────────────────────────────────── */}
       {loading ? (
@@ -410,6 +432,8 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
           )}
         </div>
       </div>
+      </>
+      )}
     </section>
   );
 }
