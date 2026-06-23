@@ -242,7 +242,9 @@ function buildDashboardKPIsQuery({ period = 'day', maxDate } = {}) {
 // MISMA fuente y fecha que las ventas (tabla Tickets). Costo por pieza:
 // factura -> Art_UltimoCosto -> reposicion. GANANCIA = ventas - costos reales
 // (sin tope), igual que en Analisis.
-function buildDashboardCostQuery({ period = 'day' } = {}) {
+function buildDashboardCostQuery({ period = 'day', date = null } = {}) {
+  const fT  = date ? `CAST(t.T_Fecha AS DATE) = '${date}'`      : _ticketDateFilter(period, 't.T_Fecha');
+  const fPS = date ? `CAST(ps.[FechaHora] AS DATE) = '${date}'` : _ticketDateFilter(period, 'ps.[FechaHora]');
   return `
     SELECT
       ISNULL(SUM(x.cantidad), 0) AS unidadesVendidas,
@@ -258,8 +260,8 @@ function buildDashboardCostQuery({ period = 'day' } = {}) {
        AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
       LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
       LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
-      WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
-        AND ${_ticketDateFilter(period, 'ps.[FechaHora]')}
+      WHERE ${fT}
+        AND ${fPS}
     ) x
   `;
 }
@@ -338,7 +340,9 @@ function buildDesgloseCountQuery({ period = 'day', date = null, startDate = null
 }
 
 // Top productos en TIEMPO REAL (TicketsPS), misma fecha que las ventas.
-function buildTopProductsRealtimeQuery({ period = 'day', limit = 10 } = {}) {
+function buildTopProductsRealtimeQuery({ period = 'day', limit = 10, date = null } = {}) {
+  const fT  = date ? `CAST(t.T_Fecha AS DATE) = '${date}'`      : _ticketDateFilter(period, 't.T_Fecha');
+  const fPS = date ? `CAST(ps.[FechaHora] AS DATE) = '${date}'` : _ticketDateFilter(period, 'ps.[FechaHora]');
   return `
     SELECT TOP ${limit}
       ps.[Codigo]                              AS productCode,
@@ -352,11 +356,33 @@ function buildTopProductsRealtimeQuery({ period = 'day', limit = 10 } = {}) {
       ON ps.FolTda_Codigo = t.FolTda_Codigo AND ps.FolEst_Codigo = t.FolEst_Codigo
      AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
-    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
-      AND ${_ticketDateFilter(period, 'ps.[FechaHora]')}
+    WHERE ${fT}
+      AND ${fPS}
       AND ps.[Codigo] IS NOT NULL AND ps.[Codigo] <> ''
     GROUP BY ps.[Codigo]
     ORDER BY SUM(ps.[Cantidad]) DESC
+  `;
+}
+
+// Ventas/tickets/costo POR HORA de un día específico (real, desde Tickets+TicketsPS)
+// para la gráfica del historial. El costo es el real por pieza (= Dashboard).
+function buildDiaPorHoraQuery(date) {
+  return `
+    SELECT
+      DATEPART(HOUR, t.T_Fecha)                AS hora,
+      COUNT(DISTINCT CONCAT(t.FolTda_Codigo,'-',t.FolEst_Codigo,'-',t.FolDoc_Codigo,'-',t.FolConsecutivo)) AS numTickets,
+      SUM(ps.[Cantidad])                       AS unidadesVendidas,
+      SUM(ps.[Importe] + ISNULL(ps.[MontoIva],0) + ISNULL(ps.[MontoIeps],0)) AS totalVentas,
+      SUM(ps.[Cantidad] * ${COSTO_PZA})        AS totalCosto
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    JOIN [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+      ON ps.FolTda_Codigo = t.FolTda_Codigo AND ps.FolEst_Codigo = t.FolEst_Codigo
+     AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]
+    WHERE CAST(t.T_Fecha AS DATE) = '${date}'
+    GROUP BY DATEPART(HOUR, t.T_Fecha)
+    ORDER BY DATEPART(HOUR, t.T_Fecha) ASC
   `;
 }
 
@@ -569,6 +595,7 @@ module.exports = {
   buildDesgloseTicketsQuery,
   buildDesgloseCountQuery,
   buildTopProductsRealtimeQuery,
+  buildDiaPorHoraQuery,
   // Helpers de costo exacto (para consultas inline en otros módulos)
   COSTO_PZA,
   COSTO_LINEA,

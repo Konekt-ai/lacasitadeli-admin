@@ -22,6 +22,7 @@ const {
   buildDesgloseTicketsQuery,
   buildDesgloseCountQuery,
   buildTopProductsRealtimeQuery,
+  buildDiaPorHoraQuery,
   COSTO_LINEA,
   JOIN_CP,
   JOIN_CP_A,
@@ -222,6 +223,56 @@ router.get('/sin-costo', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Error sin-costo:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/dia?date=YYYY-MM-DD — el "dashboard" de un día pasado ────
+// KPIs (tickets, ventas, costo, ganancia) + top productos + ventas por hora, todo
+// de los TICKETS REALES (Tickets + TicketsPS) de ESE día. Para el calendario de
+// Historial. El pasado no cambia → cache largo; hoy → cache corto.
+router.get('/dia', async (req, res) => {
+  const { date } = req.query;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+    return res.status(400).json({ error: 'date inválido (YYYY-MM-DD)' });
+
+  const cacheKey = `dia:${date}`;
+  const cached   = _get(cacheKey);
+  if (cached) return res.json(cached);
+
+  try {
+    const [kpiRes, costRes, topRes, horaRes] = await Promise.all([
+      heavy(buildTicketKPIsQuery({ period: 'day', maxDate: date })),
+      heavy(buildDashboardCostQuery({ date })),
+      heavy(buildTopProductsRealtimeQuery({ date, limit: 10 })),
+      heavy(buildDiaPorHoraQuery(date)),
+    ]);
+
+    const kpi     = kpiRes.recordset[0]  || {};
+    const cost    = costRes.recordset[0] || {};
+    const ventas  = Number(kpi.totalVentas)  || 0;
+    const tickets = Number(kpi.totalTickets) || 0;
+    const costo   = Number(cost.totalCosto)  || 0;
+
+    const result = {
+      date,
+      kpis: {
+        totalTickets:     tickets,
+        totalVentas:      ventas,
+        totalCosto:       costo,
+        ganancia:         ventas - costo,
+        unidadesVendidas: Number(cost.unidadesVendidas) || 0,
+        ticketPromedio:   tickets > 0 ? ventas / tickets : 0,
+      },
+      topProducts: topRes.recordset  || [],
+      byHour:      horaRes.recordset || [],
+    };
+
+    const esHoy = date === new Date().toISOString().slice(0, 10);
+    _set(cacheKey, result, esHoy ? 60_000 : 1800_000); // hoy 60 s · pasado 30 min
+    res.json(result);
+  } catch (err) {
+    console.error('Error dia:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
