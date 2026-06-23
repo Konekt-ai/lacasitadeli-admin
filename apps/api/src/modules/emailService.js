@@ -246,30 +246,18 @@ function buildHtml({ stagnant, noSales, expirySoon, expired }) {
 
 // ── Send report ───────────────────────────────────────────────────────────────
 
-async function sendMonthlyReport() {
+// Envía un correo por Resend (preferido) o Gmail/nodemailer. Reusado por todos
+// los correos (reporte de inventario y resumen de ventas).
+async function _sendEmail({ subject, html, to }) {
   const useResend = !!process.env.RESEND_API_KEY;
   const useGmail  = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
-
   if (!useResend && !useGmail) {
     throw new Error('Configura RESEND_API_KEY (recomendado) o EMAIL_USER + EMAIL_PASS en el .env');
   }
-
-  const data    = await fetchAlertData();
-  const html    = buildHtml(data);
-  const fechaY  = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
-  const subject = `📊 Reporte Semanal de Inventario — ${fechaY} — La Casita Deli`;
-  const total   = data.noSales.length + data.stagnant.length + data.expirySoon.length + data.expired.length;
-  const to      = process.env.EMAIL_USER || 'lacasitadeli2000@gmail.com';
-
   if (useResend) {
     const { Resend } = require('resend');
     const resend = new Resend(process.env.RESEND_API_KEY);
-    const { error } = await resend.emails.send({
-      from:    'La Casita Deli <onboarding@resend.dev>',
-      to,
-      subject,
-      html,
-    });
+    const { error } = await resend.emails.send({ from: 'La Casita Deli <onboarding@resend.dev>', to, subject, html });
     if (error) throw new Error(error.message);
   } else {
     const nodemailer  = require('nodemailer');
@@ -277,13 +265,19 @@ async function sendMonthlyReport() {
       service: 'gmail',
       auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
     });
-    await transporter.sendMail({
-      from: `"La Casita Deli Sistema" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html,
-    });
+    await transporter.sendMail({ from: `"La Casita Deli Sistema" <${process.env.EMAIL_USER}>`, to, subject, html });
   }
+}
+
+async function sendMonthlyReport() {
+  const data    = await fetchAlertData();
+  const html    = buildHtml(data);
+  const fechaY  = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
+  const subject = `📊 Reporte Semanal de Inventario — ${fechaY} — La Casita Deli`;
+  const total   = data.noSales.length + data.stagnant.length + data.expirySoon.length + data.expired.length;
+  const to      = process.env.EMAIL_USER || 'lacasitadeli2000@gmail.com';
+
+  await _sendEmail({ subject, html, to });
 
   getDb().prepare(`
     INSERT INTO email_report_log (tipo, productos_detectados, noSales, stagnant, expiry, enviado_a)
@@ -300,4 +294,70 @@ async function sendMonthlyReport() {
   };
 }
 
-module.exports = { sendMonthlyReport, fetchAlertData };
+// ── RESUMEN DE VENTAS (manual, bajo demanda desde Análisis) ──────────────────
+function buildSalesHtml({ dia, semana, mes, topProductos }) {
+  const generatedAt = new Date().toLocaleString('es-MX', {
+    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const money = (n) => '$' + Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const intn  = (n) => Number(n || 0).toLocaleString('es-MX');
+  const marg  = (k) => (Number(k.margen) || 0).toFixed(1) + '%';
+
+  const card = (titulo, k, color) => `
+    <td style="padding:6px;vertical-align:top;width:33%">
+      <div style="background:#fff;border:1px solid #ECE5DE;border-radius:12px;overflow:hidden">
+        <div style="background:${color};padding:10px 14px;color:#fff;font-size:12px;text-transform:uppercase;letter-spacing:1px;font-weight:bold">${titulo}</div>
+        <div style="padding:14px">
+          <p style="margin:0 0 12px"><span style="color:#8D6E63;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Ventas</span><br><span style="font-size:20px;color:#012d1d;font-weight:bold">${money(k.totalVentas)}</span></p>
+          <table style="width:100%;font-size:12px;color:#5D4037;border-collapse:collapse">
+            <tr><td style="padding:3px 0">Tickets</td><td style="text-align:right;font-weight:bold">${intn(k.totalTickets)}</td></tr>
+            <tr><td style="padding:3px 0">Costo</td><td style="text-align:right">${money(k.totalCosto)}</td></tr>
+            <tr><td style="padding:5px 0;color:#012d1d;font-weight:bold;border-top:1px solid #F0EAE3">Ganancia</td><td style="text-align:right;color:#012d1d;font-weight:bold;border-top:1px solid #F0EAE3">${money(k.ganancia)}</td></tr>
+            <tr><td style="padding:3px 0">Margen</td><td style="text-align:right">${marg(k)}</td></tr>
+            <tr><td style="padding:3px 0">Ticket prom.</td><td style="text-align:right">${money(k.ticketPromedio)}</td></tr>
+          </table>
+        </div>
+      </div>
+    </td>`;
+
+  const topRows = (topProductos || []).slice(0, 5).map((p, i) => `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;color:#8D6E63">${i + 1}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;color:#3E2723">${p.name || p.productCode || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;text-align:right;font-weight:bold;color:#012d1d">${intn(p.unidadesVendidas)} uds</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;text-align:right;color:#5D4037">${money(p.ingresos)}</td>
+    </tr>`).join('');
+
+  return `
+  <div style="font-family:Arial,Helvetica,sans-serif;max-width:680px;margin:0 auto;background:#FAF7F3">
+    <div style="background:linear-gradient(135deg,#012d1d,#1b4332);padding:32px;text-align:center">
+      <h1 style="margin:0 0 6px;color:#fff;font-size:24px;letter-spacing:-.5px">La Casita Deli</h1>
+      <p style="margin:0;color:#A7C4B5;font-size:14px;text-transform:uppercase;letter-spacing:1px">Resumen de Ventas</p>
+      <p style="margin:8px 0 0;color:#7FA08F;font-size:13px;text-transform:capitalize">${generatedAt}</p>
+    </div>
+    <div style="padding:20px 10px">
+      <table style="width:100%;border-collapse:collapse"><tr>
+        ${card('Hoy', dia, '#012d1d')}
+        ${card('Esta semana', semana, '#1b4332')}
+        ${card('Este mes', mes, '#2d6a4f')}
+      </tr></table>
+      ${topRows ? `
+      <div style="background:#fff;border:1px solid #ECE5DE;border-radius:12px;margin:16px 6px 0;overflow:hidden">
+        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">Top productos del mes</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">${topRows}</table>
+      </div>` : ''}
+      <p style="text-align:center;color:#A1887F;font-size:11px;margin:22px 0 0">Generado a solicitud desde el panel · La Casita Deli</p>
+    </div>
+  </div>`;
+}
+
+async function sendSalesSummary({ dia, semana, mes, topProductos }) {
+  const html    = buildSalesHtml({ dia, semana, mes, topProductos });
+  const fechaY  = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
+  const subject = `💰 Resumen de Ventas — ${fechaY} — La Casita Deli`;
+  const to      = process.env.EMAIL_USER || 'lacasitadeli2000@gmail.com';
+  await _sendEmail({ subject, html, to });
+  return { sent: true, to };
+}
+
+module.exports = { sendMonthlyReport, sendSalesSummary, fetchAlertData };

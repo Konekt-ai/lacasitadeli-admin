@@ -43,8 +43,26 @@ export default function VentasTab() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsMonths,  setAnalyticsMonths]  = useState(3);
   const [analyticsMetric,  setAnalyticsMetric]  = useState<'unidadesVendidas' | 'totalVentas'>('totalVentas');
+  const [sendingResumen,   setSendingResumen]   = useState(false);
+  const [resumenMsg,       setResumenMsg]       = useState<{ ok: boolean; text: string } | null>(null);
 
   const isMoney = analyticsMetric === 'totalVentas';
+
+  const enviarResumen = useCallback(async () => {
+    setSendingResumen(true);
+    setResumenMsg(null);
+    try {
+      const res  = await fetch('/api/novacaja/enviar-resumen', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.ok) setResumenMsg({ ok: true, text: `Resumen enviado a ${data.to}` });
+      else                   setResumenMsg({ ok: false, text: data.error || 'No se pudo enviar el correo' });
+    } catch {
+      setResumenMsg({ ok: false, text: 'Error de conexión' });
+    } finally {
+      setSendingResumen(false);
+      setTimeout(() => setResumenMsg(null), 8000);
+    }
+  }, []);
 
   const fetchAnalytics = useCallback(async (months: number) => {
     setAnalyticsLoading(true);
@@ -191,6 +209,35 @@ export default function VentasTab() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* ── Enviar resumen de ventas por correo (manual) ──────────────────────── */}
+      <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 p-4 flex flex-col sm:flex-row sm:items-center gap-4">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <Icon name="mark_email_unread" className="text-xl text-primary" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-body text-on-surface font-semibold">Enviar resumen de ventas por correo</p>
+            <p className="text-[10px] font-label text-stone-400 mt-0.5 leading-relaxed">
+              Manda al instante el resumen de <b>hoy, esta semana y este mes</b> (ventas, tickets, costo y ganancia) a <span className="font-mono">lacasitadeli2000@gmail.com</span>. Útil para revisar a media semana sin esperar el correo del lunes.
+            </p>
+            {resumenMsg && (
+              <p className={cn('text-[10px] font-label mt-1.5 flex items-center gap-1', resumenMsg.ok ? 'text-emerald-600' : 'text-error')}>
+                <Icon name={resumenMsg.ok ? 'check_circle' : 'error'} className="text-xs" />
+                {resumenMsg.text}
+              </p>
+            )}
+          </div>
+        </div>
+        <button onClick={enviarResumen} disabled={sendingResumen}
+          className={cn('flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-[11px] font-label font-bold uppercase tracking-widest transition-all flex-shrink-0',
+            sendingResumen ? 'bg-stone-100 text-stone-400 cursor-not-allowed' : 'bg-primary text-on-primary hover:bg-primary/90 shadow-sm hover:shadow-md')}>
+          {sendingResumen
+            ? <div className="w-3.5 h-3.5 border-2 border-stone-300/40 border-t-stone-400 rounded-full animate-spin" />
+            : <Icon name="send" className="text-sm" />}
+          {sendingResumen ? 'Enviando…' : 'Enviar ahora'}
+        </button>
       </div>
 
       {analyticsLoading ? (

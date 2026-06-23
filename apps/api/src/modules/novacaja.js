@@ -27,6 +27,7 @@ const {
   JOIN_CP,
   JOIN_CP_A,
 } = require('../config/novacaja-mapping');
+const emailSvc = require('./emailService');
 
 const router = express.Router();
 
@@ -224,6 +225,52 @@ router.get('/sin-costo', async (req, res) => {
   } catch (err) {
     console.error('Error sin-costo:', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// KPIs de un periodo (day/week/month) con la MISMA lógica del dashboard: día =
+// tickets reales + costo de TicketsPS; semana/mes = pólizas (ventas/costo) +
+// conteo REAL de tickets. Reusado por el dashboard y por el resumen por correo.
+async function kpisDelPeriodo(period, maxDate) {
+  const esDia = period === 'day';
+  const [kpiRes, costRes, realCountRes] = await Promise.all([
+    heavy(esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate })),
+    esDia ? heavy(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
+    esDia ? Promise.resolve(null) : heavy(buildTicketKPIsQuery({ period, maxDate })),
+  ]);
+  const kpi       = kpiRes.recordset[0]  || {};
+  const cost      = costRes.recordset[0] || {};
+  const realCount = realCountRes?.recordset?.[0] || null;
+  const totalVentas  = Number(kpi.totalVentas) || 0;
+  const totalTickets = Number(esDia ? kpi.totalTickets : (realCount?.totalTickets ?? kpi.totalTickets)) || 0;
+  const totalCosto   = Number(esDia ? cost.totalCosto : kpi.totalCosto) || 0;
+  const unidades     = Number(esDia ? cost.unidadesVendidas : kpi.unidadesVendidas) || 0;
+  return {
+    totalTickets, totalVentas, totalCosto,
+    ganancia:         totalVentas - totalCosto,
+    ticketPromedio:   totalTickets > 0 ? totalVentas / totalTickets : 0,
+    unidadesVendidas: unidades,
+    margen:           totalVentas > 0 ? ((totalVentas - totalCosto) / totalVentas) * 100 : 0,
+  };
+}
+
+// ── POST /api/novacaja/enviar-resumen — manda por correo el resumen de ventas ──
+// (día + semana + mes + top productos del mes). Para que el cliente lo vea a media
+// semana sin esperar al correo automático del lunes.
+router.post('/enviar-resumen', async (req, res) => {
+  try {
+    const maxDate = await getMaxDateString();
+    const [dia, semana, mes, topRes] = await Promise.all([
+      kpisDelPeriodo('day'),
+      kpisDelPeriodo('week',  maxDate),
+      kpisDelPeriodo('month', maxDate),
+      heavy(buildTopProductsQuery({ period: 'month', limit: 5, maxDate })),
+    ]);
+    const result = await emailSvc.sendSalesSummary({ dia, semana, mes, topProductos: topRes.recordset || [] });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('Error enviar-resumen:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
