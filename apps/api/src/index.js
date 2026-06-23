@@ -33,14 +33,15 @@ app.get('/api/health', async (req, res) => {
   res.status(ok ? 200 : 503).json({ ...status, db: status.sqlserver });
 });
 
-// Reporte mensual automático: día 1 de cada mes a las 8:00 AM
-cron.schedule('0 8 1 * *', async () => {
-  console.log('[cron] Enviando reporte mensual de inventario...');
+// Reporte semanal automático: TODOS los lunes a las 8:00 AM
+// ('0 8 * * 1' = min 0, hora 8, cualquier día del mes, cualquier mes, día 1 = lunes)
+cron.schedule('0 8 * * 1', async () => {
+  console.log('[cron] Enviando reporte semanal de inventario...');
   try {
     const result = await emailSvc.sendMonthlyReport();
-    console.log('[cron] Reporte mensual enviado:', result);
+    console.log('[cron] Reporte semanal enviado:', result);
   } catch (err) {
-    console.error('[cron] Error al enviar reporte mensual:', err.message);
+    console.error('[cron] Error al enviar reporte semanal:', err.message);
   }
 }, { timezone: 'America/Mexico_City' });
 

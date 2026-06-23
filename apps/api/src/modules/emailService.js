@@ -86,7 +86,7 @@ async function fetchAlertData() {
 function buildHtml({ stagnant, noSales, expirySoon, expired }) {
   const totalNoSalesUnits  = noSales.reduce((s, r)  => s + Number(r.stock || 0), 0);
   const totalStagnantUnits = stagnant.reduce((s, r) => s + Number(r.stock || 0), 0);
-  const monthYear = new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
+  const fechaReporte = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
   const generatedAt = new Date().toLocaleString('es-MX', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
@@ -149,8 +149,8 @@ function buildHtml({ stagnant, noSales, expirySoon, expired }) {
   <!-- Header -->
   <div style="background:linear-gradient(135deg,#5D4037,#8D6E63);padding:32px;text-align:center">
     <h1 style="margin:0 0 6px;color:#fff;font-size:24px;letter-spacing:-.5px">La Casita Deli</h1>
-    <p style="margin:0;color:#D7CCC8;font-size:14px;text-transform:uppercase;letter-spacing:1px">Reporte Mensual de Inventario</p>
-    <p style="margin:8px 0 0;color:#BCAAA4;font-size:13px">${monthYear}</p>
+    <p style="margin:0;color:#D7CCC8;font-size:14px;text-transform:uppercase;letter-spacing:1px">Reporte Semanal de Inventario</p>
+    <p style="margin:8px 0 0;color:#BCAAA4;font-size:13px">${fechaReporte}</p>
   </div>
 
   <div style="padding:32px">
@@ -256,8 +256,8 @@ async function sendMonthlyReport() {
 
   const data    = await fetchAlertData();
   const html    = buildHtml(data);
-  const monthY  = new Date().toLocaleDateString('es-MX', { month: 'long', year: 'numeric' });
-  const subject = `📊 Reporte de Inventario — ${monthY} — La Casita Deli`;
+  const fechaY  = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
+  const subject = `📊 Reporte Semanal de Inventario — ${fechaY} — La Casita Deli`;
   const total   = data.noSales.length + data.stagnant.length + data.expirySoon.length + data.expired.length;
   const to      = process.env.EMAIL_USER || 'lacasitadeli2000@gmail.com';
 
@@ -287,7 +287,7 @@ async function sendMonthlyReport() {
 
   getDb().prepare(`
     INSERT INTO email_report_log (tipo, productos_detectados, noSales, stagnant, expiry, enviado_a)
-    VALUES ('monthly', ?, ?, ?, ?, ?)
+    VALUES ('weekly', ?, ?, ?, ?, ?)
   `).run(total, data.noSales.length, data.stagnant.length, data.expirySoon.length + data.expired.length, to);
 
   return {

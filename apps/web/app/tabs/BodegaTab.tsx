@@ -1272,9 +1272,9 @@ function DiscrepanciasView() {
             <Icon name="mark_email_unread" className="text-xl text-primary" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-body text-on-surface font-semibold">Reporte mensual por correo</p>
+            <p className="text-sm font-body text-on-surface font-semibold">Reporte semanal por correo</p>
             <p className="text-[10px] font-label text-stone-400 mt-0.5 leading-relaxed">
-              Se envía automáticamente el día 1 de cada mes a <span className="font-mono">lacasitadeli2000@gmail.com</span>.<br />
+              Se envía automáticamente todos los lunes a las 8:00 AM a <span className="font-mono">lacasitadeli2000@gmail.com</span>.<br />
               Incluye productos sin venta, inventario estancado y caducidades con porcentajes y unidades.
             </p>
             {reportLog.length > 0 && (
