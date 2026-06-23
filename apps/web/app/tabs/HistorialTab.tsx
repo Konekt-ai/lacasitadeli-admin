@@ -3,6 +3,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
+import { TicketDetalleModal, type TicketKey } from '../components/TicketDetalleModal';
+import type { PolizaTicket } from '../lib/types';
 
 // ── Tipos del endpoint /api/novacaja/dia ──────────────────────────────────────
 interface DiaKPI {
@@ -66,6 +68,13 @@ export default function HistorialView() {
   const [data,      setData]      = useState<DiaData | null>(null);
   const [loading,   setLoading]   = useState(false);
 
+  // Lista de tickets del día (primeros 50 por defecto; "Ver todos" muestra el resto).
+  const [tickets,     setTickets]     = useState<PolizaTicket[]>([]);
+  const [ticketsLoad, setTicketsLoad] = useState(false);
+  const [verTodos,    setVerTodos]    = useState(false);
+  const [ticketModal, setTicketModal] = useState<TicketKey | null>(null);
+  const TOPE = 50;
+
   const fetchDia = useCallback(async (date: string) => {
     setLoading(true);
     try {
@@ -76,7 +85,18 @@ export default function HistorialView() {
     finally { setLoading(false); }
   }, []);
 
+  const fetchTickets = useCallback(async (date: string) => {
+    setTicketsLoad(true);
+    try {
+      const res = await fetch(`/api/novacaja/poliza-ventas?date=${date}`);
+      const d   = await res.json();
+      setTickets(Array.isArray(d.tickets) ? d.tickets : []);
+    } catch { setTickets([]); }
+    finally { setTicketsLoad(false); }
+  }, []);
+
   useEffect(() => { fetchDia(selected); }, [selected, fetchDia]);
+  useEffect(() => { setVerTodos(false); fetchTickets(selected); }, [selected, fetchTickets]);
 
   const shiftMonth = (delta: number) => {
     const d = new Date(viewYear, viewMonth + delta, 1);
@@ -116,6 +136,8 @@ export default function HistorialView() {
   ] : [];
 
   return (
+    <>
+    {ticketModal && <TicketDetalleModal tk={ticketModal} onClose={() => setTicketModal(null)} />}
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-8">
 
         {/* ── Calendario ──────────────────────────────────────────────────────── */}
@@ -263,9 +285,80 @@ export default function HistorialView() {
                   </div>
                 )}
               </div>
+
+              {/* ── Lista de tickets del día (primeros 50 + "Ver todos") ──────── */}
+              <div className="bg-surface p-4 sm:p-6 rounded-xl border border-outline-variant/10">
+                <div className="flex items-baseline justify-between gap-2 flex-wrap mb-1">
+                  <h4 className="text-lg font-serif italic text-primary">Tickets del día</h4>
+                  <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">
+                    {ticketsLoad ? 'Cargando…' : `${tickets.length.toLocaleString('es-MX')} en total`}
+                  </span>
+                </div>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">
+                  {verTodos ? 'Mostrando todos' : `Primeros ${Math.min(TOPE, tickets.length)}`} · toca uno para su desglose
+                </p>
+
+                {ticketsLoad ? (
+                  <div className="py-10 flex justify-center">
+                    <div className="w-7 h-7 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                  </div>
+                ) : tickets.length === 0 ? (
+                  <p className="text-xs font-body text-stone-400 italic py-6 text-center">Sin tickets este día.</p>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto overflow-y-auto max-h-[520px] rounded-lg border border-surface-container">
+                      <table className="w-full text-left">
+                        <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container sticky top-0">
+                          <tr>
+                            <th className="px-4 py-3">Ticket</th>
+                            <th className="px-4 py-3">Hora</th>
+                            <th className="px-4 py-3 text-center">Items</th>
+                            <th className="px-4 py-3 text-right">Importe</th>
+                            <th className="px-4 py-3 text-right">Ganancia</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-surface-container">
+                          {(verTodos ? tickets : tickets.slice(0, TOPE)).map((t, i) => (
+                            <tr key={i}
+                              onClick={() => setTicketModal({
+                                folio: Number(t.folConsecutivo ?? t.ticket),
+                                tda: Number(t.folTda), est: Number(t.folEst), doc: Number(t.folDoc),
+                              })}
+                              className="hover:bg-background transition-colors cursor-pointer">
+                              <td className="px-4 py-2.5">
+                                <span className="font-label font-bold text-primary text-[10px] tracking-widest bg-primary-fixed/30 px-2 py-1 rounded">#{t.ticket}</span>
+                              </td>
+                              <td className="px-4 py-2.5 text-xs text-stone-500 font-body whitespace-nowrap">
+                                {new Date(t.fecha).toLocaleString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                              </td>
+                              <td className="px-4 py-2.5 text-center text-xs text-stone-500 font-body">{t.numProductos}</td>
+                              <td className="px-4 py-2.5 text-right font-body text-sm text-on-surface">
+                                ${Number(t.totalImporte).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <span className={cn('font-serif text-sm font-bold', t.ganancia >= 0 ? 'text-primary' : 'text-error')}>
+                                  ${Number(t.ganancia).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {tickets.length > TOPE && (
+                      <button onClick={() => setVerTodos(v => !v)}
+                        className={cn('w-full mt-4 py-3 rounded-lg font-label text-xs uppercase tracking-widest transition-all',
+                          verTodos ? 'text-stone-400 hover:text-primary' : 'border border-primary/20 text-primary hover:bg-primary hover:text-on-primary')}>
+                        {verTodos ? `Mostrar solo los primeros ${TOPE}` : `Ver todos los ${tickets.length.toLocaleString('es-MX')} tickets`}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>
       </div>
+    </>
   );
 }
