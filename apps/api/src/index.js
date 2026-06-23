@@ -16,7 +16,8 @@ app.use(express.json());
 app.use('/api',          require('./modules/auth'));
 app.use('/api/products', require('./modules/products'));
 app.use('/api/sales',    require('./modules/sales'));
-app.use('/api/novacaja', require('./modules/novacaja'));
+const novacaja = require('./modules/novacaja');
+app.use('/api/novacaja', novacaja);
 app.use('/api/bodega',   require('./modules/bodega'));
 app.use('/api/almacen',  require('./modules/almacen'));
 app.use('/api/facturas', require('./modules/facturas'));
@@ -42,6 +43,14 @@ cron.schedule('0 8 * * 1', async () => {
     console.log('[cron] Reporte semanal enviado:', result);
   } catch (err) {
     console.error('[cron] Error al enviar reporte semanal:', err.message);
+  }
+  // Resumen de ventas (día + semana + mes). Tambien se puede mandar manual desde Análisis.
+  console.log('[cron] Enviando resumen de ventas...');
+  try {
+    const r = await novacaja.enviarResumenVentas();
+    console.log('[cron] Resumen de ventas enviado:', r);
+  } catch (err) {
+    console.error('[cron] Error al enviar resumen de ventas:', err.message);
   }
 }, { timezone: 'America/Mexico_City' });
 

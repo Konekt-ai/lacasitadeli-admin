@@ -1,5 +1,6 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
+import { DayCalendar } from '../components/DayCalendar';
 import dynamic from 'next/dynamic';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
@@ -745,7 +746,11 @@ export default function ReportesTab({ timeFilter }: Props) {
   const [liveTickets,      setLiveTickets]       = useState<LiveTicket[]>([]);
   const [liveLoading,      setLiveLoading]       = useState(false);
   const [lastLiveRefresh,  setLastLiveRefresh]   = useState<Date | null>(null);
-  const [showCostTable,    setShowCostTable]     = useState(false);
+  const [showCostTable,    setShowCostTable]     = useState(true);
+  const [desgloseDate,     setDesgloseDate]      = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   const [showSinCosto,     setShowSinCosto]      = useState(false);
   const [sinCosto,         setSinCosto]          = useState<SinCostoReporte | null>(null);
   const [sinCostoLoading,  setSinCostoLoading]   = useState(false);
@@ -766,17 +771,11 @@ export default function ReportesTab({ timeFilter }: Props) {
     if (!sinCosto && !sinCostoLoading) fetchSinCosto();
   };
 
+  // KPIs del periodo del encabezado (Hoy/Semana/Mes) — del Dashboard, para que las
+  // cifras coincidan exactamente con el Dashboard.
   const fetchData = useCallback(async (period: string) => {
-    setLoading(true);
     try {
-      const [polizaRes, dashRes] = await Promise.all([
-        fetch(`/api/novacaja/poliza-ventas?period=${period}`).then(r => r.json()),
-        fetch(`/api/novacaja/dashboard?period=${period}`).then(r => r.json()).catch(() => null),
-      ]);
-      if (polizaRes.error) { console.error(polizaRes.error); return; }
-      setTickets(polizaRes.tickets   || []);
-      setTotalTickets(polizaRes.totalTickets ?? 0);
-      // Usar los mismos KPIs que Dashboard para garantizar cifras idénticas
+      const dashRes = await fetch(`/api/novacaja/dashboard?period=${period}`).then(r => r.json()).catch(() => null);
       if (dashRes?.kpis) {
         setSummary({
           totalImporte:  dashRes.kpis.totalVentas,
@@ -784,10 +783,19 @@ export default function ReportesTab({ timeFilter }: Props) {
           totalCosto:    dashRes.kpis.totalCosto,
           totalGanancia: dashRes.kpis.ganancia,
         });
-      } else {
-        setSummary(polizaRes.summary ?? null);
       }
-    } catch (e) { console.error('Error cargando reporte', e); }
+    } catch (e) { console.error('Error cargando KPIs', e); }
+  }, []);
+
+  // Desglose: TODOS los tickets de un día (el del calendario), con su detalle.
+  const fetchDesglose = useCallback(async (date: string) => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/novacaja/poliza-ventas?date=${date}`).then(r => r.json());
+      if (res.error) { console.error(res.error); setTickets([]); setTotalTickets(0); return; }
+      setTickets(res.tickets || []);
+      setTotalTickets(res.totalTickets ?? (res.tickets?.length || 0));
+    } catch (e) { console.error('Error desglose', e); setTickets([]); }
     finally { setLoading(false); }
   }, []);
 
@@ -802,6 +810,7 @@ export default function ReportesTab({ timeFilter }: Props) {
   }, []);
 
   useEffect(() => { fetchData(config.period); }, [config.period, fetchData]);
+  useEffect(() => { fetchDesglose(desgloseDate); }, [desgloseDate, fetchDesglose]);
 
   useEffect(() => {
     fetchLiveTickets();
@@ -813,7 +822,10 @@ export default function ReportesTab({ timeFilter }: Props) {
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
   }, [fetchLiveTickets]);
 
-  const limitReached = tickets.length >= config.limit && totalTickets > config.limit;
+  const limitReached = totalTickets > tickets.length && tickets.length > 0;
+  const fechaDesgloseLabel = new Date(desgloseDate + 'T12:00:00').toLocaleDateString('es-MX', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  });
 
   return (
     <section className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
@@ -825,7 +837,7 @@ export default function ReportesTab({ timeFilter }: Props) {
         <div>
           <h2 className="text-2xl lg:text-3xl font-serif italic text-primary">Reporte de Ventas</h2>
           <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
-            Ganancias {config.label} · hasta {config.limit.toLocaleString('es-MX')} tickets
+            Resumen {config.label} · y desglose de todos los tickets por día
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -835,7 +847,7 @@ export default function ReportesTab({ timeFilter }: Props) {
             <span className="text-xs font-label font-bold text-primary uppercase tracking-widest">{timeFilter}</span>
           </div>
           <button
-            onClick={() => fetchData(config.period)}
+            onClick={() => { fetchData(config.period); fetchDesglose(desgloseDate); }}
             className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', loading && 'animate-spin')}>
             <Icon name="refresh" />
           </button>
@@ -992,11 +1004,11 @@ export default function ReportesTab({ timeFilter }: Props) {
           <div className="flex items-center gap-3">
             <Icon name="table_view" className="text-stone-400 text-base" />
             <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-500">
-              Desglose de costos por ticket
+              Todos los tickets de un día
             </span>
             {tickets.length > 0 && (
               <span className="text-[9px] font-label bg-surface-container text-stone-400 px-2 py-0.5 rounded uppercase tracking-widest">
-                {tickets.length.toLocaleString('es-MX')} registros
+                {tickets.length.toLocaleString('es-MX')} tickets
               </span>
             )}
           </div>
@@ -1004,14 +1016,37 @@ export default function ReportesTab({ timeFilter }: Props) {
         </button>
 
         {showCostTable && (
-          loading ? (
-            <div className="py-16 flex flex-col items-center text-stone-400 border-t border-surface-container">
-              <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3" />
-              <p className="text-xs font-label uppercase tracking-widest">Cargando {config.label}...</p>
+          <div className="border-t border-surface-container">
+            {/* Calendario + día seleccionado */}
+            <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start gap-4 border-b border-surface-container">
+              <DayCalendar value={desgloseDate} onChange={setDesgloseDate} />
+              <div className="flex-1 min-w-0">
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-1">Tickets del día</p>
+                <h4 className="font-serif text-xl text-primary capitalize leading-tight">{fechaDesgloseLabel}</h4>
+                <p className="text-sm font-body text-stone-500 mt-2">
+                  {loading ? 'Cargando…' : (
+                    <>
+                      <span className="font-bold text-primary">{tickets.length.toLocaleString('es-MX')}</span> tickets
+                      {limitReached && <span className="text-stone-400"> (de {totalTickets.toLocaleString('es-MX')})</span>}
+                    </>
+                  )}
+                </p>
+                <p className="text-[10px] font-label text-stone-300 mt-2">Toca un ticket para ver su desglose completo</p>
+              </div>
             </div>
-          ) : (
-            <>
-              <div className="overflow-x-auto border-t border-surface-container">
+
+            {loading ? (
+              <div className="py-16 flex flex-col items-center text-stone-400">
+                <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3" />
+                <p className="text-xs font-label uppercase tracking-widest">Cargando tickets…</p>
+              </div>
+            ) : tickets.length === 0 ? (
+              <div className="py-16 flex flex-col items-center text-stone-300">
+                <Icon name="receipt_long" className="text-5xl opacity-20 mb-3" />
+                <p className="text-sm font-label uppercase tracking-widest">Sin ventas este día</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto overflow-y-auto max-h-[640px]">
                 <table className="w-full text-left">
                   <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
                     <tr>
@@ -1062,33 +1097,8 @@ export default function ReportesTab({ timeFilter }: Props) {
                   </tbody>
                 </table>
               </div>
-
-              {tickets.length === 0 && (
-                <div className="py-16 flex flex-col items-center text-stone-300 border-t border-surface-container">
-                  <Icon name="receipt_long" className="text-5xl opacity-20 mb-3" />
-                  <p className="text-sm font-label uppercase tracking-widest">Sin datos {config.label}</p>
-                </div>
-              )}
-
-              {tickets.length > 0 && (
-                <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
-                  <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-                    {tickets.length.toLocaleString('es-MX')} tickets
-                    {limitReached && (
-                      <span className="ml-1 text-primary font-bold">
-                        · {totalTickets.toLocaleString('es-MX')} en total
-                      </span>
-                    )}
-                  </p>
-                  {limitReached && (
-                    <span className="text-[9px] font-label bg-primary/10 text-primary px-2 py-0.5 rounded uppercase tracking-widest">
-                      Límite alcanzado
-                    </span>
-                  )}
-                </div>
-              )}
-            </>
-          )
+            )}
+          </div>
         )}
       </div>
 

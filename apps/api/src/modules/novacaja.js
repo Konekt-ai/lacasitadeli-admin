@@ -254,19 +254,25 @@ async function kpisDelPeriodo(period, maxDate) {
   };
 }
 
+// Calcula el resumen de ventas (día + semana + mes + top del mes) y lo manda por
+// correo. Reusado por el endpoint manual (Análisis) y por el cron del lunes.
+async function enviarResumenVentas() {
+  const maxDate = await getMaxDateString();
+  const [dia, semana, mes, topRes] = await Promise.all([
+    kpisDelPeriodo('day'),
+    kpisDelPeriodo('week',  maxDate),
+    kpisDelPeriodo('month', maxDate),
+    heavy(buildTopProductsQuery({ period: 'month', limit: 5, maxDate })),
+  ]);
+  return emailSvc.sendSalesSummary({ dia, semana, mes, topProductos: topRes.recordset || [] });
+}
+
 // ── POST /api/novacaja/enviar-resumen — manda por correo el resumen de ventas ──
 // (día + semana + mes + top productos del mes). Para que el cliente lo vea a media
 // semana sin esperar al correo automático del lunes.
 router.post('/enviar-resumen', async (req, res) => {
   try {
-    const maxDate = await getMaxDateString();
-    const [dia, semana, mes, topRes] = await Promise.all([
-      kpisDelPeriodo('day'),
-      kpisDelPeriodo('week',  maxDate),
-      kpisDelPeriodo('month', maxDate),
-      heavy(buildTopProductsQuery({ period: 'month', limit: 5, maxDate })),
-    ]);
-    const result = await emailSvc.sendSalesSummary({ dia, semana, mes, topProductos: topRes.recordset || [] });
+    const result = await enviarResumenVentas();
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error('Error enviar-resumen:', err.message);
@@ -1023,3 +1029,4 @@ setTimeout(prewarm, 20_000);
 setInterval(prewarm, 480_000);
 
 module.exports = router;
+module.exports.enviarResumenVentas = enviarResumenVentas; // para el cron del lunes
