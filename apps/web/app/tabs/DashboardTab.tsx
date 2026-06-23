@@ -432,6 +432,19 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
           )}
         </div>
       </div>
+
+      {/* ── Botón grande: Ver Historial por día ───────────────────────────────── */}
+      <button onClick={() => { setDashView('historial'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+        className="w-full mt-8 p-5 sm:p-6 rounded-2xl bg-primary text-on-primary flex items-center gap-4 shadow-lg hover:bg-primary/90 transition-all">
+        <span className="w-12 h-12 rounded-xl bg-white/15 flex items-center justify-center flex-shrink-0">
+          <Icon name="calendar_month" className="text-2xl" />
+        </span>
+        <span className="text-left flex-1 min-w-0">
+          <span className="block font-serif text-lg sm:text-xl">Ver Historial por día</span>
+          <span className="block text-[11px] font-label uppercase tracking-widest opacity-80">Ventas, costos y ganancia de cualquier día pasado</span>
+        </span>
+        <Icon name="arrow_forward" className="text-2xl flex-shrink-0" />
+      </button>
       </>
       )}
     </section>
