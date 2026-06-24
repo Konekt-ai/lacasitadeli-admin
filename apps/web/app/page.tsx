@@ -202,7 +202,7 @@ export default function Dashboard() {
               <div className="hidden lg:flex items-center gap-2 text-stone-500 font-label text-[10px] uppercase tracking-widest">
                 <div className="h-6 w-px bg-stone-200" />
                 <Icon name="calendar_today" className="text-lg" />
-                <span>{new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'short' })}</span>
+                <span>{new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'short', timeZone: 'America/Mexico_City' })}</span>
               </div>
             </div>
           </div>

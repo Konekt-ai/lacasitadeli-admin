@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { DayCalendar } from '../components/DayCalendar';
 import { TicketDetalleModal, type TicketKey } from '../components/TicketDetalleModal';
 import dynamic from 'next/dynamic';
-import { cn } from '../lib/utils';
+import { cn, hoyMX, diasAtrasMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import type { PolizaTicket, PolizaSummary } from '../lib/types';
 
@@ -39,7 +39,7 @@ interface SyncSession {
 }
 
 function ConteoView() {
-  const today   = new Date().toISOString().slice(0, 10);
+  const today   = hoyMX();
   const [startDate, setStartDate] = useState(today);
   const [endDate,   setEndDate]   = useState(today);
   const [preview,   setPreview]   = useState<ConteoItem[]>([]);
@@ -54,11 +54,8 @@ function ConteoView() {
   };
 
   const setPreset = (days: number) => {
-    const end   = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - days);
-    setStartDate(start.toISOString().slice(0, 10));
-    setEndDate(end.toISOString().slice(0, 10));
+    setStartDate(diasAtrasMX(days));
+    setEndDate(hoyMX());
     setPreview([]);
   };
 
@@ -321,7 +318,7 @@ interface BusquedaProducto {
 }
 
 function SalidaView() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = hoyMX();
   const [fecha,   setFecha]   = useState(today);
   const [rows,    setRows]    = useState<SalidaRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -623,10 +620,7 @@ export default function ReportesTab({ timeFilter }: Props) {
   const [liveLoading,      setLiveLoading]       = useState(false);
   const [lastLiveRefresh,  setLastLiveRefresh]   = useState<Date | null>(null);
   const [showCostTable,    setShowCostTable]     = useState(true);
-  const [desgloseDate,     setDesgloseDate]      = useState<string>(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  });
+  const [desgloseDate,     setDesgloseDate]      = useState<string>(hoyMX());
   const [showSinCosto,     setShowSinCosto]      = useState(false);
   const [sinCosto,         setSinCosto]          = useState<SinCostoReporte | null>(null);
   const [sinCostoLoading,  setSinCostoLoading]   = useState(false);

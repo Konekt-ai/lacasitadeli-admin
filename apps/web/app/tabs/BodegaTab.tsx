@@ -1,6 +1,6 @@
 ﻿'use client';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { cn } from '../lib/utils';
+import { cn, hoyMX, diasAtrasMX, mesMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import type {
   Area, AreaConfig, AreaCount, AreaProduct, ExpiryRecord,
@@ -555,11 +555,11 @@ function MermaView() {
   const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const [tc52Records, setTc52Records] = useState<MermaTC52Record[]>([]);
   const [tc52Loading, setTc52Loading] = useState(false);
-  const [tc52Fecha, setTc52Fecha] = useState(new Date().toISOString().slice(0, 10));
+  const [tc52Fecha, setTc52Fecha] = useState(hoyMX());
   const [tc52Collapsed, setTc52Collapsed] = useState(false);
   const [stats,        setStats]        = useState<MermaStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
-  const [statsMes,     setStatsMes]     = useState(new Date().toISOString().slice(0, 7));
+  const [statsMes,     setStatsMes]     = useState(mesMX());
   const [statsCollapsed, setStatsCollapsed] = useState(false);
 
   const fetchTc52Merma = useCallback(async (fecha: string) => {
@@ -711,9 +711,9 @@ function MermaView() {
     finally { setSending(false); }
   };
 
-  const today    = new Date().toISOString().slice(0, 10);
-  const in7      = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10);
-  const in30     = new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10);
+  const today    = hoyMX();
+  const in7      = diasAtrasMX(-7);
+  const in30     = diasAtrasMX(-30);
   const expired  = records.filter(r => r.fecha_caducidad < today);
   const critical = records.filter(r => r.fecha_caducidad >= today && r.fecha_caducidad <= in7);
   const warning  = records.filter(r => r.fecha_caducidad > in7 && r.fecha_caducidad <= in30);
@@ -1625,8 +1625,10 @@ function Tc52StockPanel() {
 
 function ZebraView() {
   const { areas, areaMap } = useAreasCtx();
-  const today = new Date().toISOString().slice(0, 10);
-  const diasAtras = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+  // Hora de Ciudad de México: los botones Hoy/Ayer/7 días filtran el día correcto
+  // sin importar la zona horaria del celular que abre el panel.
+  const today = hoyMX();
+  const diasAtras = (n: number) => diasAtrasMX(n);
   const [movimientos, setMovimientos] = useState<MovimientoUnificado[]>([]);
   const [loading,     setLoading]     = useState(false);
   // Rango de fechas (por defecto: últimos 7 días, para ver los movimientos recientes)

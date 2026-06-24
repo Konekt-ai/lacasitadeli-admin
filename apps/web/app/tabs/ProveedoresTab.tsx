@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import * as XLSX from 'xlsx';
-import { cn } from '../lib/utils';
+import { cn, hoyMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 
 type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
@@ -159,7 +159,7 @@ export default function ProveedoresTab({ timeFilter }: Props) {
 
   const exportToExcel = () => {
     const wb          = XLSX.utils.book_new();
-    const date        = new Date().toISOString().slice(0, 10);
+    const date        = hoyMX();
     const currFmt     = '"$"#,##0.00';
     const pctFmt      = '0.00"%"';
     const pLabel: Record<string, string> = { day: 'Hoy', week: 'Esta semana', month: 'Este mes' };

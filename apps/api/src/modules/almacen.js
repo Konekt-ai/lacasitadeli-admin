@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const mssql    = require('../db/mssql');
+const { hoyMX, diasAtrasMX, mesMX, SQLITE_MX } = require('../util/fechas');
 
 const router = express.Router();
 
@@ -272,13 +273,14 @@ router.post('/salida', async (req, res) => {
 // ── GET /api/almacen/movimientos ──────────────────────────────────────────────
 router.get('/movimientos', (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = hoyMX();
+    // created_at se guarda en UTC; comparamos por día en hora de CDMX (-6h).
     const rows  = getDb().prepare(`
       SELECT id, art_codigo AS codigo, nombre, tipo, cantidad,
              stock_antes, stock_despues, COALESCE(area,'bodega') AS area, usuario,
-             created_at AS fecha
+             datetime(created_at, '${SQLITE_MX}') AS fecha
       FROM almacen_movimientos
-      WHERE DATE(created_at) = ?
+      WHERE DATE(created_at, '${SQLITE_MX}') = ?
       ORDER BY created_at DESC
       LIMIT 100
     `).all(today);
@@ -295,7 +297,7 @@ router.get('/movimientos/historial', (req, res) => {
     const conditions = [];
     const params     = [];
 
-    if (fecha) { conditions.push('DATE(created_at) = ?'); params.push(fecha); }
+    if (fecha) { conditions.push(`DATE(created_at, '${SQLITE_MX}') = ?`); params.push(fecha); }
     if (tipo === 'entrada' || tipo === 'salida') { conditions.push('tipo = ?'); params.push(tipo); }
     if (area) { conditions.push("COALESCE(area,'bodega') = ?"); params.push(area); }
 
@@ -305,7 +307,7 @@ router.get('/movimientos/historial', (req, res) => {
     const rows = getDb().prepare(`
       SELECT id, art_codigo AS codigo, nombre, tipo, cantidad,
              stock_antes, stock_despues, COALESCE(area,'bodega') AS area, usuario,
-             created_at AS fecha
+             datetime(created_at, '${SQLITE_MX}') AS fecha
       FROM almacen_movimientos
       ${where}
       ORDER BY created_at DESC
@@ -321,14 +323,21 @@ router.get('/movimientos/historial', (req, res) => {
 router.get('/movimientos/todos', async (req, res) => {
   const { tipo, area, limit = 300 } = req.query;
   try {
-    const hoy = new Date().toISOString().slice(0, 10);
+    const hoy = hoyMX();   // hoy en hora de CDMX
     // Rango de fechas: ?fecha= (un día), ?desde=&hasta=, o por defecto últimos 7 días.
     let desde, hasta;
     if (req.query.fecha)                         { desde = hasta = req.query.fecha; }
     else if (req.query.desde || req.query.hasta) { desde = req.query.desde || '2000-01-01'; hasta = req.query.hasta || hoy; }
-    else { const d = new Date(); d.setDate(d.getDate() - 6); desde = d.toISOString().slice(0, 10); hasta = hoy; }
+    else { desde = diasAtrasMX(6); hasta = hoy; }
     const cap = Math.min(parseInt(limit) || 300, 500);
 
+    // IMPORTANTE — dos zonas horarias conviven en este endpoint y se normalizan a CDMX:
+    //  · SQLite (almacen_movimientos, merma_registros, surtido_transfers): created_at
+    //    en UTC → se filtra y se proyecta con datetime(created_at, '-6 hours') = CDMX.
+    //  · MSSQL movimientos_bodega: m.fecha = GETDATE() = hora local de la tienda = CDMX
+    //    ya, por eso se compara/convierte SIN desfase (CAST(m.fecha AS DATE)).
+    // Así el filtro por día, el orden y la hora mostrada quedan todos en CDMX. NO igualar
+    // ciegamente ambos filtros: tienen orígenes de zona distintos a propósito.
     const rows = getDb().prepare(`
       SELECT
         'entrada-' || m.id       AS uid,
@@ -343,9 +352,9 @@ router.get('/movimientos/todos', async (req, res) => {
         NULL                     AS motivo,
         m.notas,
         m.usuario,
-        m.created_at             AS fecha
+        datetime(m.created_at, '${SQLITE_MX}') AS fecha
       FROM almacen_movimientos m
-      WHERE m.tipo = 'entrada' AND DATE(m.created_at) BETWEEN ? AND ?
+      WHERE m.tipo = 'entrada' AND DATE(m.created_at, '${SQLITE_MX}') BETWEEN ? AND ?
 
       UNION ALL
 
@@ -362,9 +371,9 @@ router.get('/movimientos/todos', async (req, res) => {
         NULL,
         m.notas,
         m.usuario,
-        m.created_at
+        datetime(m.created_at, '${SQLITE_MX}')
       FROM almacen_movimientos m
-      WHERE m.tipo = 'salida' AND DATE(m.created_at) BETWEEN ? AND ?
+      WHERE m.tipo = 'salida' AND DATE(m.created_at, '${SQLITE_MX}') BETWEEN ? AND ?
 
       UNION ALL
 
@@ -381,9 +390,9 @@ router.get('/movimientos/todos', async (req, res) => {
         mr.motivo,
         mr.notas,
         mr.usuario,
-        mr.created_at
+        datetime(mr.created_at, '${SQLITE_MX}')
       FROM merma_registros mr
-      WHERE DATE(mr.created_at) BETWEEN ? AND ?
+      WHERE DATE(mr.created_at, '${SQLITE_MX}') BETWEEN ? AND ?
 
       UNION ALL
 
@@ -400,9 +409,9 @@ router.get('/movimientos/todos', async (req, res) => {
         NULL,
         st.notas,
         'Bodega',
-        st.created_at
+        datetime(st.created_at, '${SQLITE_MX}')
       FROM surtido_transfers st
-      WHERE st.autorizado = 1 AND DATE(st.created_at) BETWEEN ? AND ?
+      WHERE st.autorizado = 1 AND DATE(st.created_at, '${SQLITE_MX}') BETWEEN ? AND ?
 
       ORDER BY fecha DESC
       LIMIT ${cap}
@@ -556,12 +565,12 @@ router.post('/merma', async (req, res) => {
 
 router.get('/merma', (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = hoyMX();
     const rows  = getDb().prepare(`
       SELECT id, art_codigo AS codigo, nombre, motivo, area, cantidad,
-             stock_antes, stock_despues, notas, usuario, created_at AS fecha
+             stock_antes, stock_despues, notas, usuario, datetime(created_at, '${SQLITE_MX}') AS fecha
       FROM merma_registros
-      WHERE DATE(created_at) = ?
+      WHERE DATE(created_at, '${SQLITE_MX}') = ?
       ORDER BY created_at DESC
       LIMIT 100
     `).all(today);
@@ -615,9 +624,9 @@ async function fetchMermaRows({ desde, hasta, motivo = null, area = null } = {})
   try {
     const rows = getDb().prepare(`
       SELECT id, art_codigo AS codigo, nombre, motivo, area, cantidad,
-             stock_antes, stock_despues, notas, usuario, created_at AS fecha
+             stock_antes, stock_despues, notas, usuario, datetime(created_at, '${SQLITE_MX}') AS fecha
       FROM merma_registros
-      WHERE DATE(created_at) BETWEEN ? AND ?
+      WHERE DATE(created_at, '${SQLITE_MX}') BETWEEN ? AND ?
     `).all(desde, hasta);
     for (const m of rows) {
       out.push({ ...m, id: `adm-${m.id}`, cantidad: Math.abs(Number(m.cantidad) || 0) });
@@ -646,7 +655,7 @@ function _agruparMerma(rows, keyFn, extraFn) {
 
 // ── GET /api/almacen/merma/stats — estadísticas por período ──────────────────
 router.get('/merma/stats', async (req, res) => {
-  const periodo = (req.query.mes || new Date().toISOString().slice(0, 7));
+  const periodo = (req.query.mes || mesMX());
   try {
     const [y, mo] = periodo.split('-').map(Number);
     if (!y || !mo) return res.status(400).json({ error: 'mes inválido (YYYY-MM)' });
@@ -679,7 +688,7 @@ router.get('/merma/stats', async (req, res) => {
 router.get('/merma/historial', async (req, res) => {
   const { fecha, motivo, area, limit = 300 } = req.query;
   try {
-    const dia = fecha || new Date().toISOString().slice(0, 10);
+    const dia = fecha || hoyMX();
     const cap = Math.min(parseInt(limit) || 300, 500);
     const rows = await fetchMermaRows({ desde: dia, hasta: dia, motivo, area });
     res.json(rows.slice(0, cap));

@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { cn } from '../lib/utils';
+import { cn, hoyMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import { TicketDetalleModal, type TicketKey } from '../components/TicketDetalleModal';
 import type { PolizaTicket } from '../lib/types';
@@ -59,12 +59,14 @@ const HoraTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function HistorialView() {
-  const today    = useMemo(() => new Date(), []);
-  const todayISO = toISO(today);
+  // "Hoy" SIEMPRE en hora de Ciudad de México, no en la zona del dispositivo.
+  const todayISO = useMemo(() => hoyMX(), []);
+  const ty = Number(todayISO.slice(0, 4));     // año CDMX
+  const tm = Number(todayISO.slice(5, 7)) - 1; // mes CDMX (0-11)
 
   const [selected,  setSelected]  = useState<string>(todayISO);
-  const [viewYear,  setViewYear]  = useState(today.getFullYear());
-  const [viewMonth, setViewMonth] = useState(today.getMonth()); // 0-11
+  const [viewYear,  setViewYear]  = useState(ty);
+  const [viewMonth, setViewMonth] = useState(tm); // 0-11
   const [data,      setData]      = useState<DiaData | null>(null);
   const [loading,   setLoading]   = useState(false);
 
@@ -111,7 +113,7 @@ export default function HistorialView() {
     ...Array(startWeekday).fill(null),
     ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
   ];
-  const enFuturo = viewYear > today.getFullYear() || (viewYear === today.getFullYear() && viewMonth >= today.getMonth());
+  const enFuturo = viewYear > ty || (viewYear === ty && viewMonth >= tm);
 
   const kpis = data?.kpis;
   const pct  = kpis && kpis.totalVentas > 0 ? ((kpis.ganancia / kpis.totalVentas) * 100).toFixed(1) : '0.0';
@@ -184,7 +186,7 @@ export default function HistorialView() {
             </div>
 
             <button
-              onClick={() => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); setSelected(todayISO); }}
+              onClick={() => { setViewYear(ty); setViewMonth(tm); setSelected(todayISO); }}
               className="mt-5 w-full py-2 rounded-lg bg-surface-container-low text-[11px] font-label font-bold uppercase tracking-widest text-stone-500 hover:text-primary hover:bg-primary/5 transition-colors">
               Ir a hoy
             </button>

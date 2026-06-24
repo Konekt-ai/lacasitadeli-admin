@@ -1,6 +1,7 @@
 const express = require('express');
 const { getDb } = require('../db');
 const mssql    = require('../db/mssql');
+const { hoyMX, diasAtrasMX, SQLITE_MX } = require('../util/fechas');
 
 const router = express.Router();
 
@@ -294,7 +295,7 @@ router.get('/consumo-area', (req, res) => {
     let sql = `SELECT * FROM consumo_area WHERE 1=1`;
     const params = [];
     if (area)  { sql += ` AND area = ?`;           params.push(area); }
-    if (fecha) { sql += ` AND date(created_at) = ?`; params.push(fecha); }
+    if (fecha) { sql += ` AND date(created_at, '${SQLITE_MX}') = ?`; params.push(fecha); }
     sql += ` ORDER BY created_at DESC LIMIT 200`;
     res.json(db.prepare(sql).all(...params));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -388,8 +389,8 @@ router.get('/alerts', async (req, res) => {
     if (cached) return res.json(cached);
 
     const db    = getDb();
-    const today = new Date().toISOString().slice(0, 10);
-    const in30  = new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10);
+    const today = hoyMX();
+    const in30  = diasAtrasMX(-30);
 
     const expirySoon = db.prepare(
       `SELECT * FROM product_expiry WHERE fecha_caducidad BETWEEN ? AND ? ORDER BY fecha_caducidad ASC`

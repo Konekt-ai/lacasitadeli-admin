@@ -1,6 +1,6 @@
 'use client';
 import React, { useMemo, useState } from 'react';
-import { cn } from '../lib/utils';
+import { cn, hoyMX } from '../lib/utils';
 import { Icon } from './Icon';
 
 const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
@@ -11,8 +11,10 @@ const toISO = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.
 // Calendario para elegir un día (no permite días futuros). value/onChange en ISO
 // 'YYYY-MM-DD'. Reusable (Reportes, etc.).
 export function DayCalendar({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
-  const today    = useMemo(() => new Date(), []);
-  const todayISO = toISO(today);
+  // "Hoy" SIEMPRE en hora de Ciudad de México, no en la zona del dispositivo.
+  const todayISO = useMemo(() => hoyMX(), []);
+  const ty       = Number(todayISO.slice(0, 4));     // año CDMX
+  const tm       = Number(todayISO.slice(5, 7)) - 1; // mes CDMX (0-11)
   const sel      = value || todayISO;
   const [vy, setVy] = useState(Number(sel.slice(0, 4)));
   const [vm, setVm] = useState(Number(sel.slice(5, 7)) - 1); // 0-11
@@ -21,7 +23,7 @@ export function DayCalendar({ value, onChange }: { value: string; onChange: (iso
   const startWeekday = (new Date(vy, vm, 1).getDay() + 6) % 7; // Lunes = 0
   const daysInMonth  = new Date(vy, vm + 1, 0).getDate();
   const cells: (number | null)[] = [...Array(startWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
-  const enFuturo = vy > today.getFullYear() || (vy === today.getFullYear() && vm >= today.getMonth());
+  const enFuturo = vy > ty || (vy === ty && vm >= tm);
 
   return (
     <div className="bg-surface p-4 rounded-xl border border-outline-variant/10 w-full sm:w-[280px]">

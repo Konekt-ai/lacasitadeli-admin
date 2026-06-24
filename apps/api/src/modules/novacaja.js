@@ -321,7 +321,7 @@ router.get('/dia', async (req, res) => {
       byHour:      horaRes.recordset || [],
     };
 
-    const esHoy = date === new Date().toISOString().slice(0, 10);
+    const esHoy = date === require('../util/fechas').hoyMX();
     _set(cacheKey, result, esHoy ? 60_000 : 1800_000); // hoy 60 s · pasado 30 min
     res.json(result);
   } catch (err) {

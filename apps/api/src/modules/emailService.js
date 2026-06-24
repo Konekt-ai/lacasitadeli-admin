@@ -1,5 +1,6 @@
 const mssql     = require('../db/mssql');
 const { getDb } = require('../db');
+const { hoyMX, diasAtrasMX } = require('../util/fechas');
 
 function fmt(d) {
   if (!d) return '—';
@@ -17,8 +18,8 @@ function num(n) {
 
 async function fetchAlertData() {
   const db    = getDb();
-  const today = new Date().toISOString().slice(0, 10);
-  const in30  = new Date(Date.now() + 30 * 86400_000).toISOString().slice(0, 10);
+  const today = hoyMX();
+  const in30  = diasAtrasMX(-30);
 
   const expirySoon = db.prepare(
     `SELECT * FROM product_expiry WHERE fecha_caducidad BETWEEN ? AND ? ORDER BY fecha_caducidad ASC`

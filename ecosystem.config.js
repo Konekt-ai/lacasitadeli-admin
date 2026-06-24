@@ -20,7 +20,7 @@ module.exports = {
       error_file: path.join(ROOT, 'logs', 'api-error.log'),
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      env: { NODE_ENV: 'production' },
+      env: { NODE_ENV: 'production', TZ: 'America/Mexico_City' },
     },
 
     // ── Panel Web Next.js (puerto 3001) ───────────────────────────────────────
@@ -37,7 +37,7 @@ module.exports = {
       error_file: path.join(ROOT, 'logs', 'web-error.log'),
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      env: { NODE_ENV: 'production', PORT: '3001' },
+      env: { NODE_ENV: 'production', PORT: '3001', TZ: 'America/Mexico_City' },
     },
 
     // ── PWA Zebra TC52 (puerto 3003) ──────────────────────────────────────────
@@ -52,6 +52,7 @@ module.exports = {
       error_file: path.join(ROOT, 'logs', 'pwa-error.log'),
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
+      env: { TZ: 'America/Mexico_City' },
     },
   ],
 }

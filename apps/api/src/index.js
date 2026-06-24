@@ -1,3 +1,8 @@
+// Forzar la zona horaria de todo el proceso a Ciudad de México (UTC-6, sin horario
+// de verano). Debe ir ANTES de cualquier uso de fechas para que los logs, los Date
+// locales y los cron usen la hora del negocio sin importar la config del servidor.
+process.env.TZ = 'America/Mexico_City';
+
 require('dotenv').config();
 const express    = require('express');
 const cors       = require('cors');

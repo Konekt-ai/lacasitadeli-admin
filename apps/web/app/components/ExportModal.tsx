@@ -1,7 +1,7 @@
 'use client';
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
-import { cn } from '../lib/utils';
+import { cn, hoyMX } from '../lib/utils';
 import { Icon } from './Icon';
 
 type PeriodOption = 'day' | 'week' | 'month' | 'custom';
@@ -91,7 +91,7 @@ function toExcel(rows: ExportRow[], sheetName: string) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
 
-  const date = new Date().toISOString().slice(0, 10);
+  const date = hoyMX();
   XLSX.writeFile(wb, `reporte-ventas-${sheetName.toLowerCase().replace(/ /g, '-')}-${date}.xlsx`);
 }
 
