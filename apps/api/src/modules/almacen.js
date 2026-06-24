@@ -461,7 +461,57 @@ router.get('/movimientos/todos', async (req, res) => {
     if (tipo && tipo !== 'todos') resultado = resultado.filter(r => r.tipo === tipo);
     if (area) resultado = resultado.filter(r => r.area_origen === area || r.area_destino === area);
 
-    res.json(resultado);
+    // ── Totales REALES del rango para las TARJETAS ────────────────────────────
+    // El listado de arriba va TOPADO (cap=300 más recientes), así que contar ESE
+    // listado daba el mismo número en Hoy/Ayer/7 días/Todo (lo dominaba el día más
+    // reciente). Las tarjetas se calculan por AGREGACIÓN (COUNT/SUM) sobre todo el
+    // rango: SIEMPRE muestra las 4 (no depende del filtro de tipo) y sí del área.
+    const areaKeyOf = (u) => String(u || 'Bodega').toLowerCase().replace(/\s+/g, '_');
+    const totales = { entrada:{n:0,uds:0}, salida:{n:0,uds:0}, merma:{n:0,uds:0}, transferencia:{n:0,uds:0} };
+    const addTot  = (t, n, uds) => { if (totales[t]) { totales[t].n += Number(n)||0; totales[t].uds += Math.abs(Number(uds)||0); } };
+
+    try {
+      const agg = await mssql.query(`
+        SELECT LOWER(LTRIM(RTRIM(m.tipo))) AS tipo, m.ubicacion AS ubicacion,
+               COUNT(*) AS n, SUM(ABS(m.cantidad)) AS uds
+        FROM [compucaja].[dbo].[movimientos_bodega] m WITH (NOLOCK)
+        WHERE CAST(m.fecha AS DATE) BETWEEN '${esc(desde)}' AND '${esc(hasta)}'
+        GROUP BY LOWER(LTRIM(RTRIM(m.tipo))), m.ubicacion
+        OPTION (MAXDOP 1)
+      `);
+      for (const r of (agg.recordset || [])) {
+        if (area && areaKeyOf(r.ubicacion) !== area) continue;
+        addTot(r.tipo === 'traslado' ? 'transferencia' : r.tipo, r.n, r.uds);
+      }
+    } catch (e) { console.error('totales TC52:', e.message); }
+
+    try {
+      const sdb = getDb();
+      for (const r of sdb.prepare(`
+        SELECT tipo, COALESCE(area,'bodega') AS area, COUNT(*) n, SUM(cantidad) uds
+        FROM almacen_movimientos
+        WHERE tipo IN ('entrada','salida') AND DATE(created_at, '${SQLITE_MX}') BETWEEN ? AND ?
+        GROUP BY tipo, COALESCE(area,'bodega')`).all(desde, hasta)) {
+        if (area && r.area !== area) continue;
+        addTot(r.tipo, r.n, r.uds);
+      }
+      for (const r of sdb.prepare(`
+        SELECT COALESCE(area,'bodega') AS area, COUNT(*) n, SUM(cantidad) uds
+        FROM merma_registros WHERE DATE(created_at, '${SQLITE_MX}') BETWEEN ? AND ?
+        GROUP BY COALESCE(area,'bodega')`).all(desde, hasta)) {
+        if (area && r.area !== area) continue;
+        addTot('merma', r.n, r.uds);
+      }
+      for (const r of sdb.prepare(`
+        SELECT de_area, a_area, COUNT(*) n, SUM(cantidad) uds
+        FROM surtido_transfers WHERE autorizado = 1 AND DATE(created_at, '${SQLITE_MX}') BETWEEN ? AND ?
+        GROUP BY de_area, a_area`).all(desde, hasta)) {
+        if (area && r.de_area !== area && r.a_area !== area) continue;
+        addTot('transferencia', r.n, r.uds);
+      }
+    } catch (e) { console.error('totales SQLite:', e.message); }
+
+    res.json({ movimientos: resultado, totales });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

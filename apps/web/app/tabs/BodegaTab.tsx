@@ -1630,6 +1630,8 @@ function ZebraView() {
   const today = hoyMX();
   const diasAtras = (n: number) => diasAtrasMX(n);
   const [movimientos, setMovimientos] = useState<MovimientoUnificado[]>([]);
+  // Totales REALES del rango (vienen del backend por agregación), para las tarjetas.
+  const [totales,     setTotales]     = useState<Record<TipoMovimiento, { n: number; uds: number }> | null>(null);
   const [loading,     setLoading]     = useState(false);
   // Rango de fechas (por defecto: últimos 7 días, para ver los movimientos recientes)
   const [desde,       setDesde]       = useState(diasAtras(6));
@@ -1645,7 +1647,13 @@ function ZebraView() {
       if (tipo !== 'todos') params.set('tipo', tipo);
       if (areaFiltro !== 'todas') params.set('area', areaFiltro);
       const data = await fetch(`/api/almacen/movimientos/todos?${params}`).then(r => r.json());
-      if (Array.isArray(data)) { setMovimientos(data); setLastRefresh(new Date()); }
+      if (data && Array.isArray(data.movimientos)) {
+        setMovimientos(data.movimientos);
+        setTotales(data.totales ?? null);
+        setLastRefresh(new Date());
+      } else if (Array.isArray(data)) { // compat por si el backend aún no está actualizado
+        setMovimientos(data); setTotales(null); setLastRefresh(new Date());
+      }
     } catch { /* silent */ }
     finally { setLoading(false); }
   }, [desde, hasta, tipo, areaFiltro]);
@@ -1657,6 +1665,12 @@ function ZebraView() {
     for (const m of movimientos) acc[m.tipo]?.push(m);
     return acc;
   }, [movimientos]);
+
+  // Total real de movimientos del rango (suma de las 4 tarjetas) — el listado va topado.
+  const totalMovs = useMemo(
+    () => totales ? Object.values(totales).reduce((s, x) => s + x.n, 0) : movimientos.length,
+    [totales, movimientos.length],
+  );
 
   // Opciones del filtro de Área: las configuradas + las que REALMENTE aparecen en
   // los movimientos (p.ej. una mal escrita como "Bogeda"), para poder filtrarlas.
@@ -1750,14 +1764,17 @@ function ZebraView() {
       {/* Tarjetas resumen */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
         {(['entrada', 'salida', 'merma', 'transferencia'] as TipoMovimiento[]).map(t => {
-          const items = byTipo[t];
-          const total = items.reduce((s, m) => s + Number(m.cantidad), 0);
+          // Tarjetas = totales REALES del rango (agregación del backend). Fallback al
+          // listado solo si el backend viejo aún no manda `totales`.
+          const tot   = totales?.[t];
+          const count = tot ? tot.n   : byTipo[t].length;
+          const uds   = tot ? tot.uds : byTipo[t].reduce((s, m) => s + Number(m.cantidad), 0);
           const meta  = TIPO_META[t];
           return (
             <div key={t} className={cn('rounded-xl p-4 text-center', meta.badgeCls.replace('border', '').replace('border-emerald-200', '').replace('border-red-200', '').replace('border-orange-200', '').replace('border-blue-200', ''))}>
               <p className="text-[10px] font-label uppercase tracking-widest mb-1">{meta.label}</p>
-              <p className="text-2xl font-serif">{items.length}</p>
-              <p className="text-[10px] font-label mt-1">{meta.sign}{total.toLocaleString('es-MX')} uds</p>
+              <p className="text-2xl font-serif">{count.toLocaleString('es-MX')}</p>
+              <p className="text-[10px] font-label mt-1">{meta.sign}{uds.toLocaleString('es-MX')} uds</p>
             </div>
           );
         })}
@@ -1845,14 +1862,15 @@ function ZebraView() {
           </div>
           <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
             <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-              {movimientos.length} movimientos · {desde === hasta ? desde : `${desde} a ${hasta}`}
+              {totalMovs > movimientos.length
+                ? `Mostrando ${movimientos.length} de ${totalMovs.toLocaleString('es-MX')} movimientos`
+                : `${totalMovs.toLocaleString('es-MX')} movimientos`} · {desde === hasta ? desde : `${desde} a ${hasta}`}
             </p>
             <div className="flex gap-3 text-[10px] font-label text-stone-400">
-              {(['entrada', 'salida', 'merma', 'transferencia'] as TipoMovimiento[]).map(t =>
-                byTipo[t].length > 0 ? (
-                  <span key={t}>{TIPO_META[t].label}: {byTipo[t].length}</span>
-                ) : null
-              )}
+              {(['entrada', 'salida', 'merma', 'transferencia'] as TipoMovimiento[]).map(t => {
+                const n = totales?.[t]?.n ?? byTipo[t].length;
+                return n > 0 ? <span key={t}>{TIPO_META[t].label}: {n.toLocaleString('es-MX')}</span> : null;
+              })}
             </div>
           </div>
         </div>
