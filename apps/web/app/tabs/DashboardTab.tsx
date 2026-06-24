@@ -412,7 +412,8 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
           ) : (
             <div className="divide-y divide-surface-container">
               {recentTickets.map((t, i) => (
-                <div key={t.folio} className={cn('flex items-center px-5 py-3 hover:bg-background transition-colors', i === 0 && 'bg-emerald-50/40')}>
+                // FolConsecutivo NO es único; agregamos el índice para evitar keys duplicadas
+                <div key={`${t.folio}-${i}`} className={cn('flex items-center px-5 py-3 hover:bg-background transition-colors', i === 0 && 'bg-emerald-50/40')}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-label font-bold text-[10px] text-primary bg-primary-fixed/30 px-2 py-0.5 rounded">#{t.folio}</span>

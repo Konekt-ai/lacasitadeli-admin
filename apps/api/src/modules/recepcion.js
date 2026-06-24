@@ -446,36 +446,47 @@ async function getRecepcionReal(req, res) {
 async function confirmarRecepcion(req, res) {
   const id = parseInt(req.params.id, 10)
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' })
+  const sqlite = getDb()
+  let tx = null
   try {
-    const db = await getPool()
+    const pool = await getPool()
 
-    // ¿Existe?
-    const rec = await db.request().input('id', sql.Int, id)
+    // ¿Existe? (lectura previa, fuera de la transacción)
+    const rec = await pool.request().input('id', sql.Int, id)
       .query('SELECT id, confirmada, recepcion_esperada_id FROM recepciones_reales WHERE id=@id')
     if (!rec.recordset[0]) return res.status(404).json({ error: `No existe la recepción real ${id}` })
 
-    // Candado anti-doble-aplicación: reclama la confirmación de forma atómica.
-    const claim = await db.request().input('id', sql.Int, id)
+    // TODO el stock real + el candado de confirmación van en UNA transacción MSSQL:
+    // si algo falla a media aplicación se hace ROLLBACK y la recepción queda
+    // reintentable (confirmada=0), sin stock aplicado a medias.
+    tx = new sql.Transaction(pool)
+    await tx.begin()
+    const rq = () => new sql.Request(tx)
+
+    // Candado anti-doble-aplicación dentro de la transacción
+    const claim = await rq().input('id', sql.Int, id)
       .query(`UPDATE recepciones_reales SET confirmada=1, estatus='Confirmada'
               WHERE id=@id AND confirmada=0`)
-    if (!claim.rowsAffected[0])
+    if (!claim.rowsAffected[0]) {
+      await tx.rollback(); tx = null
       return res.status(400).json({ error: `La recepción ${id} ya fue confirmada; no se vuelve a aplicar.` })
+    }
 
     // Renglones recibidos (ya convertidos caja→pieza vía piezas_resultantes)
-    const det = await db.request().input('id', sql.Int, id)
+    const det = await rq().input('id', sql.Int, id)
       .query(`SELECT codigo_barras, ubicacion, piezas_resultantes, lote,
                      CONVERT(VARCHAR(10), caducidad, 23) AS caducidad
               FROM recepciones_reales_detalle
               WHERE recepcion_real_id=@id AND piezas_resultantes > 0`)
 
-    const sqlite = getDb()
     let totalPiezas = 0
+    const ledger    = []   // historial; se escribe en SQLite DESPUÉS del commit
 
     // Orden esperada ligada (para tomar el precio de compra de la factura)
     const esperadaId = rec.recordset[0].recepcion_esperada_id
     let proveedorOrden = null
     if (esperadaId) {
-      const e = await db.request().input('eid', sql.Int, esperadaId)
+      const e = await rq().input('eid', sql.Int, esperadaId)
         .query('SELECT proveedor FROM recepciones_esperadas WHERE id=@eid')
       proveedorOrden = e.recordset[0]?.proveedor || null
     }
@@ -485,7 +496,7 @@ async function confirmarRecepcion(req, res) {
       if (piezas <= 0) continue
 
       // Resolver Art_Codigo (clave real de ArticulosAlmacen) desde el código recibido
-      const prod = await db.request().input('c', sql.VarChar(50), row.codigo_barras)
+      const prod = await rq().input('c', sql.VarChar(50), row.codigo_barras)
         .query(`SELECT TOP 1 Art_Codigo AS codigo, Art_Descripcion AS nombre
                 FROM ${VISTA}
                 WHERE Art_GTIN=@c OR CodAlt_Codigo=@c OR Art_Codigo=@c OR Art_PLU=@c`)
@@ -494,7 +505,7 @@ async function confirmarRecepcion(req, res) {
       const area      = String(row.ubicacion || 'Bodega').toLowerCase()
 
       // Stock real ANTES (suma de todos los almacenes — igual que /entrada)
-      const stRes = await db.request().input('c', sql.VarChar(50), artCodigo)
+      const stRes = await rq().input('c', sql.VarChar(50), artCodigo)
         .query(`SELECT ISNULL(SUM(AA_ExistenciaActualU),0) AS stock
                 FROM [compucaja].[dbo].[ArticulosAlmacen] WHERE Art_Codigo=@c`)
       const antes   = Number(stRes.recordset[0]?.stock) || 0
@@ -503,7 +514,7 @@ async function confirmarRecepcion(req, res) {
       // 1) Sumar al STOCK REAL en UNA sola tienda (la principal, Tda 1) para que el
       //    total no se infle en productos multi-tienda. Si no hay fila de Tda 1,
       //    cae a cualquier fila única del producto.
-      const upd = await db.request()
+      const upd = await rq()
         .input('c', sql.VarChar(50), artCodigo)
         .input('q', sql.Int,         piezas)
         .query(`UPDATE TOP (1) [compucaja].[dbo].[ArticulosAlmacen]
@@ -511,7 +522,7 @@ async function confirmarRecepcion(req, res) {
                     AA_FechaUltimaEntrada = GETDATE()
                 WHERE Art_Codigo=@c AND Tda_Codigo='1'`)
       if (!upd.rowsAffected[0]) {
-        await db.request()
+        await rq()
           .input('c', sql.VarChar(50), artCodigo)
           .input('q', sql.Int,         piezas)
           .query(`UPDATE TOP (1) [compucaja].[dbo].[ArticulosAlmacen]
@@ -520,17 +531,13 @@ async function confirmarRecepcion(req, res) {
                   WHERE Art_Codigo=@c`)
       }
 
-      // 2) Historial unificado (SQLite, mismo ledger que entrada/salida del TC52)
-      sqlite.prepare(`
-        INSERT INTO almacen_movimientos
-          (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario)
-        VALUES (?, ?, 'entrada', ?, ?, ?, ?, 'Recepcion')
-      `).run(artCodigo, nombre, piezas, antes, despues, area)
+      // 2) Historial unificado: se acumula y se escribe en SQLite tras el commit.
+      ledger.push({ artCodigo, nombre, piezas, antes, despues, area })
 
       // 3) Stock por ubicación (fuente unificada: MSSQL inventario_bodega).
       //    Convención igual que /traslado: codigo_barras = Art_Codigo, ubicacion = nombre del área.
       const ubicNombre = row.ubicacion || 'Bodega';
-      await db.request()
+      await rq()
         .input('cb', sql.VarChar(50), artCodigo)
         .input('ub', sql.VarChar(50), ubicNombre)
         .input('q',  sql.Int,         piezas)
@@ -546,7 +553,7 @@ async function confirmarRecepcion(req, res) {
       // 4) Costo exacto: si la orden trae precio de compra de la factura, fijarlo
       //    como costo oficial del producto (gana sobre Art_UltimoCosto de NovaCaja).
       if (esperadaId) {
-        const pcRes = await db.request()
+        const pcRes = await rq()
           .input('eid', sql.Int,         esperadaId)
           .input('cb',  sql.VarChar(50), row.codigo_barras)
           .query(`SELECT TOP 1 precio_compra_pieza
@@ -555,7 +562,7 @@ async function confirmarRecepcion(req, res) {
                   ORDER BY id DESC`)
         const precioPza = pcRes.recordset[0]?.precio_compra_pieza
         if (precioPza != null && Number(precioPza) > 0) {
-          await db.request()
+          await rq()
             .input('cb',   sql.VarChar(50),   artCodigo)
             .input('pp',   sql.Decimal(18,4), Number(precioPza))
             .input('prov', sql.VarChar(100),  proveedorOrden)
@@ -572,15 +579,33 @@ async function confirmarRecepcion(req, res) {
       totalPiezas += piezas
     }
 
-    // Marcar la orden esperada como Recibida (si está ligada)
+    // Marcar la orden esperada como Recibida (si está ligada) — dentro de la tx
     if (rec.recordset[0].recepcion_esperada_id) {
-      await db.request().input('eid', sql.Int, rec.recordset[0].recepcion_esperada_id)
+      await rq().input('eid', sql.Int, rec.recordset[0].recepcion_esperada_id)
         .query(`UPDATE recepciones_esperadas SET estatus='Recibida'
                 WHERE id=@eid AND estatus <> 'Recibida'`)
     }
 
+    await tx.commit(); tx = null
+
+    // Historial unificado en SQLite (otra base): se escribe DESPUÉS del commit. Es
+    // auditoría/display, no la fuente de stock; si fallara aquí el stock ya quedó
+    // correcto y solo faltaría reflejarlo en el ledger.
+    try {
+      const ins = sqlite.prepare(`
+        INSERT INTO almacen_movimientos
+          (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario)
+        VALUES (?, ?, 'entrada', ?, ?, ?, ?, 'Recepcion')`)
+      sqlite.transaction((rows) => {
+        for (const r of rows) ins.run(r.artCodigo, r.nombre, r.piezas, r.antes, r.despues, r.area)
+      })(ledger)
+    } catch (ledgerErr) {
+      console.error('Recepcion ledger SQLite:', ledgerErr.message)
+    }
+
     res.json({ ok: true, mensaje: `Recepción ${id} confirmada. +${totalPiezas} piezas al stock.`, piezas: totalPiezas })
   } catch (e) {
+    if (tx) { try { await tx.rollback() } catch (_) {} }
     res.status(500).json({ error: e.message })
   }
 }

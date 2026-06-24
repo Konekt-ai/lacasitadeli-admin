@@ -856,7 +856,7 @@ router.get('/tickets/recent', async (req, res) => {
   const cached   = _get(cacheKey);
   if (cached) return res.json(cached);
   try {
-    const result = await mssql.query(buildRecentTicketsQuery({ limit }));
+    const result = await heavy(buildRecentTicketsQuery({ limit })); // MAXDOP 1: no acaparar CPU del POS
     const data   = result.recordset || [];
     _set(cacheKey, data, 30_000); // 30 s — el feed no necesita ser al segundo
     res.json(data);
@@ -1001,7 +1001,10 @@ router.get('/tables/:table/preview', async (req, res) => {
 // 30 días, por proveedor, conteos y Análisis), corriéndolas de forma SECUENCIAL y
 // con MAXDOP 1. Así el panel se sirve de cache (instantáneo) y NO se escanean las
 // tablas grandes de compucaja en cada visita ni se acapara la CPU del POS.
+let _prewarming = false;
 async function prewarm() {
+  if (_prewarming) return; // evita que dos corridas se encimen y dupliquen la carga al POS
+  _prewarming = true;
   try {
     const maxDate = await getMaxDateString();
     await heavy(buildSalesByDayQuery({ days: 30, maxDate })).then(r => _set('dash:byDay', r.recordset || [], 600_000));
@@ -1021,6 +1024,8 @@ async function prewarm() {
     _set(`analytics:${m}`, { byHour, byMonth, byWeekday, byCategory, topProducts: topProds }, 600_000);
   } catch (e) {
     console.error('prewarm:', e.message);
+  } finally {
+    _prewarming = false;
   }
 }
 // Arranca 20 s después (deja calentar la conexión) y luego cada 8 min (los caches

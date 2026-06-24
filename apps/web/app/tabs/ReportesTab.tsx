@@ -842,7 +842,8 @@ export default function ReportesTab({ timeFilter }: Props) {
                     </td>
                   </tr>
                 ) : liveTickets.map((t, i) => (
-                  <tr key={t.folio}
+                  // FolConsecutivo NO es único (se recicla entre cajas/días): llave compuesta + índice
+                  <tr key={`${t.folio}-${t.folTda}-${t.folEst}-${t.folDoc}-${i}`}
                     onClick={() => setTicketModal({
                       folio: Number(t.folio),
                       tda: Number(t.folTda), est: Number(t.folEst), doc: Number(t.folDoc),

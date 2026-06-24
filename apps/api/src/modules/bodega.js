@@ -311,48 +311,56 @@ router.get('/discrepancias', async (req, res) => {
     db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo = 'noSales'`).all().map(r => r.art_codigo)
   );
 
-  let stagnant = [], noSales = [];
-  try {
-    const [sRes, nRes] = await Promise.all([
-      mssql.query(`
-        SELECT TOP 100
-          a.Art_Codigo              AS id,
-          a.Art_Descripcion         AS name,
-          ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
-          a.Art_VECategoria         AS category,
-          a.Art_FechaUltimaVenta    AS ultima_venta
-        FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
-        JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-          ON aa.Art_Codigo = a.Art_Codigo
-        WHERE aa.AA_ExistenciaActualU > 0
-          AND a.Art_Bloqueado = 0
-          AND (a.Art_FechaUltimaVenta < DATEADD(day, -30, GETDATE()) OR a.Art_FechaUltimaVenta IS NULL)
-        ORDER BY aa.AA_ExistenciaActualU DESC
-      `),
-      mssql.query(`
-        SELECT TOP 100
-          a.Art_Codigo              AS id,
-          a.Art_Descripcion         AS name,
-          ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
-          a.Art_VECategoria         AS category,
-          a.Art_FechaUltimaVenta    AS ultima_venta
-        FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
-        JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-          ON aa.Art_Codigo = a.Art_Codigo
-        WHERE aa.AA_ExistenciaActualU > 0
-          AND a.Art_Bloqueado = 0
-          AND (
-            a.Art_FechaUltimaVenta < DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
-            OR a.Art_FechaUltimaVenta IS NULL
-          )
-        ORDER BY aa.AA_ExistenciaActualU DESC
-      `),
-    ]);
-    stagnant = (sRes.recordset || []).filter(r => !dismissed.has(r.id));
-    noSales  = (nRes.recordset || []).filter(r => !dismissedNoSales.has(r.id));
-  } catch (e) {
-    console.error('MSSQL discrepancias error:', e.message);
+  // Escaneos pesados sobre el catálogo completo: van con heavy() (MAXDOP 1) para
+  // no acaparar la CPU compartida con NovaCaja, y se cachean 3 min (son los MISMOS
+  // que /alerts). El filtrado por descartados y los recuentos se calculan frescos.
+  let raw = _cacheGet('discrepancias_raw');
+  if (!raw) {
+    try {
+      const [sRes, nRes] = await Promise.all([
+        heavy(`
+          SELECT TOP 100
+            a.Art_Codigo              AS id,
+            a.Art_Descripcion         AS name,
+            ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+            a.Art_VECategoria         AS category,
+            a.Art_FechaUltimaVenta    AS ultima_venta
+          FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+          JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
+            ON aa.Art_Codigo = a.Art_Codigo
+          WHERE aa.AA_ExistenciaActualU > 0
+            AND a.Art_Bloqueado = 0
+            AND (a.Art_FechaUltimaVenta < DATEADD(day, -30, GETDATE()) OR a.Art_FechaUltimaVenta IS NULL)
+          ORDER BY aa.AA_ExistenciaActualU DESC
+        `),
+        heavy(`
+          SELECT TOP 100
+            a.Art_Codigo              AS id,
+            a.Art_Descripcion         AS name,
+            ISNULL(aa.AA_ExistenciaActualU, 0) AS stock,
+            a.Art_VECategoria         AS category,
+            a.Art_FechaUltimaVenta    AS ultima_venta
+          FROM [compucaja].[dbo].[Articulos] a WITH (NOLOCK)
+          JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
+            ON aa.Art_Codigo = a.Art_Codigo
+          WHERE aa.AA_ExistenciaActualU > 0
+            AND a.Art_Bloqueado = 0
+            AND (
+              a.Art_FechaUltimaVenta < DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)
+              OR a.Art_FechaUltimaVenta IS NULL
+            )
+          ORDER BY aa.AA_ExistenciaActualU DESC
+        `),
+      ]);
+      raw = { stagnant: sRes.recordset || [], noSales: nRes.recordset || [] };
+      _cacheSet('discrepancias_raw', raw, 180_000); // 3 min
+    } catch (e) {
+      console.error('MSSQL discrepancias error:', e.message);
+      raw = { stagnant: [], noSales: [] };
+    }
   }
+  const stagnant = raw.stagnant.filter(r => !dismissed.has(r.id));
+  const noSales  = raw.noSales.filter(r => !dismissedNoSales.has(r.id));
 
   const recuentos = db.prepare(`SELECT * FROM recuentos ORDER BY created_at DESC LIMIT 100`).all();
 
@@ -649,6 +657,31 @@ router.post('/conteo/sync', async (req, res) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate))
     return res.status(400).json({ error: 'Formato de fecha inválido' });
 
+  const db = getDb();
+
+  // IDEMPOTENCIA: descontar es IRREVERSIBLE sobre el stock real del POS. Si este
+  // rango ya se sincronizó antes (o se traslapa con uno previo), NO lo apliques de
+  // nuevo — restaría doble. Solo se permite con ?force para una re-sincronización
+  // deliberada. Comparación lexicográfica válida porque las fechas son YYYY-MM-DD.
+  if (!req.body.force) {
+    const prev = db.prepare(`
+      SELECT id, periodo_inicio, periodo_fin, estado, created_at
+      FROM sync_sessions
+      WHERE estado IN ('completado','pendiente')
+        AND periodo_inicio <= ? AND periodo_fin >= ?
+      ORDER BY created_at DESC LIMIT 1
+    `).get(endDate, startDate);
+    if (prev) {
+      return res.status(409).json({
+        error: `Ese periodo ya se sincronizó (${prev.periodo_inicio} a ${prev.periodo_fin}` +
+               `${prev.estado === 'pendiente' ? ', quedó INCOMPLETA' : ''}, ${String(prev.created_at).slice(0, 10)}). ` +
+               `Aplicarlo otra vez restaría doble del inventario.`,
+        yaSincronizado: true,
+        sesionPrevia: prev,
+      });
+    }
+  }
+
   try {
     // 1. Obtener productos + cantidades + stock actual para el audit trail
     const previewRes = await mssql.query(`
@@ -678,7 +711,18 @@ router.post('/conteo/sync', async (req, res) => {
     if (products.length === 0)
       return res.status(400).json({ error: 'Sin productos en el periodo seleccionado' });
 
-    // 2. Batch UPDATE en MSSQL
+    const totalUnidades = products.reduce((s, p) => s + (parseFloat(p.total_vendido) || 0), 0);
+
+    // Registrar la sesión como 'pendiente' ANTES de descontar. Si el UPDATE se
+    // interrumpe (timeout/caída), queda rastro y el guardia de idempotencia de
+    // arriba bloquea un reintento ciego que restaría doble.
+    const sessionRow = db.prepare(`
+      INSERT INTO sync_sessions (periodo_inicio, periodo_fin, productos_actualizados, total_unidades, estado)
+      VALUES (?, ?, ?, ?, 'pendiente')
+    `).run(startDate, endDate, products.length, totalUnidades);
+    const sessionId = sessionRow.lastInsertRowid;
+
+    // 2. Batch UPDATE en MSSQL (descuento real, irreversible)
     await mssql.query(`
       UPDATE aa
       SET    aa.AA_ExistenciaActualU = aa.AA_ExistenciaActualU - sales.total_sold
@@ -695,16 +739,7 @@ router.post('/conteo/sync', async (req, res) => {
       ) sales ON aa.Art_Codigo = sales.art_codigo
     `);
 
-    // 3. Registrar sesión y detalle en SQLite
-    const db            = getDb();
-    const totalUnidades = products.reduce((s, p) => s + (parseFloat(p.total_vendido) || 0), 0);
-
-    const sessionRow = db.prepare(`
-      INSERT INTO sync_sessions (periodo_inicio, periodo_fin, productos_actualizados, total_unidades, estado)
-      VALUES (?, ?, ?, ?, 'completado')
-    `).run(startDate, endDate, products.length, totalUnidades);
-
-    const sessionId  = sessionRow.lastInsertRowid;
+    // 3. Detalle del audit en SQLite y marcar la sesión como completada
     const insertDed  = db.prepare(`
       INSERT INTO sync_deductions (session_id, art_codigo, nombre, cantidad_vendida, stock_antes, stock_despues)
       VALUES (?, ?, ?, ?, ?, ?)
@@ -716,6 +751,7 @@ router.post('/conteo/sync', async (req, res) => {
         insertDed.run(sessionId, p.art_codigo, p.nombre || null, vendido, antes, Math.max(0, antes - vendido));
       }
     })(products);
+    db.prepare(`UPDATE sync_sessions SET estado = 'completado' WHERE id = ?`).run(sessionId);
 
     res.json({
       message:   `${products.length} productos actualizados · ${totalUnidades.toLocaleString('es')} unidades descontadas`,

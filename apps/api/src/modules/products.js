@@ -75,12 +75,25 @@ router.get('/', async (req, res) => {
     let rows, total;
 
     if (lowStock === 'true') {
+      // Se pide en CADA carga del panel (dashboard). Sin filtros la cacheamos 90 s
+      // y la corremos con MAXDOP 1 para no acaparar la CPU compartida con NovaCaja.
+      const lowKey = (!q && !category) ? 'products:lowstock' : null;
+      if (lowKey) {
+        const cachedLow = _get(lowKey);
+        if (cachedLow) return res.json(cachedLow);
+      }
       // Filtrado directo en SQL para no traer 10k productos al servidor
       const dataRes = await mssql.query(
-        buildProductsQuery({ search: q, category, offset: 0, pageSize: 2000, lowStockThreshold: DEFAULT_MIN_STOCK })
+        buildProductsQuery({ search: q, category, offset: 0, pageSize: 2000, lowStockThreshold: DEFAULT_MIN_STOCK }) +
+        '\n    OPTION (MAXDOP 1)'
       );
       rows  = dataRes.recordset.map(toRow);
       total = rows.length;
+      if (lowKey) {
+        const lowResult = { data: rows, total, page: 1, pageSize: 2000, pages: 1 };
+        _set(lowKey, lowResult, 90_000); // 90 s
+        return res.json(lowResult);
+      }
     } else {
       const [dataRes, countRes] = await Promise.all([
         mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize), sinPrecio: soloSinPrecio })),

@@ -15,7 +15,25 @@ const { setupRecepcionRoutes } = require('./modules/recepcion');
 const app  = express();
 const PORT = process.env.PORT || 3002;
 
-app.use(cors());
+// CORS restringido: el panel habla con la API por el proxy de Next (mismo origen,
+// SIN cabecera Origin), así que esto NO afecta al panel. Permitimos: sin-Origin
+// (proxy/curl/apps nativas), localhost, red local privada y Tailscale (100.64/10),
+// más lo que se liste en CORS_ORIGINS. Bloquea webs públicas (mitiga CSRF al estar
+// la API sin autenticación). Para abrir un origen extra: CORS_ORIGINS en el .env.
+const corsAllowList = (process.env.CORS_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const corsOrigin = (origin, cb) => {
+  if (!origin) return cb(null, true); // server-to-server / curl / apps nativas
+  try {
+    const host = new URL(origin).hostname;
+    const ok = host === 'localhost' || host === '127.0.0.1'
+      || /^10\./.test(host) || /^192\.168\./.test(host)
+      || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+      || /^100\./.test(host) // Tailscale CGNAT
+      || corsAllowList.includes(origin);
+    return cb(null, ok);
+  } catch { return cb(null, false); }
+};
+app.use(cors({ origin: corsOrigin }));
 app.use(express.json());
 
 app.use('/api',          require('./modules/auth'));
