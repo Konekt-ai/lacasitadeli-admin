@@ -4,6 +4,20 @@ cd /d "%~dp0"
 if not exist "logs" mkdir logs
 set LOG=%~dp0logs\actualizaciones.log
 
+:: git NUNCA debe colgarse esperando credenciales en ventana oculta (eso trababa el
+:: log y dejaba el update a medias, reiniciando la misma version sin actualizar).
+set GIT_TERMINAL_PROMPT=0
+
+:: Candado anti-encimado: si ya hay una actualizacion corriendo, cancelar esta para
+:: no encimar dos y trabar el log. El lock se borra al terminar y al arrancar el
+:: sistema (iniciar-silencioso.vbs limpia locks colgados en cada boot/reinicio).
+set LOCK=%~dp0logs\.update.lock
+if exist "%LOCK%" (
+    echo  Ya hay una actualizacion en curso. Se cancela esta para no encimar.
+    exit /b 0
+)
+> "%LOCK%" echo %DATE% %TIME%
+
 set ADMIN_EST=sin cambios
 set BODEGA_EST=sin cambios
 set ADMIN_VER=?
@@ -150,6 +164,7 @@ echo.
 >>"%LOG%" echo [%date% %time%] Resumen: Admin=!ADMIN_EST! (!ADMIN_VER!)  Bodega=!BODEGA_EST! (!BODEGA_VER!)
 >>"%LOG%" echo [%date% %time%] Actualizacion completada.
 >>"%LOG%" echo [%date% %time%] ===============================
+del "%LOCK%" 2>nul
 goto :EOF
 
 :: ── Helper: imprime en pantalla y en el log ───────────────────────────────────
@@ -162,5 +177,6 @@ exit /b
 echo.
 echo  La actualizacion se detuvo. Reiniciando servicios para NO dejar el sistema caido...
 >>"%LOG%" echo [%date% %time%] Actualizacion abortada. Reiniciando servicios para recuperar.
+del "%LOCK%" 2>nul
 wscript.exe "%~dp0iniciar-silencioso.vbs"
 exit /b 1

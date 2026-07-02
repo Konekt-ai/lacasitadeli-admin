@@ -22,6 +22,9 @@ Const SQL_SVC = "MSSQLSERVER"
 ' ── Carpeta de logs ───────────────────────────────────────────────────────────
 oShell.Run "cmd /c if not exist """ & DIR_APP & "\logs"" mkdir """ & DIR_APP & "\logs""", 0, True
 
+' Borrar candado de actualizacion por si quedo colgado (recupera updates trabados)
+oShell.Run "cmd /c del """ & DIR_APP & "\logs\.update.lock""", 0, True
+
 ' ── 0. Cerrar procesos previos (evita conflictos de puertos) ──────────────────
 ' Solo se reinicia node. El monitor de bandeja (pythonw) NO se mata: es de
 ' instancia unica (mutex) y matarlo a la fuerza dejaba iconos "fantasma" en la
