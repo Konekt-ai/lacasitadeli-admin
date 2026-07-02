@@ -133,12 +133,14 @@ function CajasView({ period }: { period: string }) {
       <div className="flex flex-wrap items-end gap-3">
         <div>
           <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Desde</label>
-          <input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)}
+          <input type="date" value={desde} max={hasta}
+            onChange={e => { const v = e.target.value; if (!v) return; setDesde(v); if (v > hasta) setHasta(v); }}
             className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
         </div>
         <div>
           <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Hasta</label>
-          <input type="date" value={hasta} min={desde} onChange={e => setHasta(e.target.value)}
+          <input type="date" value={hasta} min={desde}
+            onChange={e => { const v = e.target.value; if (!v) return; setHasta(v); if (v < desde) setDesde(v); }}
             className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
         </div>
         <div className="flex gap-1.5 flex-wrap">
