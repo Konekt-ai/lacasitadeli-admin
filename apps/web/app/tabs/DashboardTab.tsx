@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { cn } from '../lib/utils';
+import { cn, hoyMX, diasAtrasMX, mesMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import HistorialView from './HistorialTab';
 import type { Product } from '../lib/types';
@@ -71,23 +71,44 @@ interface VcCajero { cajero: string; nombre: string; tickets: number; total: num
 interface VcCross  { caja: string; nombreCaja: string; cajero: string; nombre: string; tickets: number; total: number; }
 interface VcData   { period: string; porCaja: VcCaja[]; porCajero: VcCajero[]; porCajaCajero: VcCross[]; }
 
+// Rango inicial según el filtro global (Hoy/Semana/Mes), en hora de CDMX.
+const seedRango = (p: string): [string, string] =>
+  p === 'day'  ? [hoyMX(), hoyMX()]
+: p === 'week' ? [diasAtrasMX(6), hoyMX()]
+:                [mesMX() + '-01', hoyMX()];
+
 function CajasView({ period }: { period: string }) {
+  const [desde, setDesde]     = useState(() => seedRango(period)[0]);
+  const [hasta, setHasta]     = useState(() => seedRango(period)[1]);
   const [data, setData]       = useState<VcData | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // Al cambiar el filtro global re-siembra el rango; el usuario puede afinar con
+  // los inputs de fecha o los presets de abajo.
+  useEffect(() => { const [d, h] = seedRango(period); setDesde(d); setHasta(h); }, [period]);
+
   useEffect(() => {
+    if (!desde || !hasta) return;
     let alive = true;
     setLoading(true);
-    fetch(`/api/novacaja/ventas-cajas?period=${period}`)
+    fetch(`/api/novacaja/ventas-cajas?desde=${desde}&hasta=${hasta}`)
       .then(r => r.json())
       .then(d => { if (alive && d && !d.error) setData(d); })
       .catch(() => {})
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [period]);
+  }, [desde, hasta]);
 
   const money = (n: number) => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 0 });
-  const periodoLabel = period === 'week' ? 'esta semana' : period === 'month' ? 'este mes' : 'hoy';
+  const rangoLabel = desde === hasta ? desde : `${desde} a ${hasta}`;
+
+  const PRESETS: { label: string; desde: string; hasta: string }[] = [
+    { label: 'Hoy',      desde: hoyMX(),         hasta: hoyMX() },
+    { label: 'Ayer',     desde: diasAtrasMX(1),  hasta: diasAtrasMX(1) },
+    { label: '7 días',   desde: diasAtrasMX(6),  hasta: hoyMX() },
+    { label: 'Este mes', desde: mesMX() + '-01', hasta: hoyMX() },
+    { label: 'Todo',     desde: '2000-01-01',    hasta: hoyMX() },
+  ];
 
   const porCaja   = data?.porCaja   ?? [];
   const porCajero = data?.porCajero ?? [];
@@ -106,16 +127,43 @@ function CajasView({ period }: { period: string }) {
     .map(([cajero, v]) => ({ cajero, ...v }))
     .sort((a, b) => b.total - a.total);
 
-  if (loading && !data) {
-    return <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>;
-  }
-
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/* Selector de fechas */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Desde</label>
+          <input type="date" value={desde} max={hasta} onChange={e => setDesde(e.target.value)}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div>
+          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Hasta</label>
+          <input type="date" value={hasta} min={desde} onChange={e => setHasta(e.target.value)}
+            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {PRESETS.map(p => {
+            const activo = desde === p.desde && hasta === p.hasta;
+            return (
+              <button key={p.label} onClick={() => { setDesde(p.desde); setHasta(p.hasta); }}
+                className={cn('px-3 py-2 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest transition-all border',
+                  activo ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-low text-stone-500 hover:bg-primary/10 hover:text-primary border-outline-variant/20')}>
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+        {loading && <div className="w-5 h-5 border-2 border-primary/20 border-t-primary rounded-full animate-spin ml-auto" />}
+      </div>
+
+      {loading && !data ? (
+        <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>
+      ) : (
+      <div className="space-y-8">
       {/* Ventas por caja */}
       <div>
         <h3 className="font-serif text-lg text-primary mb-1">Ventas por caja</h3>
-        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">{periodoLabel}</p>
+        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">{rangoLabel}</p>
         {porCaja.length === 0 ? (
           <p className="text-sm font-body text-stone-400 py-6 text-center">Sin ventas en el periodo</p>
         ) : (
@@ -142,7 +190,7 @@ function CajasView({ period }: { period: string }) {
       {/* Quién vende más (por cajero) */}
       <div>
         <h3 className="font-serif text-lg text-primary mb-1">Quién vende más</h3>
-        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Por cajero · {periodoLabel}</p>
+        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Por cajero · {rangoLabel}</p>
         {porCajero.length === 0 ? (
           <p className="text-sm font-body text-stone-400 py-6 text-center">Sin ventas en el periodo</p>
         ) : (
@@ -170,7 +218,7 @@ function CajasView({ period }: { period: string }) {
       {crossRows.length > 0 && cajasCols.length > 0 && (
         <div>
           <h3 className="font-serif text-lg text-primary mb-1">Dónde vende cada cajero</h3>
-          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Los cajeros rotan entre cajas · {periodoLabel}</p>
+          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Los cajeros rotan entre cajas · {rangoLabel}</p>
           <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
@@ -196,6 +244,8 @@ function CajasView({ period }: { period: string }) {
             </table>
           </div>
         </div>
+      )}
+      </div>
       )}
     </div>
   );

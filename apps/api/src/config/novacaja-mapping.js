@@ -573,17 +573,23 @@ function buildTicketKPIsQuery({ period = 'day', maxDate = null } = {}) {
 
 // ── Ventas por CAJA / CAJERO (tiempo real, tabla Tickets) ─────────────────────
 // El cajero (T_Cajero) es un código de Empleados; los cajeros ROTAN entre cajas.
-function buildVentasPorCajaQuery({ period = 'day' } = {}) {
+// Acepta period (day/week/month) O un rango explícito desde/hasta (YYYY-MM-DD, ya
+// validado por regex en la ruta antes de llegar aquí).
+function _ticketRange(period, col, desde, hasta) {
+  if (desde && hasta) return `CAST(${col} AS DATE) BETWEEN '${desde}' AND '${hasta}'`;
+  return _ticketDateFilter(period, col);
+}
+function buildVentasPorCajaQuery({ period = 'day', desde = null, hasta = null } = {}) {
   return `
     SELECT t.FolEst_Codigo AS caja,
            COUNT(*)                         AS tickets,
            SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
     FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
-    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    WHERE ${_ticketRange(period, 't.T_Fecha', desde, hasta)}
     GROUP BY t.FolEst_Codigo
     ORDER BY total DESC`;
 }
-function buildVentasPorCajeroQuery({ period = 'day' } = {}) {
+function buildVentasPorCajeroQuery({ period = 'day', desde = null, hasta = null } = {}) {
   return `
     SELECT t.T_Cajero AS cajero,
            MAX(ISNULL(NULLIF(LTRIM(RTRIM(e.Emp_Nombre)), ''), e.Emp_Alias)) AS nombre,
@@ -591,11 +597,11 @@ function buildVentasPorCajeroQuery({ period = 'day' } = {}) {
            SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
     FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
     LEFT JOIN [compucaja].[dbo].[Empleados] e WITH (NOLOCK) ON e.Emp_Codigo = t.T_Cajero
-    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    WHERE ${_ticketRange(period, 't.T_Fecha', desde, hasta)}
     GROUP BY t.T_Cajero
     ORDER BY total DESC`;
 }
-function buildVentasCajaCajeroQuery({ period = 'day' } = {}) {
+function buildVentasCajaCajeroQuery({ period = 'day', desde = null, hasta = null } = {}) {
   return `
     SELECT t.FolEst_Codigo AS caja,
            t.T_Cajero       AS cajero,
@@ -604,7 +610,7 @@ function buildVentasCajaCajeroQuery({ period = 'day' } = {}) {
            SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
     FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
     LEFT JOIN [compucaja].[dbo].[Empleados] e WITH (NOLOCK) ON e.Emp_Codigo = t.T_Cajero
-    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    WHERE ${_ticketRange(period, 't.T_Fecha', desde, hasta)}
     GROUP BY t.FolEst_Codigo, t.T_Cajero
     ORDER BY total DESC`;
 }

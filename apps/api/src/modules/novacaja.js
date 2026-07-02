@@ -451,14 +451,20 @@ router.get('/suppliers', async (req, res) => {
 // también devuelve cajero×caja (dónde vendió cada quien). period = day|week|month.
 router.get('/ventas-cajas', async (req, res) => {
   const { period = 'day' } = req.query;
-  const cacheKey = `ventasCajas:${period}`;
+  // Rango explícito opcional (YYYY-MM-DD). Se valida por regex para que NUNCA entre
+  // texto arbitrario a la consulta (las fechas se interpolan en el SQL).
+  const rx    = /^\d{4}-\d{2}-\d{2}$/;
+  const desde = rx.test(req.query.desde || '') ? req.query.desde : null;
+  const hasta = rx.test(req.query.hasta || '') ? req.query.hasta : null;
+  const usaRango = !!(desde && hasta);
+  const cacheKey = usaRango ? `ventasCajas:${desde}:${hasta}` : `ventasCajas:${period}`;
   const cached = _get(cacheKey);
   if (cached) return res.json(cached);
   try {
     const [caja, cajero, cajaCajero, mapa] = await Promise.all([
-      heavy(buildVentasPorCajaQuery({ period })),
-      heavy(buildVentasPorCajeroQuery({ period })),
-      heavy(buildVentasCajaCajeroQuery({ period })),
+      heavy(buildVentasPorCajaQuery({ period, desde, hasta })),
+      heavy(buildVentasPorCajeroQuery({ period, desde, hasta })),
+      heavy(buildVentasCajaCajeroQuery({ period, desde, hasta })),
       mssql.query(`SELECT est_codigo, area FROM [compucaja].[dbo].[estacion_area_map]`).catch(() => ({ recordset: [] })),
     ]);
     const areaDe = {};
@@ -466,7 +472,7 @@ router.get('/ventas-cajas', async (req, res) => {
     const nombreCaja = (c) => areaDe[String(c)] || `Caja ${c}`;
 
     const payload = {
-      period,
+      period, desde, hasta, usaRango,
       porCaja: (caja.recordset || []).map(r => ({
         caja: String(r.caja), area: areaDe[String(r.caja)] || null, nombre: nombreCaja(r.caja),
         tickets: Number(r.tickets) || 0, total: Number(r.total) || 0,
