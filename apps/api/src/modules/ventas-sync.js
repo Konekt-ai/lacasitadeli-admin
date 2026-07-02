@@ -210,4 +210,45 @@ router.post('/run', async (req, res) => {
   try { res.json(await procesarVentas()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Productos vendidos que NO están contados en el área de su caja ─────────────
+// Explica por qué "no se descuenta" un producto: se vendió en un local (según la
+// caja del ticket) pero el TC52 no lo tiene contado en esa área, así que el sync
+// no tiene de dónde restar. La solución es contarlo con el TC52 en esa área.
+async function sinContar(dias) {
+  const d = Math.min(Math.max(parseInt(dias) || 7, 1), 60);
+  const r = await mssql.query(`
+    SELECT m.area AS area, ps.Codigo AS codigo,
+           MAX(ISNULL(NULLIF(a.Art_Descripcion, ''), ps.Codigo)) AS nombre,
+           CAST(SUM(ps.Cantidad) AS int) AS vendido,
+           CASE WHEN EXISTS (SELECT 1 FROM [compucaja].[dbo].[inventario_bodega] ib2
+                             WHERE ib2.codigo_barras = ps.Codigo) THEN 1 ELSE 0 END AS enOtraArea
+    FROM [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
+    JOIN [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+      ON ps.FolTda_Codigo = t.FolTda_Codigo AND ps.FolEst_Codigo = t.FolEst_Codigo
+     AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
+    JOIN [compucaja].[dbo].[estacion_area_map] m ON m.est_codigo = t.FolEst_Codigo
+    LEFT JOIN [compucaja].[dbo].[inventario_bodega] ib
+      ON ib.codigo_barras = ps.Codigo AND ib.ubicacion = m.area
+    LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.Codigo
+    WHERE t.T_Fecha >= DATEADD(DAY, -${d}, GETDATE())
+      AND ib.codigo_barras IS NULL
+      AND ps.Codigo IS NOT NULL AND LEN(ps.Codigo) > 0 AND ps.Codigo <> '0'
+    GROUP BY m.area, ps.Codigo
+    ORDER BY m.area, SUM(ps.Cantidad) DESC
+    OPTION (MAXDOP 1)
+  `);
+  return (r.recordset || []).map(x => ({
+    area: x.area, codigo: x.codigo, nombre: x.nombre,
+    vendido: Number(x.vendido) || 0, enOtraArea: !!x.enOtraArea,
+  }));
+}
+router.get('/sin-contar', async (req, res) => {
+  try {
+    res.json({
+      dias: Math.min(Math.max(parseInt(req.query.dias) || 7, 1), 60),
+      productos: await sinContar(req.query.dias),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 module.exports = { router, startScheduler };

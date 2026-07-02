@@ -65,6 +65,142 @@ const ProdTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+// ── Ventas por caja / cajero ────────────────────────────────────────────────
+interface VcCaja   { caja: string; area: string | null; nombre: string; tickets: number; total: number; }
+interface VcCajero { cajero: string; nombre: string; tickets: number; total: number; }
+interface VcCross  { caja: string; nombreCaja: string; cajero: string; nombre: string; tickets: number; total: number; }
+interface VcData   { period: string; porCaja: VcCaja[]; porCajero: VcCajero[]; porCajaCajero: VcCross[]; }
+
+function CajasView({ period }: { period: string }) {
+  const [data, setData]       = useState<VcData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetch(`/api/novacaja/ventas-cajas?period=${period}`)
+      .then(r => r.json())
+      .then(d => { if (alive && d && !d.error) setData(d); })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [period]);
+
+  const money = (n: number) => '$' + Number(n || 0).toLocaleString('es-MX', { maximumFractionDigits: 0 });
+  const periodoLabel = period === 'week' ? 'esta semana' : period === 'month' ? 'este mes' : 'hoy';
+
+  const porCaja   = data?.porCaja   ?? [];
+  const porCajero = data?.porCajero ?? [];
+  const maxCajero = Math.max(1, ...porCajero.map(c => c.total));
+
+  // Cajero × caja: filas = cajero, columnas = cajas (los cajeros rotan)
+  const cajasCols = porCaja.map(c => ({ caja: c.caja, label: c.nombre }));
+  const crossMap  = new Map<string, { nombre: string; total: number; porCaja: Record<string, number> }>();
+  for (const r of (data?.porCajaCajero ?? [])) {
+    const e = crossMap.get(r.cajero) ?? { nombre: r.nombre, total: 0, porCaja: {} };
+    e.total += r.total;
+    e.porCaja[r.caja] = (e.porCaja[r.caja] || 0) + r.total;
+    crossMap.set(r.cajero, e);
+  }
+  const crossRows = Array.from(crossMap.entries())
+    .map(([cajero, v]) => ({ cajero, ...v }))
+    .sort((a, b) => b.total - a.total);
+
+  if (loading && !data) {
+    return <div className="flex justify-center py-16"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>;
+  }
+
+  return (
+    <div className="space-y-8">
+      {/* Ventas por caja */}
+      <div>
+        <h3 className="font-serif text-lg text-primary mb-1">Ventas por caja</h3>
+        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">{periodoLabel}</p>
+        {porCaja.length === 0 ? (
+          <p className="text-sm font-body text-stone-400 py-6 text-center">Sin ventas en el periodo</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {porCaja.map(c => (
+              <div key={c.caja} className="rounded-2xl border border-outline-variant/10 bg-surface-container-lowest p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                    <Icon name="point_of_sale" className="text-primary text-lg" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="font-serif text-base text-on-surface leading-tight truncate">{c.nombre}</p>
+                    <p className="text-[9px] font-label uppercase tracking-widest text-stone-400">Caja {c.caja}</p>
+                  </div>
+                </div>
+                <p className="font-serif text-2xl text-primary">{money(c.total)}</p>
+                <p className="text-[11px] font-label text-stone-500 mt-0.5">{c.tickets.toLocaleString('es-MX')} tickets</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Quién vende más (por cajero) */}
+      <div>
+        <h3 className="font-serif text-lg text-primary mb-1">Quién vende más</h3>
+        <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Por cajero · {periodoLabel}</p>
+        {porCajero.length === 0 ? (
+          <p className="text-sm font-body text-stone-400 py-6 text-center">Sin ventas en el periodo</p>
+        ) : (
+          <div className="space-y-2.5">
+            {porCajero.map((c, i) => (
+              <div key={c.cajero} className="flex items-center gap-3">
+                <span className="text-[11px] font-label font-bold text-stone-300 w-5 text-right flex-shrink-0">{i + 1}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <span className="text-sm font-body text-on-surface truncate">{c.nombre}</span>
+                    <span className="text-sm font-serif font-bold text-primary flex-shrink-0">{money(c.total)}</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-stone-100 overflow-hidden">
+                    <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${(c.total / maxCajero) * 100}%` }} />
+                  </div>
+                </div>
+                <span className="text-[10px] font-label text-stone-400 w-16 text-right flex-shrink-0">{c.tickets.toLocaleString('es-MX')} tks</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Cajero × caja (dónde vende cada quien) */}
+      {crossRows.length > 0 && cajasCols.length > 0 && (
+        <div>
+          <h3 className="font-serif text-lg text-primary mb-1">Dónde vende cada cajero</h3>
+          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mb-4">Los cajeros rotan entre cajas · {periodoLabel}</p>
+          <div className="bg-surface-container-lowest rounded-2xl border border-outline-variant/10 overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
+                <tr>
+                  <th className="px-4 py-3">Cajero</th>
+                  {cajasCols.map(col => <th key={col.caja} className="px-4 py-3 text-right whitespace-nowrap">{col.label}</th>)}
+                  <th className="px-4 py-3 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {crossRows.map(row => (
+                  <tr key={row.cajero} className="hover:bg-background transition-colors">
+                    <td className="px-4 py-3 font-body text-on-surface whitespace-nowrap">{row.nombre}</td>
+                    {cajasCols.map(col => (
+                      <td key={col.caja} className="px-4 py-3 text-right font-body text-stone-600 whitespace-nowrap">
+                        {row.porCaja[col.caja] ? money(row.porCaja[col.caja]) : <span className="text-stone-300">—</span>}
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 text-right font-serif font-bold text-primary whitespace-nowrap">{money(row.total)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Props ──────────────────────────────────────────────────────────────────────
 interface Props {
   timeFilter:       string;
@@ -74,7 +210,7 @@ interface Props {
 }
 
 export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, setActiveTab }: Props) {
-  const [dashView,       setDashView]       = useState<'resumen' | 'historial'>('resumen');
+  const [dashView,       setDashView]       = useState<'resumen' | 'historial' | 'cajas'>('resumen');
   const [kpis,           setKpis]           = useState<DashKPI | null>(null);
   const [topProducts,    setTopProducts]    = useState<DashProduct[]>([]);
   const [loading,        setLoading]        = useState(false);
@@ -193,6 +329,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
       <div className="flex gap-1 mb-6 bg-surface-container-low p-1 rounded-xl w-fit">
         {([
           { id: 'resumen',   label: 'Resumen',   icon: 'dashboard' },
+          { id: 'cajas',     label: 'Cajas',     icon: 'point_of_sale' },
           { id: 'historial', label: 'Historial', icon: 'calendar_month' },
         ] as const).map(t => (
           <button key={t.id} onClick={() => setDashView(t.id)}
@@ -206,7 +343,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
         ))}
       </div>
 
-      {dashView === 'historial' ? <HistorialView /> : (
+      {dashView === 'historial' ? <HistorialView /> : dashView === 'cajas' ? <CajasView period={period} /> : (
       <>
 
       {/* ── KPI Cards ─────────────────────────────────────────────────────────── */}

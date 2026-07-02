@@ -3807,6 +3807,7 @@ function FacturasView() {
 interface VsConfig { activo: boolean; fecha_inicio: string | null; ultima_fecha: string | null; ultimo_run: string | null; }
 interface VsRow { codigo: string; nombre: string | null; area: string; vendido: number; stockActual: number; stockNuevo: number; }
 interface VsMapa { est_codigo: string; area: string; }
+interface SinContarRow { area: string; codigo: string; nombre: string; vendido: number; enOtraArea: boolean; }
 
 function VentasSyncView() {
   const { areas, areaMap } = useAreasCtx();
@@ -3817,6 +3818,9 @@ function VentasSyncView() {
   const [msg,     setMsg]     = useState<string | null>(null);
   const [nCaja,   setNCaja]   = useState('');
   const [nArea,   setNArea]   = useState('');
+  const [sinContar,  setSinContar]  = useState<SinContarRow[] | null>(null);
+  const [scDias,     setScDias]     = useState(7);
+  const [scLoading,  setScLoading]  = useState(false);
 
   const load = useCallback(() => {
     fetch('/api/ventas-sync/config').then(r => r.json()).then(d => {
@@ -3824,6 +3828,22 @@ function VentasSyncView() {
     }).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const cargarSinContar = useCallback(async (dias: number) => {
+    setScLoading(true);
+    try {
+      const d = await fetch(`/api/ventas-sync/sin-contar?dias=${dias}`).then(r => r.json());
+      setSinContar(Array.isArray(d.productos) ? d.productos : []);
+    } catch { setSinContar([]); }
+    finally { setScLoading(false); }
+  }, []);
+  useEffect(() => { cargarSinContar(scDias); }, [cargarSinContar, scDias]);
+
+  const scPorArea = useMemo(() => {
+    const m = new Map<string, SinContarRow[]>();
+    for (const r of (sinContar ?? [])) { if (!m.has(r.area)) m.set(r.area, []); m.get(r.area)!.push(r); }
+    return Array.from(m.entries());
+  }, [sinContar]);
 
   const verPreview = async () => {
     setLoading(true); setMsg(null);
@@ -3992,6 +4012,65 @@ function VentasSyncView() {
           )}
         </div>
       )}
+
+      {/* Se vende pero NO está contado aquí (por eso "no se descuenta") */}
+      <div className="mt-8 border-t border-outline-variant/10 pt-6">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Icon name="report_problem" className="text-base text-amber-600" />
+            <span className="text-[11px] font-label font-bold uppercase tracking-widest text-stone-600">
+              Se vende pero NO está contado aquí
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {[7, 30].map(d => (
+              <button key={d} onClick={() => setScDias(d)}
+                className={cn('px-2.5 py-1 rounded-lg text-[10px] font-label font-bold uppercase tracking-widest border transition-all',
+                  scDias === d ? 'bg-primary text-on-primary border-primary' : 'bg-surface-container-low text-stone-500 border-outline-variant/20 hover:bg-primary/5')}>
+                {d} días
+              </button>
+            ))}
+            <button onClick={() => cargarSinContar(scDias)} disabled={scLoading}
+              className="p-1.5 text-stone-400 hover:text-primary hover:bg-primary/5 rounded-lg transition-colors">
+              <Icon name="refresh" className={cn('text-base', scLoading && 'animate-spin')} />
+            </button>
+          </div>
+        </div>
+        <p className="text-[10px] font-label text-stone-400 mb-4 leading-relaxed">
+          Se vendieron en el local (según su caja) pero el TC52 no los tiene contados en esa área, por eso NO se descuentan.
+          Cuéntalos con el TC52 en esa área para que empiecen a bajar del inventario.
+        </p>
+        {scLoading && !sinContar ? (
+          <div className="flex justify-center py-8"><div className="w-6 h-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>
+        ) : scPorArea.length === 0 ? (
+          <div className="py-8 flex flex-col items-center text-stone-300">
+            <Icon name="check_circle" className="text-4xl opacity-30 mb-2" />
+            <p className="text-xs font-label uppercase tracking-widest">Todo lo que se vende está contado ✓</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {scPorArea.map(([area, rows]) => (
+              <div key={area} className="rounded-xl border border-amber-200/50 bg-amber-50/30 overflow-hidden">
+                <div className="px-4 py-2 bg-amber-100/40 flex items-center justify-between">
+                  <span className="text-[11px] font-label font-bold text-amber-800">{area}</span>
+                  <span className="text-[10px] font-label text-amber-600">{rows.length} producto(s)</span>
+                </div>
+                <div className="divide-y divide-amber-100/60 max-h-[320px] overflow-y-auto">
+                  {rows.map(r => (
+                    <div key={r.codigo} className="px-4 py-2 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-body text-on-surface truncate">{r.nombre}</p>
+                        <p className="text-[9px] font-label text-stone-400">{r.codigo}{r.enOtraArea && ' · contado en otra área'}</p>
+                      </div>
+                      <span className="text-sm font-serif font-bold text-amber-700 flex-shrink-0">{r.vendido} vend.</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <p className="text-[10px] font-label text-stone-400 mt-4 leading-relaxed">
         Cada venta se descuenta del área de SU caja (caja 21 → Casita 1, caja 7 → Casita 2…). Las cajas

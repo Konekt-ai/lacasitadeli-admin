@@ -571,7 +571,48 @@ function buildTicketKPIsQuery({ period = 'day', maxDate = null } = {}) {
   `;
 }
 
+// ── Ventas por CAJA / CAJERO (tiempo real, tabla Tickets) ─────────────────────
+// El cajero (T_Cajero) es un código de Empleados; los cajeros ROTAN entre cajas.
+function buildVentasPorCajaQuery({ period = 'day' } = {}) {
+  return `
+    SELECT t.FolEst_Codigo AS caja,
+           COUNT(*)                         AS tickets,
+           SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    GROUP BY t.FolEst_Codigo
+    ORDER BY total DESC`;
+}
+function buildVentasPorCajeroQuery({ period = 'day' } = {}) {
+  return `
+    SELECT t.T_Cajero AS cajero,
+           MAX(ISNULL(NULLIF(LTRIM(RTRIM(e.Emp_Nombre)), ''), e.Emp_Alias)) AS nombre,
+           COUNT(*)                         AS tickets,
+           SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    LEFT JOIN [compucaja].[dbo].[Empleados] e WITH (NOLOCK) ON e.Emp_Codigo = t.T_Cajero
+    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    GROUP BY t.T_Cajero
+    ORDER BY total DESC`;
+}
+function buildVentasCajaCajeroQuery({ period = 'day' } = {}) {
+  return `
+    SELECT t.FolEst_Codigo AS caja,
+           t.T_Cajero       AS cajero,
+           MAX(ISNULL(NULLIF(LTRIM(RTRIM(e.Emp_Nombre)), ''), e.Emp_Alias)) AS nombre,
+           COUNT(*)                         AS tickets,
+           SUM(ISNULL(t.T_ImporteTotal, 0)) AS total
+    FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
+    LEFT JOIN [compucaja].[dbo].[Empleados] e WITH (NOLOCK) ON e.Emp_Codigo = t.T_Cajero
+    WHERE ${_ticketDateFilter(period, 't.T_Fecha')}
+    GROUP BY t.FolEst_Codigo, t.T_Cajero
+    ORDER BY total DESC`;
+}
+
 module.exports = {
+  buildVentasPorCajaQuery,
+  buildVentasPorCajeroQuery,
+  buildVentasCajaCajeroQuery,
   buildProductsQuery,
   buildProductsCountQuery,
   buildDashboardProductsCountQuery,

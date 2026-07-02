@@ -23,6 +23,9 @@ const {
   buildDesgloseCountQuery,
   buildTopProductsRealtimeQuery,
   buildDiaPorHoraQuery,
+  buildVentasPorCajaQuery,
+  buildVentasPorCajeroQuery,
+  buildVentasCajaCajeroQuery,
   COSTO_LINEA,
   JOIN_CP,
   JOIN_CP_A,
@@ -439,6 +442,49 @@ router.get('/suppliers', async (req, res) => {
     res.json(result.recordset);
   } catch (err) {
     console.error('Error proveedores:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/novacaja/ventas-cajas — ventas por caja y por cajero ─────────────
+// Rendimiento de cada CAJA (estación) y de cada CAJERO. Como los cajeros rotan,
+// también devuelve cajero×caja (dónde vendió cada quien). period = day|week|month.
+router.get('/ventas-cajas', async (req, res) => {
+  const { period = 'day' } = req.query;
+  const cacheKey = `ventasCajas:${period}`;
+  const cached = _get(cacheKey);
+  if (cached) return res.json(cached);
+  try {
+    const [caja, cajero, cajaCajero, mapa] = await Promise.all([
+      heavy(buildVentasPorCajaQuery({ period })),
+      heavy(buildVentasPorCajeroQuery({ period })),
+      heavy(buildVentasCajaCajeroQuery({ period })),
+      mssql.query(`SELECT est_codigo, area FROM [compucaja].[dbo].[estacion_area_map]`).catch(() => ({ recordset: [] })),
+    ]);
+    const areaDe = {};
+    for (const m of (mapa.recordset || [])) areaDe[String(m.est_codigo)] = m.area;
+    const nombreCaja = (c) => areaDe[String(c)] || `Caja ${c}`;
+
+    const payload = {
+      period,
+      porCaja: (caja.recordset || []).map(r => ({
+        caja: String(r.caja), area: areaDe[String(r.caja)] || null, nombre: nombreCaja(r.caja),
+        tickets: Number(r.tickets) || 0, total: Number(r.total) || 0,
+      })),
+      porCajero: (cajero.recordset || []).map(r => ({
+        cajero: String(r.cajero), nombre: (r.nombre && String(r.nombre).trim()) || `#${r.cajero}`,
+        tickets: Number(r.tickets) || 0, total: Number(r.total) || 0,
+      })),
+      porCajaCajero: (cajaCajero.recordset || []).map(r => ({
+        caja: String(r.caja), area: areaDe[String(r.caja)] || null, nombreCaja: nombreCaja(r.caja),
+        cajero: String(r.cajero), nombre: (r.nombre && String(r.nombre).trim()) || `#${r.cajero}`,
+        tickets: Number(r.tickets) || 0, total: Number(r.total) || 0,
+      })),
+    };
+    _set(cacheKey, payload, 60_000); // 1 min
+    res.json(payload);
+  } catch (err) {
+    console.error('ventas-cajas:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
