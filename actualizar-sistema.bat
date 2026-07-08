@@ -3,10 +3,17 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 if not exist "logs" mkdir logs
 set LOG=%~dp0logs\actualizaciones.log
+:: BLINDAJE: si actualizaciones.log esta trabado por un proceso colgado, caer a un log
+:: alterno. Los redirects NUNCA deben fallar; antes eso abortaba git/npm en silencio y
+:: dejaba la MISMA version (ese era el "no me deja actualizar").
+(echo.)>>"%LOG%" 2>nul
+if errorlevel 1 set LOG=%~dp0logs\actualizaciones-alt.log
 
-:: git NUNCA debe colgarse esperando credenciales en ventana oculta (eso trababa el
-:: log y dejaba el update a medias, reiniciando la misma version sin actualizar).
+:: git NUNCA debe colgarse esperando credenciales en ventana oculta (repo privado):
+:: GIT_TERMINAL_PROMPT + GCM_INTERACTIVE=never -> falla rapido en vez de esperar un
+:: dialogo que nunca aparece (sin escritorio), que era lo que trababa el log.
 set GIT_TERMINAL_PROMPT=0
+set GCM_INTERACTIVE=never
 
 :: Candado anti-encimado: si ya hay una actualizacion corriendo, cancelar esta para
 :: no encimar dos y trabar el log. El lock se borra al terminar y al arrancar el
