@@ -2,12 +2,13 @@
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 if not exist "logs" mkdir logs
-set LOG=%~dp0logs\actualizaciones.log
-:: BLINDAJE: si actualizaciones.log esta trabado por un proceso colgado, caer a un log
-:: alterno. Los redirects NUNCA deben fallar; antes eso abortaba git/npm en silencio y
-:: dejaba la MISMA version (ese era el "no me deja actualizar").
-(echo.)>>"%LOG%" 2>nul
-if errorlevel 1 set LOG=%~dp0logs\actualizaciones-alt.log
+:: BLINDAJE del log: un log de nombre FIJO puede quedar trabado por una corrida colgada,
+:: y ahi los '>> log' fallan -> git/npm no corren -> reinicia la MISMA version (ese era el
+:: "no me deja actualizar"). Por eso el log de trabajo lleva nombre UNICO por corrida
+:: (nadie lo traba) y al final se copia al compartido para el boton "Ver log".
+del "%~dp0logs\actualizaciones-run-*.log" >nul 2>&1
+set LOG=%~dp0logs\actualizaciones-run-%RANDOM%%RANDOM%.log
+set LOGSHARED=%~dp0logs\actualizaciones.log
 
 :: git NUNCA debe colgarse esperando credenciales en ventana oculta (repo privado):
 :: GIT_TERMINAL_PROMPT + GCM_INTERACTIVE=never -> falla rapido en vez de esperar un
@@ -172,6 +173,7 @@ echo.
 >>"%LOG%" echo [%date% %time%] Actualizacion completada.
 >>"%LOG%" echo [%date% %time%] ===============================
 del "%LOCK%" 2>nul
+copy /y "%LOG%" "%LOGSHARED%" >nul 2>&1
 goto :EOF
 
 :: ── Helper: imprime en pantalla y en el log ───────────────────────────────────
@@ -185,5 +187,6 @@ echo.
 echo  La actualizacion se detuvo. Reiniciando servicios para NO dejar el sistema caido...
 >>"%LOG%" echo [%date% %time%] Actualizacion abortada. Reiniciando servicios para recuperar.
 del "%LOCK%" 2>nul
+copy /y "%LOG%" "%LOGSHARED%" >nul 2>&1
 wscript.exe "%~dp0iniciar-silencioso.vbs"
 exit /b 1
