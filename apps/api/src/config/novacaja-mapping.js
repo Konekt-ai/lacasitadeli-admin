@@ -28,6 +28,15 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
     ? `HAVING ISNULL(SUM(aa.AA_ExistenciaActualU), 0) <= ${parseInt(lowStockThreshold)}`
     : '';
 
+  // Orden del Inventario: primero los productos CON stock (contado en bodega o, si no,
+  // el de NovaCaja) y los de stock 0 hasta el final; dentro de cada grupo, alfabetico.
+  // Se usa un JOIN agregado (ibsum) — NO la subconsulta escalar — para que ordenar el
+  // catalogo completo (~59k) no dispare una subconsulta por fila. En "stock bajo" se
+  // deja alfabetico (ahi los de 0 son los mas urgentes, no deben irse al fondo).
+  const orderBy = lowStockThreshold !== null
+    ? `ORDER BY a.Art_Descripcion`
+    : `ORDER BY CASE WHEN ISNULL(MAX(ibsum.cnt), ISNULL(SUM(aa.AA_ExistenciaActualU), 0)) > 0 THEN 0 ELSE 1 END, a.Art_Descripcion`;
+
   return `
     SELECT
       a.Art_Codigo                                      AS id,
@@ -51,6 +60,12 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
     LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
       ON aa.Art_Codigo = a.Art_Codigo
+    LEFT JOIN (
+      SELECT codigo_barras, SUM(cantidad) AS cnt
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE cantidad <> 0
+      GROUP BY codigo_barras
+    ) ibsum ON ibsum.codigo_barras = a.Art_Codigo
     WHERE a.Art_Descripcion <> ''
       AND a.Art_Descripcion IS NOT NULL
       ${whereSearch}
@@ -63,7 +78,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       a.UM_Codigo, a.Art_SKU, a.Art_CodProv,
       a.Art_FechaUltimaCompra, a.Art_FechaUltimaVenta
     ${havingLowStock}
-    ORDER BY a.Art_Descripcion
+    ${orderBy}
     OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
   `;
 }
