@@ -304,6 +304,7 @@ interface SalidaRow {
   codigo:        string;
   nombre:        string | null;
   cantidad:      number;
+  ubicacion?:    string | null;
   area:          string;
   stock_antes:   number;
   stock_despues: number;
@@ -331,6 +332,8 @@ function SalidaView() {
   const [selected,    setSelected]    = useState<BusquedaProducto | null>(null);
   const [cantidad,    setCantidad]    = useState('1');
   const [notas,       setNotas]       = useState('');
+  const [ubicacion,   setUbicacion]   = useState('Bodega');
+  const [ubicaciones, setUbicaciones] = useState<{ ubicacion: string; cantidad: number }[]>([]);
   const [saving,      setSaving]      = useState(false);
   const [notif,       setNotif]       = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
@@ -341,7 +344,7 @@ function SalidaView() {
   const fetchSalidas = useCallback(async (f: string) => {
     setLoading(true);
     try {
-      const res  = await fetch(`/api/almacen/movimientos/historial?tipo=salida&fecha=${f}&limit=300`);
+      const res  = await fetch(`/api/almacen/retiros?fecha=${f}`);
       if (!res.ok) return;
       const data = await res.json();
       setRows(Array.isArray(data) ? data : []);
@@ -368,10 +371,18 @@ function SalidaView() {
     }, 300);
   }, [query]);
 
-  const seleccionar = (p: BusquedaProducto) => {
+  const seleccionar = async (p: BusquedaProducto) => {
     setSelected(p);
     setQuery(p.nombre);
     setResults([]);
+    // Traer stock por ubicacion (misma BD del sistema de bodega TC52).
+    // Default: la ubicacion que MAS tenga, para descontar de donde sí hay.
+    try {
+      const ub   = await fetch(`/api/almacen/producto/${encodeURIComponent(p.codigo)}/ubicaciones`).then(r => r.json());
+      const list = Array.isArray(ub) ? ub : [];
+      setUbicaciones(list);
+      setUbicacion(list[0]?.ubicacion || 'Bodega');
+    } catch { setUbicaciones([]); setUbicacion('Bodega'); }
   };
 
   const registrar = async () => {
@@ -384,17 +395,17 @@ function SalidaView() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          codigo:   selected.codigo,
-          nombre:   selected.nombre,
-          cantidad: parseFloat(cantidad),
-          area:     'bodega',
-          notas:    notas.trim() || 'Retiro autorizado',
+          codigo:    selected.codigo,
+          cantidad:  parseFloat(cantidad),
+          ubicacion: ubicacion,
+          notas:     notas.trim() || 'Retiro autorizado',
         }),
       });
       const data = await res.json();
       if (res.ok) {
-        notify(`Retiro registrado: ${selected.nombre} (${cantidad} uds)`);
+        notify(`Retiro de ${cantidad} uds desde ${ubicacion}: ${selected.nombre}`);
         setSelected(null); setQuery(''); setCantidad('1'); setNotas('');
+        setUbicaciones([]); setUbicacion('Bodega');
         fetchSalidas(today);
       } else {
         notify(data.mensaje || data.ok === false ? (data.mensaje || 'Error') : 'Error', 'error');
@@ -477,6 +488,29 @@ function SalidaView() {
               </div>
             )}
 
+            {/* Ubicacion de donde sale (misma BD que el sistema de bodega TC52) */}
+            {selected && (
+              <div>
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">
+                  Ubicación (de dónde sale)
+                </label>
+                {ubicaciones.length === 0 ? (
+                  <div className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body text-stone-400">
+                    Sin stock contado en ninguna ubicación
+                  </div>
+                ) : (
+                  <select value={ubicacion} onChange={e => setUbicacion(e.target.value)}
+                    className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors">
+                    {ubicaciones.map(u => (
+                      <option key={u.ubicacion} value={u.ubicacion}>
+                        {u.ubicacion} — {u.cantidad} pzas
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad</label>
@@ -543,6 +577,7 @@ function SalidaView() {
                 <tr>
                   <th className="px-4 py-3">Hora</th>
                   <th className="px-4 py-3">Producto</th>
+                  <th className="px-4 py-3">Ubicación</th>
                   <th className="px-4 py-3 text-center">Cant.</th>
                   <th className="px-4 py-3 text-center">Stock →</th>
                   <th className="px-4 py-3">Notas</th>
@@ -557,6 +592,9 @@ function SalidaView() {
                     <td className="px-4 py-2.5">
                       <p className="text-sm font-body text-on-surface truncate max-w-[200px]">{r.nombre || r.codigo}</p>
                       <p className="text-[10px] font-label text-stone-400">{r.codigo}</p>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className="text-xs font-label text-stone-500">{r.ubicacion || '—'}</span>
                     </td>
                     <td className="px-4 py-2.5 text-center">
                       <span className="font-serif font-bold text-error">−{r.cantidad}</span>

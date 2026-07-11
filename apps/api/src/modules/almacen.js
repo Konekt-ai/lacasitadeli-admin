@@ -229,15 +229,15 @@ router.post('/entrada', async (req, res) => {
 
 // ── POST /api/almacen/salida ──────────────────────────────────────────────────
 router.post('/salida', async (req, res) => {
-  const { codigo, cantidad, nombre } = req.body;
-  const qty = parseFloat(cantidad);
+  const { codigo, cantidad, ubicacion, notas } = req.body;
+  const qty  = parseFloat(cantidad);
+  const ubic = String(ubicacion || 'Bodega').trim();
   if (!codigo || !qty || qty <= 0)
     return res.status(400).json({ ok: false, mensaje: 'Código y cantidad válida requeridos' });
 
   try {
-    // Resolver las llaves del producto (código base + GTIN + alterno). inventario_bodega
-    // guarda el código con el que se escaneó (a veces el GTIN), así que hay que casar por
-    // las 3 — si no, un producto contado por GTIN saldría en 0 y bloquearía el retiro.
+    // Resolver las llaves (código base + GTIN + alterno) para casar con inventario_bodega,
+    // que guarda el código con el que se escaneó (a veces el GTIN).
     const kRes = await mssql.query(`
       SELECT TOP 1 Art_Codigo, Art_GTIN, CodAlt_Codigo
       FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
@@ -247,38 +247,44 @@ router.post('/salida', async (req, res) => {
     const inList = [...new Set([k.Art_Codigo, k.Art_GTIN, k.CodAlt_Codigo, codigo].filter(Boolean))]
       .map(x => `'${esc(x)}'`).join(',');
 
-    // Stock EFECTIVO = lo CONTADO en bodega (TC52); si no está ahí, el de NovaCaja.
-    const stockRes = await mssql.query(`
-      SELECT ISNULL(
-        (SELECT SUM(ib.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK) WHERE ib.codigo_barras IN (${inList})),
-        (SELECT ISNULL(SUM(aa.AA_ExistenciaActualU),0) FROM [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK) WHERE aa.Art_Codigo = '${esc(codigo)}')
-      ) AS stock
+    // Stock EXACTO en la UBICACIÓN elegida (lo que cuenta el TC52 ahí) — descuento preciso.
+    const rowsRes = await mssql.query(`
+      SELECT codigo_barras, cantidad
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE codigo_barras IN (${inList}) AND ubicacion = '${esc(ubic)}' AND cantidad > 0
+      ORDER BY cantidad DESC
     `);
-    const stockAntes = Number(stockRes.recordset[0]?.stock) || 0;
+    const filas = rowsRes.recordset || [];
+    const stockAntes = filas.reduce((s, r) => s + (Number(r.cantidad) || 0), 0);
     if (stockAntes < qty)
-      return res.status(400).json({ ok: false, mensaje: `Stock insuficiente en bodega. Disponible: ${stockAntes} pzas` });
+      return res.status(400).json({ ok: false, mensaje: `Stock insuficiente en ${ubic}. Disponible: ${stockAntes} pzas` });
 
-    // 1) Descontar de la BODEGA (TC52) repartido entre las áreas que tengan stock (de
-    //    mayor a menor) hasta cubrir la cantidad. Es la fuente de verdad del TC52 y lo
-    //    que el cliente quiere sincronizado. Sin cobro (no pasa por caja/NovaCaja).
-    const areasRes = await mssql.query(`
-      SELECT codigo_barras, ubicacion, cantidad FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
-      WHERE codigo_barras IN (${inList}) AND cantidad > 0 ORDER BY cantidad DESC
-    `);
+    // 1) Descontar EXACTO de esa ubicación (fuente de verdad del TC52). Si hay varios
+    //    códigos (base/GTIN) en la misma ubicación, se reparte entre ellos.
     let restante = qty;
-    for (const row of (areasRes.recordset || [])) {
+    for (const row of filas) {
       if (restante <= 0) break;
       const toma = Math.min(restante, Number(row.cantidad) || 0);
       if (toma <= 0) continue;
       await mssql.query(`
         UPDATE [compucaja].[dbo].[inventario_bodega]
         SET cantidad = cantidad - ${toma}, ultima_salida = GETDATE()
-        WHERE codigo_barras = '${esc(row.codigo_barras)}' AND ubicacion = '${esc(row.ubicacion)}'
+        WHERE codigo_barras = '${esc(row.codigo_barras)}' AND ubicacion = '${esc(ubic)}'
       `);
       restante -= toma;
     }
+    const stockDespues = stockAntes - qty;
+    const cbReal = filas[0]?.codigo_barras || codigo;
 
-    // 2) Descontar también del stock de NovaCaja (para que no muestre stock fantasma),
+    // 2) Registrar en movimientos_bodega -> aparece en el HISTORIAL del TC52 (Zebra) y en
+    //    Movimientos del panel. tipo='salida', motivo='retiro' lo distingue de una venta.
+    await mssql.query(`
+      INSERT INTO [compucaja].[dbo].[movimientos_bodega]
+        (codigo_barras, tipo, cantidad, ubicacion, stock_antes, stock_despues, motivo, notas, fecha)
+      VALUES ('${esc(cbReal)}', 'salida', ${qty}, '${esc(ubic)}', ${stockAntes}, ${stockDespues}, 'retiro', ${notas ? `'${esc(notas)}'` : 'NULL'}, GETDATE())
+    `);
+
+    // 3) Descontar también del stock de NovaCaja (para que no muestre stock fantasma),
     //    sin dejarlo en negativo. Si el producto no está en NovaCaja, no afecta nada.
     await mssql.query(`
       UPDATE [compucaja].[dbo].[ArticulosAlmacen]
@@ -286,17 +292,63 @@ router.post('/salida', async (req, res) => {
       WHERE Art_Codigo = '${esc(codigo)}'
     `);
 
-    // 3) Registrar el retiro en el ledger unificado (aparece en Historial/Movimientos).
-    const stockDespues = Math.max(0, stockAntes - qty);
-    getDb().prepare(`
-      INSERT INTO almacen_movimientos (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario)
-      VALUES (?, ?, 'salida', ?, ?, ?, 'bodega', 'Retiro')
-    `).run(codigo, nombre || null, qty, stockAntes, stockDespues);
-
-    res.json({ ok: true, stockActual: stockDespues, mensaje: `Retiro registrado: -${qty} pzas` });
+    res.json({ ok: true, stockActual: stockDespues, mensaje: `Retiro de ${qty} pzas desde ${ubic}` });
   } catch (err) {
     console.error('Error salida:', err.message);
     res.status(500).json({ ok: false, mensaje: 'Error del servidor' });
+  }
+});
+
+// ── GET /api/almacen/producto/:codigo/ubicaciones — stock por ubicación (retiro) ──
+// Para el selector de ubicación del retiro: cuánto hay del producto en cada área.
+router.get('/producto/:codigo/ubicaciones', async (req, res) => {
+  const codigo = String(req.params.codigo || '').trim();
+  if (!codigo) return res.json([]);
+  try {
+    const kRes = await mssql.query(`
+      SELECT TOP 1 Art_Codigo, Art_GTIN, CodAlt_Codigo
+      FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+      WHERE Art_Codigo = '${esc(codigo)}'
+    `);
+    const k = kRes.recordset[0] || {};
+    const inList = [...new Set([k.Art_Codigo, k.Art_GTIN, k.CodAlt_Codigo, codigo].filter(Boolean))]
+      .map(x => `'${esc(x)}'`).join(',');
+    const r = await mssql.query(`
+      SELECT ubicacion, SUM(cantidad) AS cantidad
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE codigo_barras IN (${inList}) AND cantidad > 0
+      GROUP BY ubicacion ORDER BY SUM(cantidad) DESC
+    `);
+    res.json(r.recordset || []);
+  } catch (err) {
+    console.error('Error ubicaciones producto:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/almacen/retiros?fecha=YYYY-MM-DD — lista de retiros del día ──────────
+// Lee movimientos_bodega (motivo='retiro'), que es donde ahora se registran los retiros.
+router.get('/retiros', async (req, res) => {
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(req.query.fecha || '') ? req.query.fecha : hoyMX();
+  try {
+    const r = await mssql.query(`
+      SELECT TOP 300
+        m.id                                              AS id,
+        m.codigo_barras                                   AS codigo,
+        ISNULL(NULLIF(a.Art_Descripcion, ''), m.codigo_barras) AS nombre,
+        m.cantidad, m.ubicacion, m.stock_antes, m.stock_despues, m.notas,
+        CONVERT(varchar(19), m.fecha, 120)                AS fecha
+      FROM [compucaja].[dbo].[movimientos_bodega] m WITH (NOLOCK)
+      LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = m.codigo_barras
+      WHERE LOWER(LTRIM(RTRIM(m.motivo))) = 'retiro'
+        AND CAST(m.fecha AS DATE) = '${esc(fecha)}'
+      ORDER BY m.fecha DESC
+      OPTION (MAXDOP 1)
+    `);
+    res.json(r.recordset || []);
+  } catch (err) {
+    console.error('Error retiros:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
