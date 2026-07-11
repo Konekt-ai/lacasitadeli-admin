@@ -229,41 +229,71 @@ router.post('/entrada', async (req, res) => {
 
 // ── POST /api/almacen/salida ──────────────────────────────────────────────────
 router.post('/salida', async (req, res) => {
-  const { codigo, cantidad, nombre, area = 'bodega' } = req.body;
+  const { codigo, cantidad, nombre } = req.body;
   const qty = parseFloat(cantidad);
   if (!codigo || !qty || qty <= 0)
     return res.status(400).json({ ok: false, mensaje: 'Código y cantidad válida requeridos' });
 
   try {
+    // Resolver las llaves del producto (código base + GTIN + alterno). inventario_bodega
+    // guarda el código con el que se escaneó (a veces el GTIN), así que hay que casar por
+    // las 3 — si no, un producto contado por GTIN saldría en 0 y bloquearía el retiro.
+    const kRes = await mssql.query(`
+      SELECT TOP 1 Art_Codigo, Art_GTIN, CodAlt_Codigo
+      FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+      WHERE Art_Codigo = '${esc(codigo)}'
+    `);
+    const k = kRes.recordset[0] || {};
+    const inList = [...new Set([k.Art_Codigo, k.Art_GTIN, k.CodAlt_Codigo, codigo].filter(Boolean))]
+      .map(x => `'${esc(x)}'`).join(',');
+
+    // Stock EFECTIVO = lo CONTADO en bodega (TC52); si no está ahí, el de NovaCaja.
     const stockRes = await mssql.query(`
-      SELECT ISNULL(SUM(aa.AA_ExistenciaActualU), 0) AS stock
-      FROM [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
-      WHERE aa.Art_Codigo = '${esc(codigo)}'
+      SELECT ISNULL(
+        (SELECT SUM(ib.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK) WHERE ib.codigo_barras IN (${inList})),
+        (SELECT ISNULL(SUM(aa.AA_ExistenciaActualU),0) FROM [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK) WHERE aa.Art_Codigo = '${esc(codigo)}')
+      ) AS stock
     `);
     const stockAntes = Number(stockRes.recordset[0]?.stock) || 0;
-
     if (stockAntes < qty)
-      return res.status(400).json({ ok: false, mensaje: `Stock insuficiente. Disponible: ${stockAntes} pzas` });
+      return res.status(400).json({ ok: false, mensaje: `Stock insuficiente en bodega. Disponible: ${stockAntes} pzas` });
 
+    // 1) Descontar de la BODEGA (TC52) repartido entre las áreas que tengan stock (de
+    //    mayor a menor) hasta cubrir la cantidad. Es la fuente de verdad del TC52 y lo
+    //    que el cliente quiere sincronizado. Sin cobro (no pasa por caja/NovaCaja).
+    const areasRes = await mssql.query(`
+      SELECT codigo_barras, ubicacion, cantidad FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      WHERE codigo_barras IN (${inList}) AND cantidad > 0 ORDER BY cantidad DESC
+    `);
+    let restante = qty;
+    for (const row of (areasRes.recordset || [])) {
+      if (restante <= 0) break;
+      const toma = Math.min(restante, Number(row.cantidad) || 0);
+      if (toma <= 0) continue;
+      await mssql.query(`
+        UPDATE [compucaja].[dbo].[inventario_bodega]
+        SET cantidad = cantidad - ${toma}, ultima_salida = GETDATE()
+        WHERE codigo_barras = '${esc(row.codigo_barras)}' AND ubicacion = '${esc(row.ubicacion)}'
+      `);
+      restante -= toma;
+    }
+
+    // 2) Descontar también del stock de NovaCaja (para que no muestre stock fantasma),
+    //    sin dejarlo en negativo. Si el producto no está en NovaCaja, no afecta nada.
     await mssql.query(`
       UPDATE [compucaja].[dbo].[ArticulosAlmacen]
-      SET AA_ExistenciaActualU = AA_ExistenciaActualU - ${qty}
+      SET AA_ExistenciaActualU = CASE WHEN AA_ExistenciaActualU - ${qty} < 0 THEN 0 ELSE AA_ExistenciaActualU - ${qty} END
       WHERE Art_Codigo = '${esc(codigo)}'
     `);
 
-    const stockDespues = stockAntes - qty;
-    const db = getDb();
-
-    db.prepare(`
+    // 3) Registrar el retiro en el ledger unificado (aparece en Historial/Movimientos).
+    const stockDespues = Math.max(0, stockAntes - qty);
+    getDb().prepare(`
       INSERT INTO almacen_movimientos (art_codigo, nombre, tipo, cantidad, stock_antes, stock_despues, area, usuario)
-      VALUES (?, ?, 'salida', ?, ?, ?, ?, 'TC52')
-    `).run(codigo, nombre || null, qty, stockAntes, stockDespues, area);
+      VALUES (?, ?, 'salida', ?, ?, ?, 'bodega', 'Retiro')
+    `).run(codigo, nombre || null, qty, stockAntes, stockDespues);
 
-    // Stock por ubicación (fuente unificada: MSSQL inventario_bodega)
-    const ubicNombre = (await mapaClaveANombre())[area] || 'Bodega';
-    await setStockInventarioBodega(codigo, ubicNombre, -qty);
-
-    res.json({ ok: true, stockActual: stockDespues, mensaje: `Salida registrada: -${qty} pzas de ${ubicNombre}` });
+    res.json({ ok: true, stockActual: stockDespues, mensaje: `Retiro registrado: -${qty} pzas` });
   } catch (err) {
     console.error('Error salida:', err.message);
     res.status(500).json({ ok: false, mensaje: 'Error del servidor' });
@@ -813,11 +843,19 @@ router.get('/buscar', async (req, res) => {
   if (q.length < 2) return res.json([]);
 
   try {
+    // Stock que se muestra = lo CONTADO en bodega (TC52, inventario_bodega); si el
+    // producto no está contado ahí, cae al de NovaCaja. Antes mostraba solo el de
+    // NovaCaja (AA), por eso salían en "0" productos que sí tienen stock en bodega.
+    // Es TOP 50 con LIKE, así que la subconsulta solo corre para lo que empata (rápido).
     const result = await mssql.query(`
       SELECT TOP 50
         a.Art_Codigo                            AS codigo,
         a.Art_Descripcion                       AS nombre,
-        ISNULL(SUM(aa.AA_ExistenciaActualU), 0) AS stock
+        ISNULL(
+          (SELECT SUM(ib.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+             WHERE ib.codigo_barras IN (a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo)),
+          ISNULL(SUM(aa.AA_ExistenciaActualU), 0)
+        )                                       AS stock
       FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
         ON aa.Art_Codigo = a.Art_Codigo
@@ -827,7 +865,7 @@ router.get('/buscar', async (req, res) => {
         OR a.Art_GTIN = '${esc(q)}'
       )
       AND a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
-      GROUP BY a.Art_Codigo, a.Art_Descripcion
+      GROUP BY a.Art_Codigo, a.Art_Descripcion, a.Art_GTIN, a.CodAlt_Codigo
       ORDER BY stock DESC
     `);
     res.json(result.recordset);
