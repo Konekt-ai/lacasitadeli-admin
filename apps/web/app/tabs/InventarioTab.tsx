@@ -31,6 +31,9 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   const [categoryFilter, setCategoryFilter] = useState('');
   const [areaFilter,     setAreaFilter]     = useState('');
   const [sinPrecio,      setSinPrecio]      = useState(false);
+  // Default del panel = solo productos con stock (igual que la Bodega TC52),
+  // ordenados de mayor a menor. "Ver todos" muestra el catálogo completo.
+  const [soloConStock,   setSoloConStock]   = useState(true);
   const [inventoryView,  setInventoryView]  = useState<'list' | 'grid'>('list');
 
   // ── Area assignments (from SQLite) ────────────────────────────────────────────
@@ -93,12 +96,14 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
 
   // ── Fetch products — debounced on search/category, immediate on page ──────────
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const searchRef    = useRef(searchQuery);
-  const categoryRef  = useRef(categoryFilter);
-  const sinPrecioRef = useRef(sinPrecio);
-  searchRef.current    = searchQuery;
-  categoryRef.current  = categoryFilter;
-  sinPrecioRef.current = sinPrecio;
+  const searchRef       = useRef(searchQuery);
+  const categoryRef     = useRef(categoryFilter);
+  const sinPrecioRef    = useRef(sinPrecio);
+  const soloConStockRef = useRef(soloConStock);
+  searchRef.current       = searchQuery;
+  categoryRef.current     = categoryFilter;
+  sinPrecioRef.current    = sinPrecio;
+  soloConStockRef.current = soloConStock;
 
   const fetchProducts = useCallback(async (pg: number) => {
     setLoading(true);
@@ -110,6 +115,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         pageSize: String(PAGE_SIZE),
       });
       if (sinPrecioRef.current) params.set('sinPrecio', 'true');
+      if (soloConStockRef.current) params.set('conStock', 'true');
       const res  = await fetch(`/api/products?${params}`);
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -134,7 +140,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       fetchProducts(1);
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [searchQuery, categoryFilter, sinPrecio, fetchProducts]);
+  }, [searchQuery, categoryFilter, sinPrecio, soloConStock, fetchProducts]);
 
   // Page change → fetch immediately
   const prevPage = useRef(1);
@@ -315,7 +321,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         <div>
           <h2 className="text-3xl font-serif italic text-primary">Inventario</h2>
           <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
-            {total.toLocaleString('es-MX')} productos · {lowStockProducts.length} alertas
+            {total.toLocaleString('es-MX')} {soloConStock && !searchQuery && !sinPrecio ? 'con stock' : 'productos'} · {lowStockProducts.length} alertas
           </p>
         </div>
       </div>
@@ -358,6 +364,16 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                   <option key={a.area} value={a.area}>{a.nombre}</option>
                 ))}
               </select>
+              <button
+                onClick={() => { setSoloConStock(v => !v); setPage(1); }}
+                title="Con stock: solo productos con existencia (como la Bodega), de mayor a menor. Ver todos: catálogo completo."
+                className={cn(
+                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                  soloConStock ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary'
+                )}>
+                <Icon name={soloConStock ? 'inventory_2' : 'apps'} className="text-base" />
+                {soloConStock ? 'Con stock' : 'Ver todos'}
+              </button>
               <button
                 onClick={() => { setSinPrecio(v => !v); setPage(1); }}
                 title="Mostrar solo productos sin precio de venta registrado"

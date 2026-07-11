@@ -1,7 +1,12 @@
 const express  = require('express');
 const { getDb } = require('../db');
 const mssql    = require('../db/mssql');
-const { buildProductsQuery, buildProductsCountQuery } = require('../config/novacaja-mapping');
+const {
+  buildProductsQuery,
+  buildProductsCountQuery,
+  buildProductsConStockQuery,
+  buildProductsConStockCountQuery,
+} = require('../config/novacaja-mapping');
 
 const DEFAULT_MIN_STOCK = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 
@@ -34,13 +39,18 @@ router.get('/categories', async (req, res) => {
 
 // ── GET /api/products — cached 2 min for full list, no cache for search ───────
 router.get('/', async (req, res) => {
-  const { q = '', category = '', page = 1, pageSize = 50, lowStock, sinPrecio } = req.query;
+  const { q = '', category = '', page = 1, pageSize = 50, lowStock, sinPrecio, conStock } = req.query;
   const offset = (parseInt(page) - 1) * parseInt(pageSize);
   const soloSinPrecio = sinPrecio === 'true';
+  // Modo "con stock" (default del panel, igual que la Bodega TC52): solo productos
+  // con stock contado en inventario_bodega, ordenados de mayor a menor. Una BÚSQUEDA
+  // o el filtro "sin precio" lo desactivan para poder encontrar/corregir CUALQUIER
+  // producto (incluidos los de stock 0).
+  const useConStock = conStock === 'true' && !q && !soloSinPrecio && lowStock !== 'true';
 
-  // Cache only the fully unfiltered default page
+  // Cache only the fully unfiltered default page (distinta por modo con-stock/todos)
   const isDefaultPage = !q && !category && lowStock !== 'true' && !soloSinPrecio && parseInt(page) === 1 && parseInt(pageSize) <= 50;
-  const cacheKey = isDefaultPage ? `products:default` : null;
+  const cacheKey = isDefaultPage ? `products:default:${useConStock ? 'cs' : 'all'}` : null;
   if (cacheKey) {
     const cached = _get(cacheKey);
     if (cached) return res.json(cached);
@@ -94,6 +104,16 @@ router.get('/', async (req, res) => {
         _set(lowKey, lowResult, 90_000); // 90 s
         return res.json(lowResult);
       }
+    } else if (useConStock) {
+      // Solo productos con stock (inventario_bodega), ordenados por stock DESC.
+      // Estrategia 2 fases con tabla temporal (~2.8s) para NO tronar como el
+      // "ORDER BY stock" sobre los 59k. MAXDOP 1 ya viene dentro de la consulta.
+      const [dataRes, countRes] = await Promise.all([
+        mssql.query(buildProductsConStockQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
+        mssql.query(buildProductsConStockCountQuery({ search: q, category })),
+      ]);
+      rows  = dataRes.recordset.map(toRow);
+      total = countRes.recordset[0]?.total || 0;
     } else {
       const [dataRes, countRes] = await Promise.all([
         mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize), sinPrecio: soloSinPrecio })),

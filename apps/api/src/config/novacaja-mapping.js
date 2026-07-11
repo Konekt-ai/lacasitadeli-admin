@@ -63,8 +63,115 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       a.UM_Codigo, a.Art_SKU, a.Art_CodProv,
       a.Art_FechaUltimaCompra, a.Art_FechaUltimaVenta
     ${havingLowStock}
-    ORDER BY a.Art_Descripcion
+    ORDER BY a.Art_Descripcion, a.Art_Codigo
     OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY
+  `;
+}
+
+// ── DEFAULT "CON STOCK" (como la Bodega TC52) ────────────────────────────────
+// El catálogo tiene 59k productos y ordenar los 59k por stock TRUENA (la
+// subconsulta de stock se evalúa para todo el catálogo -> timeout de 60s). Pero
+// solo ~6.3k productos tienen stock contado en inventario_bodega (la MISMA fuente
+// que usa el sistema de bodega de los TC52). Así que armamos primero ese set chico
+// en una tabla temporal (#cs, ~35ms) y unimos por Art_Codigo con HASH JOIN (un
+// solo escaneo, ~2.8s). Es la misma "estrategia 2 fases a prueba de timeout" del
+// desglose de tickets. Orden: mayor stock primero. Los 0 (y los no contados) no
+// salen aquí -> se ven con "Ver todos".
+//   El match es por Art_Codigo (código base). Medido en vivo: 6,320 de 6,326
+//   productos con stock casan por base; solo 3 casan ÚNICAMENTE por GTIN/CodAlt,
+//   y meter ese OR dispara la consulta a 144s. No vale la pena: esos 3 se ven en
+//   "Ver todos". El stock MOSTRADO usa la suma de los 3 códigos (igual que el
+//   resto del panel); el ORDEN usa cs.cant (base), que coincide para ~todos.
+function buildProductsConStockQuery({ search = '', category = '', offset = 0, pageSize = 50 } = {}) {
+  const esc = s => String(s || '').replace(/'/g, "''");
+  const whereSearch = search
+    ? `AND (
+        a.Art_Descripcion  LIKE '%${esc(search)}%'
+        OR a.Art_GTIN      LIKE '%${esc(search)}%'
+        OR a.Art_PLU       LIKE '%${esc(search)}%'
+        OR a.Art_SKU       LIKE '%${esc(search)}%'
+        OR a.CodAlt_Codigo LIKE '%${esc(search)}%'
+      )`
+    : '';
+  const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  const stockExpr = `ISNULL((SELECT SUM(ibx.cantidad) FROM [compucaja].[dbo].[inventario_bodega] ibx WITH (NOLOCK) WHERE ibx.codigo_barras IN (a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo)), ISNULL(SUM(aa.AA_ExistenciaActualU), 0))`;
+  return `
+    SET NOCOUNT ON;
+    IF OBJECT_ID('tempdb..#cs') IS NOT NULL DROP TABLE #cs;
+    SELECT codigo_barras, SUM(cantidad) AS cant INTO #cs
+    FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+    GROUP BY codigo_barras HAVING SUM(cantidad) > 0;
+
+    SELECT
+      a.Art_Codigo                                      AS id,
+      ISNULL(a.Art_GTIN, a.CodAlt_Codigo)               AS barcode,
+      a.Art_Descripcion                                 AS name,
+      a.Art_Alias                                       AS alias,
+      ISNULL(COALESCE(NULLIF(cpf.precio_compra,0), NULLIF(a.Art_UltimoCosto,0), NULLIF(a.Art_CostoReposicion,0)), 0) AS costPrice,
+      ISNULL(p.LPA_PrecioVentaImp, 0)                   AS salePrice,
+      ${stockExpr}                                      AS stock,
+      a.Mar_Nombre                                      AS brand,
+      a.Org_Descripcion                                 AS category,
+      a.UM_Codigo                                       AS unit,
+      a.Art_SKU                                         AS sku,
+      a.Art_CodProv                                     AS supplierCode,
+      a.Art_FechaUltimaCompra                           AS lastPurchase,
+      a.Art_FechaUltimaVenta                            AS lastSale
+    FROM #cs cs
+    JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      ON a.Art_Codigo = cs.codigo_barras
+    LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] p WITH (NOLOCK)
+      ON p.Art_Codigo = a.Art_Codigo AND p.LP_Codigo = 1
+    LEFT JOIN [compucaja].[dbo].[costos_producto] cpf WITH (NOLOCK)
+      ON cpf.codigo_barras = a.Art_Codigo AND cpf.fuente = 'factura'
+    LEFT JOIN [compucaja].[dbo].[ArticulosAlmacen] aa WITH (NOLOCK)
+      ON aa.Art_Codigo = a.Art_Codigo
+    WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+      ${whereSearch}
+      ${whereCategory}
+    GROUP BY
+      a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo,
+      a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto, a.Art_CostoReposicion, cpf.precio_compra,
+      p.LPA_PrecioVentaImp, a.Mar_Nombre, a.Org_Descripcion,
+      a.UM_Codigo, a.Art_SKU, a.Art_CodProv,
+      a.Art_FechaUltimaCompra, a.Art_FechaUltimaVenta, cs.cant
+    ORDER BY cs.cant DESC, a.Art_Descripcion, a.Art_Codigo
+    OFFSET ${parseInt(offset)} ROWS FETCH NEXT ${parseInt(pageSize)} ROWS ONLY
+    OPTION (MAXDOP 1);
+
+    DROP TABLE #cs;
+  `;
+}
+
+function buildProductsConStockCountQuery({ search = '', category = '' } = {}) {
+  const esc = s => String(s || '').replace(/'/g, "''");
+  const whereSearch = search
+    ? `AND (
+        a.Art_Descripcion  LIKE '%${esc(search)}%'
+        OR a.Art_GTIN      LIKE '%${esc(search)}%'
+        OR a.Art_PLU       LIKE '%${esc(search)}%'
+        OR a.Art_SKU       LIKE '%${esc(search)}%'
+        OR a.CodAlt_Codigo LIKE '%${esc(search)}%'
+      )`
+    : '';
+  const whereCategory = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
+  return `
+    SET NOCOUNT ON;
+    IF OBJECT_ID('tempdb..#cs') IS NOT NULL DROP TABLE #cs;
+    SELECT codigo_barras, SUM(cantidad) AS cant INTO #cs
+    FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+    GROUP BY codigo_barras HAVING SUM(cantidad) > 0;
+
+    SELECT COUNT(*) AS total
+    FROM #cs cs
+    JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      ON a.Art_Codigo = cs.codigo_barras
+    WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+      ${whereSearch}
+      ${whereCategory}
+    OPTION (MAXDOP 1);
+
+    DROP TABLE #cs;
   `;
 }
 
@@ -621,6 +728,8 @@ module.exports = {
   buildVentasCajaCajeroQuery,
   buildProductsQuery,
   buildProductsCountQuery,
+  buildProductsConStockQuery,
+  buildProductsConStockCountQuery,
   buildDashboardProductsCountQuery,
   buildDashboardLowStockCountQuery,
   buildSalesQuery,
