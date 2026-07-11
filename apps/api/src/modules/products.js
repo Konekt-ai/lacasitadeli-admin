@@ -16,6 +16,11 @@ const router = express.Router();
 const _cache = new Map();
 const _get = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
 const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
+// Borra toda la caché de productos. Lo usa el PUT de aquí y también el alta de
+// productos nuevos (almacen.js) para que el recién dado de alta aparezca ya.
+function invalidateProductsCache() {
+  for (const k of _cache.keys()) if (k.startsWith('products:')) _cache.delete(k);
+}
 
 // ── GET /api/products/categories — cached 5 min ───────────────────────────────
 router.get('/categories', async (req, res) => {
@@ -179,9 +184,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // Invalidate product cache so next fetch reflects the change
-    for (const k of _cache.keys()) {
-      if (k.startsWith('products:')) _cache.delete(k);
-    }
+    invalidateProductsCache();
 
     res.json({ message: `Actualizado: ${updated.join(', ')}` });
   } catch (err) {
@@ -191,3 +194,4 @@ router.put('/:id', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.invalidateProductsCache = invalidateProductsCache;

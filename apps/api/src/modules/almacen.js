@@ -1105,6 +1105,153 @@ router.delete('/productos-pendientes/:id', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── PRODUCTOS CON STOCK EN BODEGA SIN ALTA EN NOVACAJA ───────────────────────
+// La bodega (TC52) tiene ~1,347 productos con stock que NUNCA se dieron de alta
+// en NovaCaja -> al venderlos en caja NO aparece nombre ni precio. Aquí el admin
+// los da de alta (nombre pre-llenado desde la bodega, él pone el precio).
+//
+// El alta CLONA un producto plantilla que ya vende bien (mismo departamento,
+// impuesto, unidad, flags) y solo cambia código/nombre/precio. Se validó en vivo
+// (transacción + rollback): crea filas correctas en las 6 tablas y el producto
+// aparece en la vista unificada. La BD NO tiene replicación ni triggers en
+// Articulos, así que el INSERT directo es seguro.
+const ALTA_TEMPLATE = process.env.ALTA_TEMPLATE_CODIGO || '049000028904'; // 12 PACK COCA COLA (ABARROTES)
+
+// Cache corto de la lista (la anti-join escanea la vista ~2.4s).
+let _sinAltaCache = null; // { exp, data, total }
+
+// GET /api/almacen/sin-alta?q= — productos con stock en bodega sin alta en NovaCaja
+router.get('/sin-alta', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  try {
+    if (!q && _sinAltaCache && Date.now() < _sinAltaCache.exp) {
+      return res.json({ data: _sinAltaCache.data, total: _sinAltaCache.total, cached: true });
+    }
+    const whereQ = q ? `AND (cs.nombre LIKE '%${esc(q)}%' OR cs.codigo_barras LIKE '%${esc(q)}%')` : '';
+    // Anti-join por Art_Codigo (base) = rápido (hash, un escaneo). Puede colar ~3
+    // productos que sí existen bajo su GTIN; el endpoint de alta lo vuelve a checar
+    // por las 3 llaves antes de insertar, así que no se duplican.
+    const r = await mssql.query(`
+      SET NOCOUNT ON;
+      IF OBJECT_ID('tempdb..#cs') IS NOT NULL DROP TABLE #cs;
+      SELECT codigo_barras, SUM(cantidad) AS cant, MAX(nombre) AS nombre INTO #cs
+      FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+      GROUP BY codigo_barras HAVING SUM(cantidad) > 0;
+
+      SELECT TOP 500 cs.codigo_barras AS codigo, cs.nombre, cs.cant AS stock
+      FROM #cs cs
+      WHERE NOT EXISTS (SELECT 1 FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+                        WHERE a.Art_Codigo = cs.codigo_barras)
+        ${whereQ}
+      ORDER BY cs.cant DESC
+      OPTION (MAXDOP 1);
+
+      SELECT COUNT(*) AS total
+      FROM #cs cs
+      WHERE NOT EXISTS (SELECT 1 FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+                        WHERE a.Art_Codigo = cs.codigo_barras)
+        ${whereQ}
+      OPTION (MAXDOP 1);
+
+      DROP TABLE #cs;
+    `);
+    const data  = r.recordsets[0] || [];
+    const total = r.recordsets[1]?.[0]?.total || data.length;
+    if (!q) _sinAltaCache = { exp: Date.now() + 120_000, data, total };
+    res.json({ data, total });
+  } catch (err) {
+    console.error('Error sin-alta:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/almacen/sin-alta/alta — dar de alta 1 producto en NovaCaja (clon de plantilla)
+// Body: { codigo, descripcion, precio, stock? }
+router.post('/sin-alta/alta', async (req, res) => {
+  const codigo = String(req.body?.codigo || '').trim();
+  const desc   = String(req.body?.descripcion || '').trim();
+  const precio = parseFloat(req.body?.precio);
+  const stock  = parseFloat(req.body?.stock);
+  if (!codigo || !desc)        return res.status(400).json({ ok: false, mensaje: 'Código y descripción requeridos' });
+  if (!(precio >= 0))          return res.status(400).json({ ok: false, mensaje: 'Precio inválido' });
+  const stockAlta = stock >= 0 ? stock : 0;
+  const e = esc(codigo);
+  try {
+    // Pre-check en un solo viaje: (1) ¿ya existe en NovaCaja por CUALQUIERA de sus 4
+    // llaves? — las MISMAS que usa el resolutor GET /producto/:codigo, incluido
+    // Art_PLU (si no, un código = PLU de otro producto crearía un duplicado ambiguo).
+    // (2) ¿existe la plantilla? Así evitamos RAISERROR/RETURN dentro de la transacción.
+    const chk = await mssql.query(`
+      SELECT
+        (SELECT COUNT(*) FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+           WHERE Art_Codigo='${e}' OR Art_GTIN='${e}' OR CodAlt_Codigo='${e}' OR Art_PLU='${e}') AS existe,
+        (SELECT COUNT(*) FROM [compucaja].[dbo].[Articulos] WITH (NOLOCK)
+           WHERE Art_Codigo='${esc(ALTA_TEMPLATE)}') AS tpl`);
+    const { existe, tpl } = chk.recordset[0] || { existe: 0, tpl: 0 };
+    if (existe > 0) return res.status(409).json({ ok: false, mensaje: 'Ya existe en NovaCaja' });
+    if (!tpl)       return res.status(500).json({ ok: false, mensaje: 'Falta la plantilla de alta en NovaCaja' });
+
+    // Clon de la plantilla en las 6 tablas. Se usa una TRANSACCIÓN de node-mssql
+    // (conexión DEDICADA): si algo falla o expira, hacemos rollback explícito en esa
+    // misma conexión y se libera limpia. Así un timeout NO deja una transacción
+    // abierta con locks sobre el catálogo del POS ni envenena el pool compartido.
+    const tx = new mssql.sql.Transaction(await mssql.getPool());
+    await tx.begin();
+    try {
+      await tx.request().batch(`
+        SET NOCOUNT ON;
+        DECLARE @cod nvarchar(128)='${e}', @desc nvarchar(512)='${esc(desc)}',
+                @precio decimal(18,4)=${precio}, @stock decimal(18,4)=${stockAlta},
+                @tpl nvarchar(128)='${esc(ALTA_TEMPLATE)}';
+        SELECT * INTO #a FROM [compucaja].[dbo].[Articulos] WHERE Art_Codigo=@tpl;
+        UPDATE #a SET Art_Codigo=@cod, Art_Descripcion=@desc, Art_Alias=@desc, Art_GTIN='', Art_PLU='',
+          Art_SKU=NULL, Art_UltimoCosto=0, Art_CostoReposicion=0, Art_FechaAlta=GETDATE(),
+          Art_FechaModificacion=GETDATE(), Art_CodigoCompartido='', Art_CodProv='', MSrepl_tran_version=NEWID();
+        INSERT INTO [compucaja].[dbo].[Articulos] SELECT * FROM #a;
+
+        SELECT * INTO #lp FROM [compucaja].[dbo].[ListaPreciosArt] WHERE Art_Codigo=@tpl AND LP_Codigo=1;
+        UPDATE #lp SET Art_Codigo=@cod, LPA_PrecioVenta=@precio, LPA_PrecioVentaImp=@precio,
+          LPA_PrecioMinimo=@precio, LPA_UtilidadFactor=0, LPA_UtilidadMarginal=0;
+        INSERT INTO [compucaja].[dbo].[ListaPreciosArt] SELECT * FROM #lp;
+
+        SELECT * INTO #imp FROM [compucaja].[dbo].[ImpuestosListaPrecios] WHERE Art_Codigo=@tpl AND LP_Codigo=1;
+        UPDATE #imp SET Art_Codigo=@cod, MSrepl_tran_version=NEWID();
+        INSERT INTO [compucaja].[dbo].[ImpuestosListaPrecios] SELECT * FROM #imp;
+
+        SELECT * INTO #aa FROM [compucaja].[dbo].[ArticulosAlmacen] WHERE Art_Codigo=@tpl;
+        UPDATE #aa SET Art_Codigo=@cod, AA_ExistenciaInicialU=0, AA_ExistenciaInicialI=0, AA_EntradasU=0,
+          AA_EntradasI=0, AA_SalidasU=0, AA_SalidasI=0,
+          AA_ExistenciaActualU=CASE WHEN Tda_Codigo=1 THEN @stock ELSE 0 END, AA_ExistenciaActualI=0,
+          MSrepl_tran_version=NEWID();
+        INSERT INTO [compucaja].[dbo].[ArticulosAlmacen] SELECT * FROM #aa;
+
+        SELECT * INTO #um FROM [compucaja].[dbo].[UnidadesMedidaArticulo] WHERE Art_Codigo=@tpl;
+        UPDATE #um SET Art_Codigo=@cod, MSrepl_tran_version=NEWID();
+        INSERT INTO [compucaja].[dbo].[UnidadesMedidaArticulo] SELECT * FROM #um;
+
+        SELECT * INTO #sat FROM [compucaja].[dbo].[ArticulosSAT] WHERE Art_Codigo=@tpl;
+        UPDATE #sat SET Art_Codigo=@cod;
+        INSERT INTO [compucaja].[dbo].[ArticulosSAT] SELECT * FROM #sat;
+      `);
+      await tx.commit();
+    } catch (txErr) {
+      try { await tx.rollback(); } catch (_) { /* ya abortada */ }
+      throw txErr;
+    }
+
+    _sinAltaCache = null;                                  // invalidar la lista de sin-alta
+    try { require('./products').invalidateProductsCache(); } catch (_) {} // que aparezca ya en Inventario
+    res.json({ ok: true, codigo, mensaje: `Alta OK: ${desc} ($${precio})` });
+  } catch (err) {
+    // PK/único duplicado (carrera de dos altas del mismo código) -> 409 amistoso
+    if (err && (err.number === 2627 || err.number === 2601)) {
+      return res.status(409).json({ ok: false, mensaje: 'Ya existe en NovaCaja' });
+    }
+    console.error('Error alta sin-alta:', err.message);
+    res.status(500).json({ ok: false, mensaje: 'Error al dar de alta: ' + err.message });
+  }
+});
+
 // ── Pedidos de recepción ──────────────────────────────────────────────────────
 
 function genFolio() {

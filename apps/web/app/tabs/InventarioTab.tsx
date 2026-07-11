@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { Icon } from '../components/Icon';
+import SinAltaNovacaja from './SinAltaNovacaja';
 import type { Product, Category, Area } from '../lib/types';
 
 const PAGE_SIZE = 50;
@@ -325,6 +326,9 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
           </p>
         </div>
       </div>
+
+      {/* Productos con stock en bodega que NO están dados de alta en NovaCaja */}
+      <SinAltaNovacaja onAltaDone={() => { fetchProducts(page); onRefresh(); }} />
 
       {/* ── Table container ─────────────────────────────────────────────────── */}
       <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-[0px_12px_32px_rgba(28,28,25,0.04)] overflow-hidden">
