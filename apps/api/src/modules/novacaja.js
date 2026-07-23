@@ -267,7 +267,15 @@ async function enviarResumenVentas() {
     kpisDelPeriodo('month', maxDate),
     heavy(buildTopProductsQuery({ period: 'month', limit: 5, maxDate })),
   ]);
-  return emailSvc.sendSalesSummary({ dia, semana, mes, topProductos: topRes.recordset || [] });
+  // Caducidades reales (recepciones/TC52) para la sección del correo. Si falla,
+  // el resumen se manda igual (sin la sección) en vez de romperse.
+  let caducidades = [];
+  try {
+    caducidades = await require('./recepcion').fetchProximosVencer(30);
+  } catch (e) {
+    console.error('[resumen-ventas] caducidades error:', e.message);
+  }
+  return emailSvc.sendSalesSummary({ dia, semana, mes, topProductos: topRes.recordset || [], caducidades });
 }
 
 // ── POST /api/novacaja/enviar-resumen — manda por correo el resumen de ventas ──

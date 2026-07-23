@@ -162,7 +162,7 @@ export default function ProveedoresTab({ timeFilter }: Props) {
     const date        = hoyMX();
     const currFmt     = '"$"#,##0.00';
     const pctFmt      = '0.00"%"';
-    const pLabel: Record<string, string> = { day: 'Hoy', week: 'Esta semana', month: 'Este mes' };
+    const pLabel: Record<string, string> = { day: 'Hoy', week: 'Últimos 7 días', month: 'Últimos 30 días' };
 
     const totVentas    = suppliers.reduce((s, p) => s + p.totalVentas,      0);
     const totCosto     = suppliers.reduce((s, p) => s + p.totalCosto,       0);

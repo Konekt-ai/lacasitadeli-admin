@@ -45,8 +45,8 @@ const PERIOD_MAP: Record<TimeFilter, string> = {
 
 const PERIOD_LABEL: Record<string, string> = {
   day:   'hoy',
-  week:  'esta semana',
-  month: 'este mes',
+  week:  'últimos 7 días',
+  month: 'últimos 30 días',
 };
 
 const BAR_COLORS = ['#012d1d','#1b4332','#2d6a4f','#40916c','#52b788','#7b5819','#a47a23','#c9a843','#eebf76','#ffdeae'];

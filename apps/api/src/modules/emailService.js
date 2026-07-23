@@ -1,6 +1,5 @@
 const mssql     = require('../db/mssql');
 const { getDb } = require('../db');
-const { hoyMX, diasAtrasMX } = require('../util/fechas');
 
 function fmt(d) {
   if (!d) return '—';
@@ -17,17 +16,20 @@ function num(n) {
 }
 
 async function fetchAlertData() {
-  const db    = getDb();
-  const today = hoyMX();
-  const in30  = diasAtrasMX(-30);
+  const db = getDb();
 
-  const expirySoon = db.prepare(
-    `SELECT * FROM product_expiry WHERE fecha_caducidad BETWEEN ? AND ? ORDER BY fecha_caducidad ASC`
-  ).all(today, in30);
-
-  const expired = db.prepare(
-    `SELECT * FROM product_expiry WHERE fecha_caducidad < ? ORDER BY fecha_caducidad DESC`
-  ).all(today);
+  // Caducidades REALES: del historial de recepciones/TC52 (misma fuente que la
+  // pestaña Bodega › Caducidades), NO de la tabla manual product_expiry (que
+  // estaba siempre vacía). El filtro trae todo lo que vence en <= 30 días, así
+  // que los ya-vencidos salen con dias_para_vencer < 0.
+  let expirySoon = [], expired = [];
+  try {
+    const cad  = await require('./recepcion').fetchProximosVencer(30);
+    expired    = cad.filter(r => Number(r.dias_para_vencer) < 0);
+    expirySoon = cad.filter(r => Number(r.dias_para_vencer) >= 0);
+  } catch (e) {
+    console.error('[emailService] caducidades error:', e.message);
+  }
 
   const dismissedStagnant = new Set(
     db.prepare(`SELECT art_codigo FROM alertas_descartadas WHERE tipo='stagnant'`).all().map(r => r.art_codigo)
@@ -124,16 +126,24 @@ function buildHtml({ stagnant, noSales, expirySoon, expired }) {
     const accent = isExpired ? '#C62828' : '#E65100';
     const header = `<tr>
       <th style="${TH}">Producto</th>
-      <th style="${TH}">Área</th>
-      <th style="${TH};text-align:right">Cantidad</th>
-      <th style="${TH}">Caducidad</th>
+      <th style="${TH}">Ubicación</th>
+      <th style="${TH}">Lote</th>
+      <th style="${TH};text-align:right">Piezas</th>
+      <th style="${TH}">Vence</th>
+      <th style="${TH};text-align:right">Días</th>
     </tr>`;
-    const body = rows.map((r, i) => `<tr style="background:${i % 2 === 0 ? '#fff' : '#FDFAF7'}">
-      <td style="${TD};font-weight:600">${r.nombre || r.art_codigo}</td>
-      <td style="${TD};color:#A1887F;font-size:12px">${r.area || '—'}</td>
-      <td style="${TD};text-align:right;font-weight:700;color:${accent}">${r.cantidad}</td>
-      <td style="${TD};color:${accent};font-weight:700">${r.fecha_caducidad}</td>
-    </tr>`).join('');
+    const body = rows.map((r, i) => {
+      const d       = Number(r.dias_para_vencer);
+      const diasTxt = d < 0 ? `${Math.abs(d)}d vencido` : `${d}d`;
+      return `<tr style="background:${i % 2 === 0 ? '#fff' : '#FDFAF7'}">
+      <td style="${TD};font-weight:600">${r.nombre || r.codigo_barras}</td>
+      <td style="${TD};color:#A1887F;font-size:12px">${r.ubicacion || '—'}</td>
+      <td style="${TD};color:#A1887F;font-size:12px">${r.lote || '—'}</td>
+      <td style="${TD};text-align:right;font-weight:700">${num(r.piezas_totales)}</td>
+      <td style="${TD};color:${accent};font-weight:700">${r.caducidad || '—'}</td>
+      <td style="${TD};text-align:right;color:${accent};font-weight:600">${diasTxt}</td>
+    </tr>`;
+    }).join('');
     return `<table style="width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden;border:1px solid #EDE0D4">
       <thead>${header}</thead><tbody>${body}</tbody>
     </table>`;
@@ -296,7 +306,7 @@ async function sendMonthlyReport() {
 }
 
 // ── RESUMEN DE VENTAS (manual, bajo demanda desde Análisis) ──────────────────
-function buildSalesHtml({ dia, semana, mes, topProductos }) {
+function buildSalesHtml({ dia, semana, mes, topProductos, caducidades }) {
   const generatedAt = new Date().toLocaleString('es-MX', {
     weekday: 'long', day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
@@ -329,6 +339,33 @@ function buildSalesHtml({ dia, semana, mes, topProductos }) {
       <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;text-align:right;color:#5D4037">${money(p.ingresos)}</td>
     </tr>`).join('');
 
+  // Caducidades próximas (fuente real: recepciones/TC52). Incluye ya-vencidos.
+  const cad         = caducidades || [];
+  const cadVencidos = cad.filter(p => Number(p.dias_para_vencer) < 0).length;
+  const cadRows     = cad.slice(0, 12).map((p) => {
+    const d       = Number(p.dias_para_vencer);
+    const color   = d < 0 ? '#C62828' : (d <= 7 ? '#E65100' : '#5D4037');
+    const diasTxt = d < 0 ? `${Math.abs(d)}d vencido` : `${d}d`;
+    return `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;color:#3E2723">${p.nombre || p.codigo_barras || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;color:#8D6E63;font-size:12px">${p.ubicacion || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;text-align:right;color:#5D4037">${intn(p.piezas_totales)} pzas</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;color:${color};font-weight:bold">${p.caducidad || '—'}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #F0EAE3;text-align:right;color:${color};font-weight:bold">${diasTxt}</td>
+    </tr>`;
+  }).join('');
+  const cadSection = `
+      <div style="background:#fff;border:1px solid #ECE5DE;border-radius:12px;margin:16px 6px 0;overflow:hidden">
+        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">
+          ⏳ Caducidades próximas (30 días)${cad.length ? ` · ${cad.length} lote${cad.length !== 1 ? 's' : ''}${cadVencidos ? ` · ${cadVencidos} vencido${cadVencidos !== 1 ? 's' : ''}` : ''}` : ''}
+        </div>
+        ${cad.length ? `
+        <table style="width:100%;border-collapse:collapse;font-size:13px">${cadRows}</table>
+        ${cad.length > 12 ? `<div style="padding:8px 14px;color:#A1887F;font-size:11px">+${cad.length - 12} lote${cad.length - 12 !== 1 ? 's' : ''} más… — ve el detalle en Panel › Bodega › Caducidades</div>` : ''}`
+        : `<div style="padding:16px 14px;color:#5D4037;font-size:13px">Sin productos próximos a vencer en los próximos 30 días. 👍</div>`}
+      </div>`;
+
   return `
   <div style="font-family:Arial,Helvetica,sans-serif;max-width:680px;margin:0 auto;background:#FAF7F3">
     <div style="background:linear-gradient(135deg,#012d1d,#1b4332);padding:32px;text-align:center">
@@ -339,21 +376,22 @@ function buildSalesHtml({ dia, semana, mes, topProductos }) {
     <div style="padding:20px 10px">
       <table style="width:100%;border-collapse:collapse"><tr>
         ${card('Hoy', dia, '#012d1d')}
-        ${card('Esta semana', semana, '#1b4332')}
-        ${card('Este mes', mes, '#2d6a4f')}
+        ${card('Últimos 7 días', semana, '#1b4332')}
+        ${card('Últimos 30 días', mes, '#2d6a4f')}
       </tr></table>
       ${topRows ? `
       <div style="background:#fff;border:1px solid #ECE5DE;border-radius:12px;margin:16px 6px 0;overflow:hidden">
-        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">Top productos del mes</div>
+        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">Top productos (últimos 30 días)</div>
         <table style="width:100%;border-collapse:collapse;font-size:13px">${topRows}</table>
       </div>` : ''}
+      ${cadSection}
       <p style="text-align:center;color:#A1887F;font-size:11px;margin:22px 0 0">Generado a solicitud desde el panel · La Casita Deli</p>
     </div>
   </div>`;
 }
 
-async function sendSalesSummary({ dia, semana, mes, topProductos }) {
-  const html    = buildSalesHtml({ dia, semana, mes, topProductos });
+async function sendSalesSummary({ dia, semana, mes, topProductos, caducidades }) {
+  const html    = buildSalesHtml({ dia, semana, mes, topProductos, caducidades });
   const fechaY  = new Date().toLocaleDateString('es-MX', { day: 'numeric', month: 'long', year: 'numeric' });
   const subject = `💰 Resumen de Ventas — ${fechaY} — La Casita Deli`;
   const to      = process.env.EMAIL_USER || 'lacasitadeli2000@gmail.com';

@@ -638,8 +638,8 @@ type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
 
 const PERIOD_CONFIG: Record<TimeFilter, { period: string; limit: number; label: string }> = {
   'Hoy':         { period: 'day',   limit: 2000, label: 'hoy' },
-  'Esta semana': { period: 'week',  limit: 5000, label: 'esta semana' },
-  'Este mes':    { period: 'month', limit: 7000, label: 'este mes' },
+  'Esta semana': { period: 'week',  limit: 5000, label: 'últimos 7 días' },
+  'Este mes':    { period: 'month', limit: 7000, label: 'últimos 30 días' },
 };
 
 interface Props {
@@ -752,7 +752,7 @@ export default function ReportesTab({ timeFilter }: Props) {
           {/* Indicador del periodo activo */}
           <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-lg px-3 py-2">
             <Icon name={timeFilter === 'Hoy' ? 'today' : timeFilter === 'Esta semana' ? 'date_range' : 'calendar_month'} className="text-primary text-base" />
-            <span className="text-xs font-label font-bold text-primary uppercase tracking-widest">{timeFilter}</span>
+            <span className="text-xs font-label font-bold text-primary uppercase tracking-widest">{config.label}</span>
           </div>
           <button
             onClick={() => { fetchData(config.period); fetchDesglose(desgloseDate); }}

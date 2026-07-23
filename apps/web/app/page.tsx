@@ -180,11 +180,15 @@ export default function Dashboard() {
               {/* Time filter — desktop only */}
               {showTimeFilter && (
                 <div className="hidden lg:flex items-center gap-1.5 bg-surface-container-low px-2 py-1 rounded-lg border border-outline-variant/10">
-                  {['Hoy', 'Esta semana', 'Este mes'].map(p => (
-                    <button key={p} onClick={() => setTimeFilter(p)}
+                  {[
+                    { v: 'Hoy',         l: 'Hoy' },
+                    { v: 'Esta semana', l: 'Últimos 7 días' },
+                    { v: 'Este mes',    l: 'Últimos 30 días' },
+                  ].map(({ v, l }) => (
+                    <button key={v} onClick={() => setTimeFilter(v)}
                       className={cn('px-4 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
-                        timeFilter === p ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600')}>
-                      {p}
+                        timeFilter === v ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600')}>
+                      {l}
                     </button>
                   ))}
                 </div>
@@ -212,8 +216,8 @@ export default function Dashboard() {
             <div className="lg:hidden px-4 pb-3 flex gap-2">
               {[
                 { key: 'Hoy',         short: 'Hoy' },
-                { key: 'Esta semana', short: 'Semana' },
-                { key: 'Este mes',    short: 'Mes' },
+                { key: 'Esta semana', short: '7 días' },
+                { key: 'Este mes',    short: '30 días' },
               ].map(({ key, short }) => (
                 <button key={key} onClick={() => setTimeFilter(key)}
                   className={cn('flex-1 py-2 rounded-xl text-[11px] font-label font-bold uppercase tracking-widest transition-all',

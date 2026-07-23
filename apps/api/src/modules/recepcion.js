@@ -679,29 +679,38 @@ async function getCaducidades(req, res) {
   }
 }
 
+// Datos crudos de "próximos a vencer": lotes con caducidad dentro de los próximos
+// `dias` días. Como el filtro es "<= dias", incluye también los YA vencidos
+// (dias_para_vencer < 0). Reutilizable por el endpoint y por los correos
+// (Reporte de Inventario y Resumen de Ventas) — así todos leen la MISMA fuente
+// real (recepciones/TC52), no la tabla manual product_expiry.
+async function fetchProximosVencer(dias = 30) {
+  const db = await getPool()
+  const r = await db.request()
+    .input('dias', sql.Int, dias)
+    .query(`
+      SELECT rrd.codigo_barras,
+             ${nombreExpr('rrd.codigo_barras')} AS nombre,
+             rrd.ubicacion, rrd.lote,
+             CONVERT(VARCHAR(10), rrd.caducidad, 23) AS caducidad,
+             SUM(rrd.piezas_resultantes) AS piezas_totales,
+             DATEDIFF(DAY, GETDATE(), rrd.caducidad) AS dias_para_vencer
+      FROM recepciones_reales_detalle rrd
+      JOIN recepciones_reales rr ON rr.id = rrd.recepcion_real_id AND rr.confirmada = 1
+      WHERE rrd.caducidad IS NOT NULL
+        AND rrd.piezas_resultantes > 0
+        AND DATEDIFF(DAY, GETDATE(), rrd.caducidad) <= @dias
+      GROUP BY rrd.codigo_barras, rrd.ubicacion, rrd.lote, rrd.caducidad
+      ORDER BY rrd.caducidad ASC
+    `)
+  return r.recordset
+}
+
 async function getProximosVencer(req, res) {
   // Shortcut: solo los que vencen en X días (para alertas)
   const dias = parseInt(req.query.dias, 10) || 7
   try {
-    const db = await getPool()
-    const r = await db.request()
-      .input('dias', sql.Int, dias)
-      .query(`
-        SELECT rrd.codigo_barras,
-               ${nombreExpr('rrd.codigo_barras')} AS nombre,
-               rrd.ubicacion, rrd.lote,
-               CONVERT(VARCHAR(10), rrd.caducidad, 23) AS caducidad,
-               SUM(rrd.piezas_resultantes) AS piezas_totales,
-               DATEDIFF(DAY, GETDATE(), rrd.caducidad) AS dias_para_vencer
-        FROM recepciones_reales_detalle rrd
-        JOIN recepciones_reales rr ON rr.id = rrd.recepcion_real_id AND rr.confirmada = 1
-        WHERE rrd.caducidad IS NOT NULL
-          AND rrd.piezas_resultantes > 0
-          AND DATEDIFF(DAY, GETDATE(), rrd.caducidad) <= @dias
-        GROUP BY rrd.codigo_barras, rrd.ubicacion, rrd.lote, rrd.caducidad
-        ORDER BY rrd.caducidad ASC
-      `)
-    res.json(r.recordset)
+    res.json(await fetchProximosVencer(dias))
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -804,6 +813,7 @@ module.exports = {
   getDiscrepancias,
   getCaducidades,
   getProximosVencer,
+  fetchProximosVencer,
   abrirRecepcionRealParaPedido,
   setupRecepcionRoutes,
 };

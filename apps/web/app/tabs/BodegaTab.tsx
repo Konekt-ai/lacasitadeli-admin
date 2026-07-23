@@ -3,7 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn, hoyMX, diasAtrasMX, mesMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import type {
-  Area, AreaConfig, AreaCount, AreaProduct, ExpiryRecord,
+  Area, AreaConfig, AreaCount, AreaProduct,
   SurtidoTransfer, Recuento, StagnantProduct,
   StockUbicacion, ResumenUbicacion, MovimientoUnificado, TipoMovimiento,
   ConsumoArea,
@@ -545,14 +545,7 @@ interface MermaStats {
 }
 
 function MermaView() {
-  const { areas, areaMap } = useAreasCtx();
-  const [records, setRecords] = useState<ExpiryRecord[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ art_codigo: '', nombre: '', fecha_caducidad: '', cantidad: '', area: 'bodega' as Area, notas: '' });
-  const [saving, setSaving] = useState(false);
-  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const { areaMap } = useAreasCtx();
   const [tc52Records, setTc52Records] = useState<MermaTC52Record[]>([]);
   const [tc52Loading, setTc52Loading] = useState(false);
   const [tc52Fecha, setTc52Fecha] = useState(hoyMX());
@@ -650,242 +643,10 @@ function MermaView() {
     XLSX.writeFile(wb, `merma-${tc52Fecha}.xlsx`);
   };
 
-  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
-    setNotif({ msg, type });
-    setTimeout(() => setNotif(null), 3500);
-  };
-
-  const fetchRecords = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await fetch('/api/bodega/expiry').then(r => r.json());
-      setRecords(Array.isArray(data) ? data : []);
-    } catch { /* silent */ }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchRecords(); }, [fetchRecords]);
-
-  const saveExpiry = async () => {
-    if (!form.art_codigo || !form.fecha_caducidad) {
-      notify('Código y fecha son requeridos', 'error'); return;
-    }
-    setSaving(true);
-    try {
-      const res  = await fetch('/api/bodega/expiry', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(form),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        notify(data.message || 'Guardado');
-        setShowForm(false);
-        setForm({ art_codigo: '', nombre: '', fecha_caducidad: '', cantidad: '', area: 'bodega', notas: '' });
-        fetchRecords();
-      } else notify(data.error || 'Error', 'error');
-    } catch { notify('Error de conexión', 'error'); }
-    finally { setSaving(false); }
-  };
-
-  const deleteRecord = async (id: number) => {
-    try {
-      await fetch(`/api/bodega/expiry/${id}`, { method: 'DELETE' });
-      notify('Eliminado');
-      fetchRecords();
-    } catch { notify('Error', 'error'); }
-  };
-
-  const sendAlert = async (items: ExpiryRecord[]) => {
-    setSending(true);
-    try {
-      const res  = await fetch('/api/bodega/alerts/send-email', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ type: 'expiry', items }),
-      });
-      const data = await res.json();
-      if (res.ok) notify(data.message || 'Alerta enviada');
-      else notify(data.error || 'Error al enviar', 'error');
-    } catch { notify('Error de conexión', 'error'); }
-    finally { setSending(false); }
-  };
-
-  const today    = hoyMX();
-  const in7      = diasAtrasMX(-7);
-  const in30     = diasAtrasMX(-30);
-  const expired  = records.filter(r => r.fecha_caducidad < today);
-  const critical = records.filter(r => r.fecha_caducidad >= today && r.fecha_caducidad <= in7);
-  const warning  = records.filter(r => r.fecha_caducidad > in7 && r.fecha_caducidad <= in30);
-  const ok       = records.filter(r => r.fecha_caducidad > in30);
-
-  const rowColor = (r: ExpiryRecord) => {
-    if (r.fecha_caducidad < today) return 'border-error/20 bg-error-container/10';
-    if (r.fecha_caducidad <= in7)  return 'border-orange-200 bg-orange-50/50';
-    if (r.fecha_caducidad <= in30) return 'border-yellow-200 bg-yellow-50/30';
-    return 'border-outline-variant/10';
-  };
-
-  const badgeColor = (r: ExpiryRecord) => {
-    if (r.fecha_caducidad < today) return 'bg-error text-on-error';
-    if (r.fecha_caducidad <= in7)  return 'bg-orange-500 text-white';
-    if (r.fecha_caducidad <= in30) return 'bg-yellow-400 text-yellow-900';
-    return 'bg-primary-fixed text-on-primary-fixed-variant';
-  };
-
-  const badgeLabel = (r: ExpiryRecord) => {
-    if (r.fecha_caducidad < today) return 'Vencido';
-    const days = Math.ceil((new Date(r.fecha_caducidad).getTime() - new Date(today).getTime()) / 86400_000);
-    return days === 0 ? 'Hoy' : `${days}d`;
-  };
-
   return (
     <div>
-      {notif && (
-        <div className={cn(
-          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
-          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
-        )}>
-          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
-          {notif.msg}
-        </div>
-      )}
-
-      {/* Summary chips */}
-      <div className="flex flex-wrap gap-2 mb-5">
-        {[
-          { label: 'Vencidos',      count: expired.length,  color: 'bg-error-container/50 text-on-error-container' },
-          { label: 'Crítico (7d)',  count: critical.length, color: 'bg-orange-100 text-orange-700' },
-          { label: 'Aviso (30d)',   count: warning.length,  color: 'bg-yellow-100 text-yellow-700' },
-          { label: 'En orden',      count: ok.length,       color: 'bg-primary-fixed/30 text-primary' },
-        ].map(c => (
-          <span key={c.label}
-            className={cn('px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest', c.color)}>
-            {c.label}: {c.count}
-          </span>
-        ))}
-        {(expired.length > 0 || critical.length > 0) && (
-          <button
-            onClick={() => sendAlert([...expired, ...critical])}
-            disabled={sending}
-            className="ml-auto px-3 py-1 bg-primary text-on-primary rounded-full text-[10px] font-label font-bold uppercase tracking-widest flex items-center gap-1 hover:bg-primary-container transition-all">
-            {sending ? (
-              <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            ) : (
-              <Icon name="mail" className="text-sm" />
-            )}
-            Enviar Alerta por Correo
-          </button>
-        )}
-      </div>
-
-      {/* Add button */}
-      <div className="flex justify-end mb-4">
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-4 py-2 bg-primary text-on-primary rounded-lg text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-primary-container transition-all">
-          <Icon name={showForm ? 'close' : 'add'} className="text-base" />
-          {showForm ? 'Cancelar' : 'Registrar Caducidad'}
-        </button>
-      </div>
-
-      {/* Add form */}
-      {showForm && (
-        <div className="bg-surface-container-low rounded-xl border border-primary/20 p-5 mb-5 space-y-4">
-          <h4 className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">Nuevo Registro de Caducidad</h4>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Código *</label>
-              <input value={form.art_codigo} onChange={e => setForm(f => ({ ...f, art_codigo: e.target.value }))}
-                placeholder="Art_Codigo"
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Nombre</label>
-              <input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
-                placeholder="Nombre del producto"
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Fecha de caducidad *</label>
-              <input type="date" value={form.fecha_caducidad} onChange={e => setForm(f => ({ ...f, fecha_caducidad: e.target.value }))}
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad</label>
-              <input type="number" min="0" value={form.cantidad} onChange={e => setForm(f => ({ ...f, cantidad: e.target.value }))}
-                placeholder="Ej: 10"
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Área</label>
-              <select value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value as Area }))}
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors">
-                {areas.map(a => <option key={a} value={a}>{areaMap[a].label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Notas</label>
-              <input value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
-                placeholder="Opcional"
-                className="w-full px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-          </div>
-          <button onClick={saveExpiry} disabled={saving}
-            className={cn(
-              'w-full py-2.5 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
-              saving ? 'bg-stone-200 text-stone-400' : 'bg-primary text-on-primary hover:bg-primary-container'
-            )}>
-            {saving
-              ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
-              : <Icon name="save" className="text-base" />}
-            Guardar
-          </button>
-        </div>
-      )}
-
-      {/* Records list */}
-      {loading ? (
-        <div className="flex justify-center py-12">
-          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-        </div>
-      ) : records.length === 0 ? (
-        <div className="py-16 flex flex-col items-center text-stone-300">
-          <Icon name="event_available" className="text-5xl opacity-20 mb-3" />
-          <p className="text-sm font-label uppercase tracking-widest">Sin registros de caducidad</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {records.map(r => (
-            <div key={r.id}
-              className={cn('rounded-xl border p-4 flex items-center gap-4 transition-all', rowColor(r))}>
-              <div className={cn('px-2.5 py-1 rounded-full text-[10px] font-label font-bold min-w-[50px] text-center', badgeColor(r))}>
-                {badgeLabel(r)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-body text-sm text-on-surface truncate">{r.nombre || r.art_codigo}</p>
-                <div className="flex items-center gap-3 mt-0.5">
-                  <span className="text-[10px] font-label text-stone-400">
-                    Vence: {new Date(r.fecha_caducidad + 'T00:00:00').toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </span>
-                  {r.cantidad > 0 && (
-                    <span className="text-[10px] font-label text-stone-400">{r.cantidad} uds</span>
-                  )}
-                  <span className={cn('text-[9px] font-label px-1.5 py-0.5 rounded uppercase', areaMap[r.area as Area]?.bg, areaMap[r.area as Area]?.color)}>
-                    {areaMap[r.area as Area]?.label || r.area}
-                  </span>
-                </div>
-              </div>
-              <button onClick={() => deleteRecord(r.id)}
-                className="p-1.5 text-stone-300 hover:text-error hover:bg-error-container/20 rounded-lg transition-colors flex-shrink-0">
-                <Icon name="delete_outline" className="text-lg" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* ── Estadísticas de merma ────────────────────────────────────────── */}
-      <div className="mt-8 border-t border-outline-variant/10 pt-6">
+      <div className="mt-2">
         <button
           onClick={() => setStatsCollapsed(v => !v)}
           className="w-full flex items-center justify-between mb-4 group">
