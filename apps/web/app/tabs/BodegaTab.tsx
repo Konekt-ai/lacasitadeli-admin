@@ -17,7 +17,7 @@ type SubView = 'recepcion' | 'gestion-areas' | 'merma' | 'discrepancias' | 'fact
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
-  { id: 'merma',          label: 'Merma / Caducidad',  icon: 'event_busy'     },
+  { id: 'merma',          label: 'Merma',              icon: 'event_busy'     },
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
   { id: 'facturas',       label: 'Facturas',            icon: 'receipt_long'   },
   { id: 'zebra',          label: 'Movimientos TC52',   icon: 'qr_code_scanner'},
@@ -1688,20 +1688,6 @@ function RecepcionYNuevosView() {
         { id: 'nuevos',    label: 'Productos nuevos', icon: 'pending_actions' },
       ]} />
       {sub === 'recepcion' ? <RecepcionView /> : <PendientesView />}
-    </div>
-  );
-}
-
-// Merma + Caducidades (son prácticamente lo mismo: producto que se pierde/vence).
-function MermaYCaducidadesView() {
-  const [sub, setSub] = useState<'merma' | 'caducidades'>('merma');
-  return (
-    <div>
-      <SubSegment value={sub} onChange={v => setSub(v as 'merma' | 'caducidades')} options={[
-        { id: 'merma',       label: 'Merma',       icon: 'event_busy' },
-        { id: 'caducidades', label: 'Caducidades', icon: 'hourglass_bottom' },
-      ]} />
-      {sub === 'merma' ? <MermaView /> : <CaducidadesView />}
     </div>
   );
 }
@@ -3913,181 +3899,6 @@ function GestionAreasView() {
   );
 }
 
-// ── Caducidades sub-view ───────────────────────────────────────────────────────
-const DIAS_OPCIONES = [7, 15, 30, 60, 90];
-
-function CaducidadesView() {
-  const [items,   setItems]   = useState<CaducidadItem[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [dias,    setDias]    = useState(30);
-
-  const fetchData = useCallback(async (d: number) => {
-    setLoading(true);
-    try {
-      const data = await fetch(`/api/recepcion/caducidades?dias=${d}`).then(r => r.json());
-      const arr = (Array.isArray(data) ? data : []) as CaducidadItem[];
-      // Orden por fecha de vencimiento ascendente (más próximos arriba)
-      arr.sort((a, b) => (a.caducidad || '').localeCompare(b.caducidad || ''));
-      setItems(arr);
-    } catch { setItems([]); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchData(dias); }, [fetchData, dias]);
-
-  const counts = useMemo(() => {
-    const c: Record<SemaforoCaducidad, number> = { VENCIDO: 0, CRITICO: 0, AVISO: 0, OK: 0 };
-    for (const it of items) c[it.semaforo] = (c[it.semaforo] ?? 0) + 1;
-    return c;
-  }, [items]);
-
-  const exportarExcel = () => {
-    if (!items.length) return;
-    const XLSX = require('xlsx');
-    const filas = items.map(it => ({
-      'Producto':         it.nombre || it.codigo_barras,
-      'Código':           it.codigo_barras,
-      'Ubicación':        it.ubicacion || '',
-      'Lote':             it.lote || '',
-      'Vence':            it.caducidad || '',
-      'Días restantes':   it.dias_para_vencer,
-      'Piezas':           it.piezas_totales,
-      'Estado':           SEMAFORO_META[it.semaforo].label,
-      'Folio recepción':  it.folio_recepcion || '',
-    }));
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet([], { skipHeader: true });
-    XLSX.utils.sheet_add_aoa(ws, [
-      ['Caducidades — La Casita Deli'],
-      [`Alertas de los próximos ${dias} días`],
-      [`Total: ${items.length} lote${items.length !== 1 ? 's' : ''} · ${items.reduce((s, r) => s + Number(r.piezas_totales || 0), 0)} piezas`],
-      [],
-    ]);
-    XLSX.utils.sheet_add_json(ws, filas, { origin: 'A5' });
-    ws['!cols'] = [{ wch: 36 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 18 }];
-    ['A1', 'A2', 'A3'].forEach(cell => { if (ws[cell]) ws[cell].s = { font: { bold: true } }; });
-    XLSX.utils.book_append_sheet(wb, ws, 'Caducidades');
-    XLSX.writeFile(wb, `caducidades-${dias}d.xlsx`);
-  };
-
-  return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
-        <div>
-          <h3 className="font-serif text-xl text-primary">Caducidades</h3>
-          <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 mt-0.5">
-            Lotes con fecha de vencimiento registrada en recepciones confirmadas
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <label className="text-[10px] font-label uppercase tracking-widest text-stone-500">Próximos</label>
-          <select value={dias} onChange={e => setDias(Number(e.target.value))}
-            className="px-3 py-2 bg-background border border-outline-variant/20 rounded-lg text-sm font-body outline-none focus:border-primary transition-colors">
-            {DIAS_OPCIONES.map(d => <option key={d} value={d}>{d} días</option>)}
-          </select>
-          <button onClick={() => fetchData(dias)} disabled={loading}
-            className={cn('p-2 rounded-lg hover:bg-surface-container-low transition-all text-stone-400 hover:text-primary', loading && 'animate-spin')}
-            title="Actualizar">
-            <Icon name="refresh" />
-          </button>
-          <button onClick={exportarExcel} disabled={!items.length}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-on-primary rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:bg-primary/90 shadow-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-            <Icon name="download" className="text-base" /> Exportar Excel
-          </button>
-        </div>
-      </div>
-
-      {/* Summary chips */}
-      <div className="flex flex-wrap gap-2 mb-5">
-        {[
-          { label: 'Vencidos',     count: counts.VENCIDO, color: 'bg-error-container/50 text-on-error-container' },
-          { label: 'Crítico (7d)', count: counts.CRITICO, color: 'bg-orange-100 text-orange-700' },
-          { label: 'Aviso',        count: counts.AVISO,   color: 'bg-yellow-100 text-yellow-700' },
-          { label: 'En orden',     count: counts.OK,      color: 'bg-emerald-100 text-emerald-700' },
-        ].map(c => (
-          <span key={c.label}
-            className={cn('px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest', c.color)}>
-            {c.label}: {c.count}
-          </span>
-        ))}
-      </div>
-
-      {/* Tabla */}
-      {loading ? (
-        <div className="flex justify-center py-14">
-          <div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-        </div>
-      ) : items.length === 0 ? (
-        <div className="py-16 flex flex-col items-center text-stone-300 border border-dashed border-stone-200 rounded-xl">
-          <Icon name="hourglass_empty" className="text-5xl opacity-20 mb-3" />
-          <p className="text-sm font-label uppercase tracking-widest">Sin caducidades en los próximos {dias} días</p>
-          <p className="text-[11px] font-body text-stone-400 mt-2 text-center max-w-xs">
-            Las caducidades se registran al recibir mercancía con fecha de vencimiento desde el TC52
-          </p>
-        </div>
-      ) : (
-        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase tracking-widest text-[10px] border-b border-surface-container">
-                <tr>
-                  <th className="px-5 py-3">Producto</th>
-                  <th className="px-4 py-3">Ubicación</th>
-                  <th className="px-4 py-3">Lote</th>
-                  <th className="px-4 py-3">Vence</th>
-                  <th className="px-4 py-3 text-center">Días restantes</th>
-                  <th className="px-4 py-3 text-right">Piezas</th>
-                  <th className="px-4 py-3 text-center">Estado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-surface-container">
-                {items.map((it, i) => {
-                  const meta = SEMAFORO_META[it.semaforo];
-                  return (
-                    <tr key={`${it.codigo_barras}-${it.lote ?? ''}-${it.caducidad}-${i}`} className="hover:bg-background transition-colors">
-                      <td className="px-5 py-3">
-                        <p className="text-sm font-body text-on-surface">{it.nombre || it.codigo_barras}</p>
-                        <p className="text-[9px] font-mono text-stone-400 mt-0.5">{it.codigo_barras}</p>
-                      </td>
-                      <td className="px-4 py-3 text-sm font-body text-stone-600">{it.ubicacion || '—'}</td>
-                      <td className="px-4 py-3 text-sm font-body text-stone-600">{it.lote || '—'}</td>
-                      <td className="px-4 py-3 text-sm font-body text-stone-600">
-                        {it.caducidad ? new Date(it.caducidad + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={cn('font-serif font-bold', it.dias_para_vencer < 0 ? 'text-error' : it.dias_para_vencer <= 7 ? 'text-orange-600' : 'text-on-surface')}>
-                          {it.dias_para_vencer < 0 ? `${Math.abs(it.dias_para_vencer)}d vencido` : `${it.dias_para_vencer}d`}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right font-serif font-bold text-on-surface">
-                        {Number(it.piezas_totales).toLocaleString('es-MX')}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <span className={cn('inline-block px-2.5 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-wider', meta.bg, meta.color)}>
-                          {meta.label}
-                        </span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-5 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between">
-            <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-              {items.length} lote{items.length !== 1 ? 's' : ''} con caducidad
-            </p>
-            <p className="text-[10px] font-label text-stone-400">
-              Total: {items.reduce((s, r) => s + Number(r.piezas_totales || 0), 0).toLocaleString('es-MX')} pzas
-            </p>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
   const [view,      setView]      = useState<SubView>('recepcion');
@@ -4155,7 +3966,7 @@ export default function BodegaTab() {
       <div className="min-h-[400px]">
         {view === 'recepcion'      && <RecepcionYNuevosView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
-        {view === 'merma'          && <MermaYCaducidadesView />}
+        {view === 'merma'          && <MermaView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}
         {view === 'facturas'       && <FacturasView />}
         {view === 'zebra'          && <ZebraView />}

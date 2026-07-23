@@ -18,8 +18,8 @@ function num(n) {
 async function fetchAlertData() {
   const db = getDb();
 
-  // Caducidades REALES: del historial de recepciones/TC52 (misma fuente que la
-  // pestaña Bodega › Caducidades), NO de la tabla manual product_expiry (que
+  // Caducidades REALES: del historial de recepciones/TC52 (recepciones
+  // confirmadas con fecha capturada), NO de la tabla manual product_expiry (que
   // estaba siempre vacía). El filtro trae todo lo que vence en <= 30 días, así
   // que los ya-vencidos salen con dias_para_vencer < 0.
   let expirySoon = [], expired = [];
@@ -362,7 +362,7 @@ function buildSalesHtml({ dia, semana, mes, topProductos, caducidades }) {
         </div>
         ${cad.length ? `
         <table style="width:100%;border-collapse:collapse;font-size:13px">${cadRows}</table>
-        ${cad.length > 12 ? `<div style="padding:8px 14px;color:#A1887F;font-size:11px">+${cad.length - 12} lote${cad.length - 12 !== 1 ? 's' : ''} más… — ve el detalle en Panel › Bodega › Caducidades</div>` : ''}`
+        ${cad.length > 12 ? `<div style="padding:8px 14px;color:#A1887F;font-size:11px">+${cad.length - 12} lote${cad.length - 12 !== 1 ? 's' : ''} más…</div>` : ''}`
         : `<div style="padding:16px 14px;color:#5D4037;font-size:13px">Sin productos próximos a vencer en los próximos 30 días. 👍</div>`}
       </div>`;
 
