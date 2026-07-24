@@ -76,7 +76,7 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const overrides = getDb().prepare('SELECT art_codigo, image_url, min_stock FROM product_overrides').all();
+    const overrides = getDb().prepare('SELECT art_codigo, image_url, min_stock, categoria, tipo FROM product_overrides').all();
     const overMap   = new Map(overrides.map(o => [String(o.art_codigo), o]));
 
     const toRow = r => {
@@ -91,7 +91,8 @@ router.get('/', async (req, res) => {
         stock:        parseFloat(r.stock)      || 0,
         minStock:     ov.min_stock != null ? ov.min_stock : DEFAULT_MIN_STOCK,
         brand:        r.brand      || null,
-        category:     r.category   || null,
+        category:     ov.categoria || r.category || null,   // categoría propia (Excel) sobre la de NovaCaja
+        tipo:         ov.tipo || null,                       // tipo propio (cocina/tienda), columna aparte
         unit:         r.unit       || null,
         sku:          r.sku        || null,
         supplierCode: r.supplierCode || null,
@@ -100,6 +101,22 @@ router.get('/', async (req, res) => {
         image:        ov.image_url   || null,
       };
     };
+
+    // Filtro por categoría/tipo PROPIOS (asignados por Excel): los códigos viven en
+    // SQLite; traemos hasta 2000 (sin paginar, como el modo lowStock) desde MSSQL.
+    const catLocal  = String(req.query.catLocal  || '').trim();
+    const tipoLocal = String(req.query.tipoLocal || '').trim();
+    if (catLocal || tipoLocal) {
+      let sq = 'SELECT art_codigo FROM product_overrides WHERE 1=1';
+      const args = [];
+      if (catLocal)  { sq += ' AND categoria = ?'; args.push(catLocal); }
+      if (tipoLocal) { sq += ' AND tipo = ?';      args.push(tipoLocal); }
+      const codes = getDb().prepare(sq).all(...args).map(x => String(x.art_codigo)).slice(0, 2000);
+      if (!codes.length) return res.json({ data: [], total: 0, page: 1, pageSize: 2000, pages: 1 });
+      const dataRes = await mssql.query(buildProductsQuery({ search: q, codes, offset: 0, pageSize: 2000 }) + '\n    OPTION (MAXDOP 1)');
+      const rowsCat = dedupById(dataRes.recordset.map(toRow));
+      return res.json({ data: rowsCat, total: rowsCat.length, page: 1, pageSize: rowsCat.length, pages: 1 });
+    }
 
     let rows, total;
 
@@ -161,7 +178,7 @@ router.get('/', async (req, res) => {
 // ── PUT /api/products/:id — updates MSSQL + SQLite, invalidates cache ─────────
 router.put('/:id', async (req, res) => {
   const artCodigo = String(req.params.id).replace(/'/g, "''");
-  const { stock, salePrice, image } = req.body;
+  const { stock, salePrice, image, categoria, tipo } = req.body;
 
   const updated = [];
 
@@ -193,6 +210,24 @@ router.put('/:id', async (req, res) => {
       updated.push('imagen');
     }
 
+    if (categoria !== undefined) {
+      getDb().prepare(`
+        INSERT INTO product_overrides (art_codigo, categoria, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(art_codigo) DO UPDATE SET categoria = excluded.categoria, updated_at = excluded.updated_at
+      `).run(String(req.params.id), String(categoria || '').trim() || null);
+      updated.push('categoría');
+    }
+
+    if (tipo !== undefined) {
+      getDb().prepare(`
+        INSERT INTO product_overrides (art_codigo, tipo, updated_at)
+        VALUES (?, ?, datetime('now'))
+        ON CONFLICT(art_codigo) DO UPDATE SET tipo = excluded.tipo, updated_at = excluded.updated_at
+      `).run(String(req.params.id), String(tipo || '').trim() || null);
+      updated.push('tipo');
+    }
+
     if (updated.length === 0) {
       return res.status(400).json({ error: 'No se enviaron campos para actualizar' });
     }
@@ -203,6 +238,82 @@ router.put('/:id', async (req, res) => {
     res.json({ message: `Actualizado: ${updated.join(', ')}` });
   } catch (err) {
     console.error('Error actualizando producto:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/products/export — TODOS los productos para el Excel de categorías ──
+// 1 fila por código: código, nombre, categoría de NovaCaja y la categoría ya asignada
+// localmente. El frontend arma el Excel; ella llena/edita "Categoría" y reimporta.
+router.get('/export', async (req, res) => {
+  try {
+    const overrides = getDb().prepare("SELECT art_codigo, categoria, tipo FROM product_overrides").all();
+    const ovMap = new Map(overrides.map(o => [String(o.art_codigo), o]));
+    const result = await mssql.query(`
+      SELECT a.Art_Codigo AS codigo, MAX(a.Art_Descripcion) AS nombre, MAX(a.Org_Descripcion) AS categoria_novacaja
+      FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
+      WHERE a.Art_Descripcion <> '' AND a.Art_Descripcion IS NOT NULL
+      GROUP BY a.Art_Codigo
+      ORDER BY MAX(a.Art_Descripcion)
+      OPTION (MAXDOP 1)
+    `);
+    const rows = (result.recordset || []).map(r => {
+      const ov = ovMap.get(String(r.codigo)) || {};
+      return {
+        codigo:             String(r.codigo),
+        nombre:             r.nombre,
+        categoria_novacaja: r.categoria_novacaja || '',
+        categoria:          ov.categoria || '',
+        tipo:               ov.tipo || '',
+      };
+    });
+    res.json({ total: rows.length, data: rows });
+  } catch (err) {
+    console.error('Error export productos:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/products/categorias-import — carga masiva de categorías desde Excel ──
+// Body: { items: [{ codigo, categoria }] }. Upsert en product_overrides.categoria.
+// Categoría vacía = se limpia (el producto vuelve a usar la de NovaCaja).
+router.post('/categorias-import', async (req, res) => {
+  const items = Array.isArray(req.body && req.body.items) ? req.body.items : null;
+  if (!items) return res.status(400).json({ error: 'Se requiere items[]' });
+  try {
+    const db = getDb();
+    const up = db.prepare(`
+      INSERT INTO product_overrides (art_codigo, categoria, tipo, updated_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(art_codigo) DO UPDATE SET categoria = excluded.categoria, tipo = excluded.tipo, updated_at = excluded.updated_at
+    `);
+    let n = 0;
+    const tx = db.transaction((list) => {
+      for (const it of list) {
+        const codigo = String((it && it.codigo) || '').trim();
+        if (!codigo) continue;
+        const cat = String((it && it.categoria) || '').trim() || null;
+        const tp  = String((it && it.tipo) || '').trim() || null;
+        up.run(codigo, cat, tp);
+        n++;
+      }
+    });
+    tx(items);
+    invalidateProductsCache();
+    res.json({ ok: true, actualizados: n });
+  } catch (err) {
+    console.error('Error import categorías:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/products/categorias-asignadas — categorías y tipos propios (dropdowns) ──
+router.get('/categorias-asignadas', (req, res) => {
+  try {
+    const cats  = getDb().prepare("SELECT DISTINCT categoria FROM product_overrides WHERE categoria IS NOT NULL AND categoria <> '' ORDER BY categoria").all().map(r => r.categoria);
+    const tipos = getDb().prepare("SELECT DISTINCT tipo FROM product_overrides WHERE tipo IS NOT NULL AND tipo <> '' ORDER BY tipo").all().map(r => r.tipo);
+    res.json({ categorias: cats, tipos });
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });

@@ -38,6 +38,14 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   const [soloFaltantes,  setSoloFaltantes]  = useState(false);
   const [inventoryView,  setInventoryView]  = useState<'list' | 'grid'>('list');
 
+  // ── Categorías / tipos propios (asignados por Excel) ──────────────────────────
+  const [miCatFilter,    setMiCatFilter]    = useState('');
+  const [tipoFilter,     setTipoFilter]     = useState('');
+  const [catAsignadas,   setCatAsignadas]   = useState<string[]>([]);
+  const [tiposAsignados, setTiposAsignados] = useState<string[]>([]);
+  const [importing,      setImporting]      = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   // ── Area assignments (from SQLite) ────────────────────────────────────────────
   const [locationMap, setLocationMap] = useState<Map<string, Area>>(new Map());
   const [areaOptions, setAreaOptions] = useState<{ area: string; nombre: string; color?: string | null }[]>([]);
@@ -60,6 +68,18 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
     setNotif({ msg, type });
     setTimeout(() => setNotif(null), 3000);
   };
+
+  // Categorías y tipos que el cliente ya asignó (para los dropdowns de filtro).
+  const loadCatAsignadas = useCallback(() => {
+    fetch('/api/products/categorias-asignadas')
+      .then(r => r.json())
+      .then((d: { categorias?: string[]; tipos?: string[] }) => {
+        setCatAsignadas(Array.isArray(d?.categorias) ? d.categorias : []);
+        setTiposAsignados(Array.isArray(d?.tipos) ? d.tipos : []);
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { loadCatAsignadas(); }, [loadCatAsignadas]);
 
   // ── Fetch areas ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -109,10 +129,14 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   const categoryRef     = useRef(categoryFilter);
   const sinPrecioRef    = useRef(sinPrecio);
   const soloConStockRef = useRef(soloConStock);
+  const miCatRef        = useRef(miCatFilter);
+  const tipoRef         = useRef(tipoFilter);
   searchRef.current       = searchQuery;
   categoryRef.current     = categoryFilter;
   sinPrecioRef.current    = sinPrecio;
   soloConStockRef.current = soloConStock;
+  miCatRef.current        = miCatFilter;
+  tipoRef.current         = tipoFilter;
 
   const fetchProducts = useCallback(async (pg: number) => {
     setLoading(true);
@@ -125,6 +149,8 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       });
       if (sinPrecioRef.current) params.set('sinPrecio', 'true');
       if (soloConStockRef.current) params.set('conStock', 'true');
+      if (miCatRef.current) params.set('catLocal', miCatRef.current);
+      if (tipoRef.current)  params.set('tipoLocal', tipoRef.current);
       const res  = await fetch(`/api/products?${params}`);
       const data = await res.json();
       if (!res.ok || data.error) {
@@ -149,7 +175,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       fetchProducts(1);
     }, 300);
     return () => clearTimeout(debounceRef.current);
-  }, [searchQuery, categoryFilter, sinPrecio, soloConStock, fetchProducts]);
+  }, [searchQuery, categoryFilter, sinPrecio, soloConStock, miCatFilter, tipoFilter, fetchProducts]);
 
   // Page change → fetch immediately
   const prevPage = useRef(1);
@@ -201,6 +227,57 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       if (res.ok) { notify('Stock actualizado'); fetchProducts(page); onRefresh(); }
       else        notify(data.error || 'Error', 'error');
     } catch { notify('Error de conexión', 'error'); }
+  };
+
+  // ── Exportar / importar categorías por Excel ──────────────────────────────────
+  const exportarCategorias = async () => {
+    try {
+      notify('Preparando Excel de todos los productos…');
+      const data = await fetch('/api/products/export').then(r => r.json());
+      const rows = (data.data || []) as { codigo: string; nombre: string; categoria_novacaja: string; categoria: string; tipo: string }[];
+      const XLSX = require('xlsx');
+      const ws = XLSX.utils.json_to_sheet(rows.map(r => ({
+        'Código':               r.codigo,
+        'Producto':             r.nombre,
+        'Categoría (NovaCaja)': r.categoria_novacaja,
+        'Categoría':            r.categoria,
+        'Tipo':                 r.tipo,
+      })));
+      ws['!cols'] = [{ wch: 16 }, { wch: 44 }, { wch: 22 }, { wch: 20 }, { wch: 16 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Categorías');
+      XLSX.writeFile(wb, 'categorias-productos.xlsx');
+      notify(`${rows.length.toLocaleString('es-MX')} productos exportados`);
+    } catch { notify('Error al exportar', 'error'); }
+  };
+
+  const importarCategorias = async (file: File) => {
+    setImporting(true);
+    try {
+      const XLSX = require('xlsx');
+      const buf  = await file.arrayBuffer();
+      const wb   = XLSX.read(buf, { type: 'array' });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const raw  = XLSX.utils.sheet_to_json(ws, { defval: '' }) as Record<string, unknown>[];
+      const pick = (r: Record<string, unknown>, ...keys: string[]) => {
+        for (const k of keys) { const v = r[k]; if (v != null && String(v).trim() !== '') return String(v).trim(); }
+        return '';
+      };
+      const items = raw.map(r => ({
+        codigo:    pick(r, 'Código', 'Codigo', 'codigo', 'CÓDIGO'),
+        categoria: pick(r, 'Categoría', 'Categoria', 'categoria'),
+        tipo:      pick(r, 'Tipo', 'tipo', 'TIPO'),
+      })).filter(x => x.codigo);
+      if (!items.length) { notify('No se encontró la columna "Código" en el Excel', 'error'); setImporting(false); return; }
+      const res  = await fetch('/api/products/categorias-import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body:   JSON.stringify({ items }),
+      });
+      const data = await res.json();
+      if (res.ok) { notify(`${data.actualizados} productos actualizados`); loadCatAsignadas(); fetchProducts(page); onRefresh(); }
+      else        notify(data.error || 'Error al importar', 'error');
+    } catch { notify('Error al leer el Excel', 'error'); }
+    finally { setImporting(false); }
   };
 
   return (
@@ -327,12 +404,28 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       )}
 
       {/* ── Page header ─────────────────────────────────────────────────────── */}
-      <div className="flex justify-between items-end mb-8">
+      <div className="flex justify-between items-end mb-8 gap-3 flex-wrap">
         <div>
           <h2 className="text-3xl font-serif italic text-primary">Inventario</h2>
           <p className="text-[10px] font-label uppercase tracking-widest text-stone-500 mt-1">
             {total.toLocaleString('es-MX')} {soloConStock && !searchQuery && !sinPrecio ? 'con stock' : 'productos'} · {lowStockProducts.length} alertas
           </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) importarCategorias(f); if (e.target) e.target.value = ''; }} />
+          <button onClick={exportarCategorias}
+            title="Descargar todos los productos en Excel para asignar Categoría y Tipo"
+            className="flex items-center gap-2 px-4 py-2 bg-surface-container-low border border-outline-variant/20 text-stone-600 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest hover:text-primary hover:border-primary/40 transition-all">
+            <Icon name="download" className="text-base" /> Exportar Excel
+          </button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing}
+            title="Subir el Excel con las categorías/tipos que asignaste"
+            className={cn('flex items-center gap-2 px-4 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest transition-all shadow-sm',
+              importing ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-primary text-on-primary hover:bg-primary/90')}>
+            {importing ? <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Icon name="upload" className="text-base" />}
+            {importing ? 'Importando…' : 'Importar categorías'}
+          </button>
         </div>
       </div>
 
@@ -377,6 +470,20 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                   <option key={a.area} value={a.area}>{a.nombre}</option>
                 ))}
               </select>
+              {catAsignadas.length > 0 && (
+                <select value={miCatFilter} onChange={e => { setMiCatFilter(e.target.value); setPage(1); }}
+                  className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[170px]">
+                  <option value="">Mi categoría (todas)</option>
+                  {catAsignadas.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              )}
+              {tiposAsignados.length > 0 && (
+                <select value={tipoFilter} onChange={e => { setTipoFilter(e.target.value); setPage(1); }}
+                  className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[150px]">
+                  <option value="">Tipo (todos)</option>
+                  {tiposAsignados.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              )}
               <button
                 onClick={() => { setSoloConStock(v => !v); setPage(1); }}
                 title="Con stock: solo productos con existencia (como la Bodega), de mayor a menor. Ver todos: catálogo completo."
@@ -446,8 +553,9 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                         </div>
                         <div className="min-w-0">
                           <p className="font-bold text-on-surface font-body text-sm truncate max-w-[150px] sm:max-w-[280px]">{p.name}</p>
-                          <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase mt-0.5">
-                            {p.category || 'Sin categoría'}
+                          <p className="text-[10px] text-stone-400 font-label tracking-widest uppercase mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <span>{p.category || 'Sin categoría'}</span>
+                            {p.tipo && <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-bold normal-case tracking-normal">{p.tipo}</span>}
                           </p>
                           {(() => {
                             const locs = ubicMap.get(String(p.id));
@@ -545,7 +653,10 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                     </button>
                   </div>
                 </div>
-                <p className="text-[9px] font-label font-bold text-primary uppercase tracking-[0.2em]">{p.category || 'General'}</p>
+                <p className="text-[9px] font-label font-bold text-primary uppercase tracking-[0.2em] flex items-center gap-1.5 flex-wrap">
+                  <span>{p.category || 'General'}</span>
+                  {p.tipo && <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary normal-case tracking-normal">{p.tipo}</span>}
+                </p>
                 <h4 className="font-serif text-base text-on-surface line-clamp-2 mt-1">{p.name}</h4>
                 <div className="flex justify-between items-end mt-4">
                   <div>

@@ -3,7 +3,7 @@ export interface Product {
   costPrice: number; salePrice: number; stock: number; minStock: number;
   image: string | null; active: boolean; visibleWeb: boolean;
   category: string | null; categoryId: number | null; createdAt: string;
-  brand?: string | null;
+  brand?: string | null; tipo?: string | null;
 }
 
 export interface Category { id: string | number; name: string; description?: string | null; }

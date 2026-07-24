@@ -18,6 +18,8 @@ function getDb() {
       art_codigo   TEXT PRIMARY KEY,
       image_url    TEXT,
       min_stock    INTEGER,
+      categoria    TEXT,
+      tipo         TEXT,
       updated_at   TEXT DEFAULT (datetime('now'))
     );
     CREATE TABLE IF NOT EXISTS categorias (
@@ -250,6 +252,11 @@ function getDb() {
   // Migraciones de columnas — deben ir ANTES de los índices que las referencian
   try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN area TEXT DEFAULT 'bodega'`); } catch (_) {}
   try { _db.exec(`ALTER TABLE almacen_movimientos ADD COLUMN pedido_id INTEGER`); } catch (_) {}
+  // Categoría propia por producto (la que asigna el cliente por Excel); sobreescribe
+  // la de NovaCaja (Org_Descripcion) al mostrar/filtrar en Inventario.
+  try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN categoria TEXT`); } catch (_) {}
+  // Tipo propio del producto (cocina/tienda/etc.) — columna SEPARADA de la categoría.
+  try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN tipo TEXT`); } catch (_) {}
 
   // Indexes — created once, skipped if already exist
   _db.exec(`

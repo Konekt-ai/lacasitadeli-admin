@@ -5,7 +5,7 @@ const LOW_STOCK_THRESHOLD = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 // servidor que también usa NovaCaja (POS). Va al final de cada SELECT.
 const MAXDOP1 = '\n    OPTION (MAXDOP 1)';
 
-function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null, sinPrecio = false } = {}) {
+function buildProductsQuery({ search = '', category = '', offset = 0, pageSize = 200, lowStockThreshold = null, sinPrecio = false, codes = null } = {}) {
   const esc = s => String(s || '').replace(/'/g, "''");
   const whereSearch = search
     ? `AND (
@@ -19,6 +19,8 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
   const whereCategory   = category ? `AND a.Org_Descripcion = '${esc(category)}'` : '';
   // Productos SIN precio de venta registrado (para que el cliente los corrija fácil)
   const wherePrecio     = sinPrecio ? `AND ISNULL(p.LPA_PrecioVentaImp, 0) = 0` : '';
+  // Filtro por lista de códigos (para categoría/tipo propios, que viven en SQLite)
+  const whereCodes      = (codes && codes.length) ? `AND a.Art_Codigo IN (${codes.map(c => `'${esc(c)}'`).join(',')})` : '';
   // Stock EFECTIVO (para mostrar) = lo que cuenta el TC52 en inventario_bodega; si
   // el producto no está ahí, cae al de NovaCaja. Es una SUBCONSULTA escalar: solo
   // se evalúa para los renglones de la página (rápido), sin unir todo el catálogo.
@@ -56,6 +58,7 @@ function buildProductsQuery({ search = '', category = '', offset = 0, pageSize =
       ${whereSearch}
       ${whereCategory}
       ${wherePrecio}
+      ${whereCodes}
     GROUP BY
       a.Art_Codigo, a.Art_GTIN, a.CodAlt_Codigo,
       a.Art_Descripcion, a.Art_Alias, a.Art_UltimoCosto, a.Art_CostoReposicion, cpf.precio_compra,
