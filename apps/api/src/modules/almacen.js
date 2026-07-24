@@ -850,7 +850,7 @@ router.get('/ubicaciones', async (req, res) => {
       )
       SELECT
         ib.codigo_barras AS art_codigo,
-        ISNULL((SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+        ISNULL((SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[Articulos] WITH (NOLOCK)
                 WHERE Art_Codigo = ib.codigo_barras), ib.codigo_barras) AS nombre,
         ib.ubicacion,
         ib.cantidad
