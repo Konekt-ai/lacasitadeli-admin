@@ -324,23 +324,26 @@ function SalidaView() {
   const [rows,    setRows]    = useState<SalidaRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ── Formulario de nueva salida ─────────────────────────────────────────────
-  const [showForm,    setShowForm]    = useState(true);
+  // ── Wizard de retiro (mismo flujo por pasos que la "Salida" de los Zebra) ────
+  const [paso,        setPaso]        = useState<'buscar' | 'origen' | 'cantidad' | 'exito' | 'error'>('buscar');
   const [query,       setQuery]       = useState('');
   const [results,     setResults]     = useState<BusquedaProducto[]>([]);
   const [searching,   setSearching]   = useState(false);
-  const [selected,    setSelected]    = useState<BusquedaProducto | null>(null);
-  const [cantidad,    setCantidad]    = useState('1');
-  const [notas,       setNotas]       = useState('');
-  const [responsable, setResponsable] = useState('');
-  const [ubicacion,   setUbicacion]   = useState('Bodega');
+  const [producto,    setProducto]    = useState<BusquedaProducto | null>(null);
   const [ubicaciones, setUbicaciones] = useState<{ ubicacion: string; cantidad: number }[]>([]);
+  const [origen,      setOrigen]      = useState<{ ubicacion: string; cantidad: number } | null>(null);
+  const [cantidad,    setCantidad]    = useState(1);
+  const [responsable, setResponsable] = useState('');
+  const [notas,       setNotas]       = useState('');
+  const [error,       setError]       = useState('');
   const [saving,      setSaving]      = useState(false);
+  const [colorMap,    setColorMap]    = useState<Record<string, string>>({});
   const [notif,       setNotif]       = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
 
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
     setNotif({ msg, type }); setTimeout(() => setNotif(null), 3500);
   };
+  const areaColor = (u: string) => colorMap[u] || '#6B7280';
 
   const fetchSalidas = useCallback(async (f: string) => {
     setLoading(true);
@@ -354,6 +357,19 @@ function SalidaView() {
   }, []);
 
   useEffect(() => { fetchSalidas(fecha); }, [fecha, fetchSalidas]);
+
+  // Colores por ubicación (mismos que Inventario / los Zebra)
+  useEffect(() => {
+    fetch('/api/bodega/area-counts')
+      .then(r => r.json())
+      .then((data: { nombre: string; color?: string | null }[]) => {
+        if (!Array.isArray(data)) return;
+        const m: Record<string, string> = {};
+        for (const a of data) if (a.nombre) m[a.nombre] = a.color || '#6B7280';
+        setColorMap(m);
+      })
+      .catch(() => {});
+  }, []);
 
   // Buscar productos con debounce
   const searchRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -372,50 +388,58 @@ function SalidaView() {
     }, 300);
   }, [query]);
 
+  // Paso 1 → 2: al elegir producto, trae su stock por ubicación y avanza.
   const seleccionar = async (p: BusquedaProducto) => {
-    setSelected(p);
-    setQuery(p.nombre);
+    setProducto(p);
     setResults([]);
-    // Traer stock por ubicacion (misma BD del sistema de bodega TC52).
-    // Default: la ubicacion que MAS tenga, para descontar de donde sí hay.
+    setQuery('');
+    setError('');
+    setCantidad(1);
+    setOrigen(null);
     try {
       const ub   = await fetch(`/api/almacen/producto/${encodeURIComponent(p.codigo)}/ubicaciones`).then(r => r.json());
-      const list = Array.isArray(ub) ? ub : [];
+      const list = (Array.isArray(ub) ? ub : []).filter((u: { cantidad: number }) => Number(u.cantidad) > 0);
       setUbicaciones(list);
-      setUbicacion(list[0]?.ubicacion || 'Bodega');
-    } catch { setUbicaciones([]); setUbicacion('Bodega'); }
+      if (list.length === 0) {
+        setError('Este producto no tiene stock contado en bodega (TC52). Cuéntalo primero en el TC52 para poder retirarlo.');
+        setPaso('error');
+      } else if (list.length === 1) {
+        setOrigen(list[0]); setPaso('cantidad');
+      } else {
+        setPaso('origen');
+      }
+    } catch {
+      setError('No se pudo cargar el stock por ubicación.'); setPaso('error');
+    }
   };
 
-  const registrar = async () => {
-    if (!selected || !cantidad || parseFloat(cantidad) <= 0) {
-      notify('Selecciona un producto y una cantidad válida', 'error'); return;
-    }
-    if (!responsable.trim()) {
-      notify('Escribe a nombre de quién es el retiro', 'error'); return;
-    }
+  const reset = () => {
+    setPaso('buscar'); setProducto(null); setUbicaciones([]); setOrigen(null);
+    setCantidad(1); setResponsable(''); setNotas(''); setError(''); setQuery(''); setResults([]);
+  };
+
+  const confirmar = async () => {
+    if (!producto || !origen) return;
+    if (cantidad <= 0)               { notify('Cantidad inválida', 'error'); return; }
+    if (cantidad > origen.cantidad)  { notify(`Solo hay ${origen.cantidad} pzas en ${origen.ubicacion}`, 'error'); return; }
+    if (!responsable.trim())         { notify('Escribe a nombre de quién es el retiro', 'error'); return; }
     setSaving(true);
     try {
       const res  = await fetch('/api/almacen/salida', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          codigo:      selected.codigo,
-          cantidad:    parseFloat(cantidad),
-          ubicacion:   ubicacion,
+          codigo:      producto.codigo,
+          cantidad:    cantidad,
+          ubicacion:   origen.ubicacion,
           responsable: responsable.trim(),
           notas:       notas.trim(),
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        notify(`Retiro de ${cantidad} uds desde ${ubicacion} a nombre de ${responsable.trim()}: ${selected.nombre}`);
-        setSelected(null); setQuery(''); setCantidad('1'); setNotas(''); setResponsable('');
-        setUbicaciones([]); setUbicacion('Bodega');
-        fetchSalidas(today);
-      } else {
-        notify(data.mensaje || data.ok === false ? (data.mensaje || 'Error') : 'Error', 'error');
-      }
-    } catch { notify('Error de conexión', 'error'); }
+      if (res.ok) { setPaso('exito'); fetchSalidas(today); }
+      else        { setError(data.mensaje || 'No se pudo registrar el retiro.'); setPaso('error'); }
+    } catch { setError('Error de conexión.'); setPaso('error'); }
     finally { setSaving(false); }
   };
 
@@ -434,127 +458,141 @@ function SalidaView() {
         </div>
       )}
 
-      {/* ── Formulario de registro ────────────────────────────────────────── */}
-      <div className="mb-6">
-        <button onClick={() => setShowForm(v => !v)}
-          className="px-4 py-2.5 bg-error text-on-error rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center gap-2 shadow-md hover:bg-error/90 transition-all mb-4">
-          <Icon name={showForm ? 'close' : 'output'} className="text-base" />
-          {showForm ? 'Cancelar' : 'Registrar Retiro'}
-        </button>
+      {/* ── Wizard de retiro (baja "a nombre de", flujo tipo Salida de los Zebra) ── */}
+      <div className="mb-6 max-w-xl">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-[11px] font-label font-bold uppercase tracking-widest text-error flex items-center gap-2">
+            <Icon name="output" className="text-base" /> Retiro Autorizado
+          </h4>
+          {paso !== 'buscar' && (
+            <button onClick={reset} className="text-[10px] font-label uppercase tracking-widest text-stone-400 hover:text-stone-600">Empezar de nuevo</button>
+          )}
+        </div>
 
-        {showForm && (
-          <div className="bg-surface-container-low rounded-2xl border border-outline-variant/10 p-5 space-y-4">
-            <h4 className="text-[10px] font-label font-bold uppercase tracking-widest text-stone-500">Nuevo Retiro Autorizado</h4>
-
-            {/* Buscador de producto */}
-            <div className="relative">
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Producto</label>
+        <div className="bg-surface-container-low rounded-2xl border border-outline-variant/10 p-5">
+          {/* Paso 1: buscar */}
+          {paso === 'buscar' && (
+            <div className="space-y-4">
+              <div className="text-center py-5 border-2 border-dashed border-error/25 rounded-xl">
+                <Icon name="output" className="text-4xl text-error/60" />
+                <p className="text-sm font-body text-stone-600 mt-2">Busca el producto a retirar</p>
+                <p className="text-[11px] font-label text-stone-400">Sale del inventario a nombre de alguien</p>
+              </div>
               <div className="relative">
                 <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xl" />
-                {searching && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
-                )}
-                <input
-                  value={query}
-                  onChange={e => { setQuery(e.target.value); setSelected(null); }}
-                  placeholder="Buscar por nombre o código..."
-                  className="w-full pl-10 pr-10 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors"
-                />
+                {searching && <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />}
+                <input autoFocus value={query} onChange={e => setQuery(e.target.value)}
+                  placeholder="Buscar por nombre o código…"
+                  className="w-full pl-10 pr-10 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
               </div>
               {results.length > 0 && (
-                <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-surface rounded-xl border border-outline-variant/10 shadow-xl overflow-hidden">
+                <div className="bg-surface rounded-xl border border-outline-variant/10 shadow-sm overflow-hidden divide-y divide-surface-container">
                   {results.map(p => (
                     <button key={p.codigo} onClick={() => seleccionar(p)}
-                      className="w-full px-4 py-3 text-left hover:bg-surface-container-low transition-colors flex items-center justify-between gap-3 border-b border-surface-container last:border-0">
+                      className="w-full px-4 py-3 text-left hover:bg-surface-container-low transition-colors flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-body text-on-surface">{p.nombre}</p>
                         <p className="text-[10px] font-label text-stone-400">{p.codigo}</p>
                       </div>
-                      <span className={cn('text-xs font-label font-bold flex-shrink-0', p.stock <= 0 ? 'text-error' : 'text-stone-500')}>
-                        {p.stock} en stock
-                      </span>
+                      <span className={cn('text-xs font-label font-bold flex-shrink-0', p.stock <= 0 ? 'text-error' : 'text-stone-500')}>{p.stock} en stock</span>
                     </button>
                   ))}
                 </div>
               )}
             </div>
+          )}
 
-            {/* Producto seleccionado */}
-            {selected && (
-              <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-body text-on-surface font-bold">{selected.nombre}</p>
-                  <p className="text-[10px] font-label text-stone-400">{selected.codigo} · {selected.stock} en stock</p>
+          {/* Paso 2: elegir ubicación de origen */}
+          {paso === 'origen' && producto && (
+            <div className="space-y-4">
+              <div>
+                <p className="text-base font-body font-bold text-on-surface">{producto.nombre}</p>
+                <p className="text-[10px] font-label text-stone-400">{producto.codigo}</p>
+              </div>
+              <p className="text-sm font-label font-bold text-stone-600">¿De dónde sale?</p>
+              <div className="space-y-2">
+                {ubicaciones.map(u => (
+                  <button key={u.ubicacion} onClick={() => { setOrigen(u); setCantidad(1); setPaso('cantidad'); }}
+                    style={{ borderColor: `${areaColor(u.ubicacion)}55` }}
+                    className="w-full flex items-center gap-3 px-4 py-3.5 bg-background border-2 rounded-xl text-left hover:shadow-md transition-all">
+                    <span className="w-3.5 h-3.5 rounded-full flex-shrink-0" style={{ background: areaColor(u.ubicacion) }} />
+                    <span className="flex-1 text-sm font-body font-bold text-on-surface">{u.ubicacion}</span>
+                    <span className="text-right leading-none">
+                      <span className="text-xl font-serif font-bold block" style={{ color: areaColor(u.ubicacion) }}>{u.cantidad}</span>
+                      <span className="text-[9px] font-label text-stone-400">pzas</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <button onClick={reset} className="text-xs font-label text-stone-400 hover:text-stone-600">← Cancelar</button>
+            </div>
+          )}
+
+          {/* Paso 3: cantidad + a nombre de + confirmar */}
+          {paso === 'cantidad' && producto && origen && (
+            <div className="space-y-4">
+              <div className="bg-background rounded-xl p-3.5 border border-outline-variant/10">
+                <p className="text-sm font-body font-bold text-on-surface mb-2">{producto.nombre}</p>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-label font-bold px-2.5 py-1 rounded-full"
+                  style={{ background: `${areaColor(origen.ubicacion)}18`, color: areaColor(origen.ubicacion) }}>
+                  <Icon name="place" className="text-xs" /> Sale de {origen.ubicacion} · {origen.cantidad} pzas
+                </span>
+              </div>
+              <div>
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad a retirar</label>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setCantidad(c => Math.max(1, c - 1))}
+                    className="w-11 h-11 rounded-xl bg-surface-container border border-outline-variant/20 text-xl font-bold text-stone-500 hover:text-primary flex items-center justify-center">−</button>
+                  <input type="number" min={1} max={origen.cantidad} value={cantidad}
+                    onChange={e => setCantidad(Math.max(1, Math.min(origen.cantidad, parseInt(e.target.value) || 1)))}
+                    className="flex-1 text-center py-2.5 bg-background border border-outline-variant/20 rounded-xl text-xl font-serif font-bold outline-none focus:border-primary" />
+                  <button onClick={() => setCantidad(c => Math.min(origen.cantidad, c + 1))}
+                    className="w-11 h-11 rounded-xl bg-surface-container border border-outline-variant/20 text-xl font-bold text-stone-500 hover:text-primary flex items-center justify-center">+</button>
                 </div>
-                <button onClick={() => { setSelected(null); setQuery(''); }}
-                  className="p-1 text-stone-400 hover:text-stone-600 rounded-full">
-                  <Icon name="close" className="text-sm" />
-                </button>
+                <p className="text-[10px] font-label text-stone-400 mt-1">Máximo {origen.cantidad} pzas en {origen.ubicacion}</p>
               </div>
-            )}
-
-            {/* Ubicacion de donde sale (misma BD que el sistema de bodega TC52) */}
-            {selected && (
               <div>
-                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">
-                  Ubicación (de dónde sale)
-                </label>
-                {ubicaciones.length === 0 ? (
-                  <div className="w-full px-3 py-2.5 bg-orange-50 border border-orange-200 rounded-xl text-xs font-body text-orange-700">
-                    Este producto no tiene stock contado en bodega (TC52). Cuéntalo primero en el TC52 para poder retirarlo desde aquí.
-                  </div>
-                ) : (
-                  <select value={ubicacion} onChange={e => setUbicacion(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors">
-                    {ubicaciones.map(u => (
-                      <option key={u.ubicacion} value={u.ubicacion}>
-                        {u.ubicacion} — {u.cantidad} pzas
-                      </option>
-                    ))}
-                  </select>
-                )}
-              </div>
-            )}
-
-            {/* A nombre de (responsable del retiro) — obligatorio */}
-            <div>
-              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">
-                A nombre de (responsable) *
-              </label>
-              <input value={responsable} onChange={e => setResponsable(e.target.value)}
-                placeholder="Ej: María José"
-                className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Cantidad</label>
-                <input type="number" min="1" step="1" value={cantidad}
-                  onChange={e => setCantidad(e.target.value)}
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">A nombre de (responsable) *</label>
+                <input value={responsable} onChange={e => setResponsable(e.target.value)} placeholder="Ej: María José"
                   className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
               </div>
               <div>
-                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Motivo / Notas</label>
-                <input value={notas} onChange={e => setNotas(e.target.value)}
-                  placeholder="Ej: uso personal, cocina..."
+                <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">Motivo / Notas (opcional)</label>
+                <input value={notas} onChange={e => setNotas(e.target.value)} placeholder="Ej: uso personal, cocina…"
                   className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
               </div>
+              <button onClick={confirmar} disabled={saving || !responsable.trim()}
+                className={cn('w-full py-3 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
+                  saving || !responsable.trim() ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-error text-on-error hover:bg-error/90 shadow-md')}>
+                {saving ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" /> : <Icon name="output" className="text-base" />}
+                {saving ? 'Registrando…' : `Confirmar retiro · ${cantidad} pzas`}
+              </button>
+              <button onClick={() => (ubicaciones.length > 1 ? setPaso('origen') : reset())}
+                className="w-full text-xs font-label text-stone-400 hover:text-stone-600">← {ubicaciones.length > 1 ? 'Cambiar ubicación' : 'Cancelar'}</button>
             </div>
+          )}
 
-            <button onClick={registrar} disabled={saving || !selected || !responsable.trim()}
-              className={cn(
-                'w-full py-3 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
-                saving || !selected || !responsable.trim()
-                  ? 'bg-stone-200 text-stone-400 cursor-not-allowed'
-                  : 'bg-error text-on-error hover:bg-error/90 shadow-md'
-              )}>
-              {saving
-                ? <div className="w-4 h-4 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
-                : <Icon name="output" className="text-base" />}
-              {saving ? 'Registrando...' : 'Confirmar retiro'}
-            </button>
-          </div>
-        )}
+          {/* Éxito */}
+          {paso === 'exito' && producto && origen && (
+            <div className="py-8 flex flex-col items-center text-center gap-2">
+              <Icon name="check_circle" className="text-5xl text-primary" />
+              <p className="text-lg font-serif text-primary">Retiro registrado</p>
+              <p className="text-sm font-body text-stone-600">{cantidad} pzas · {producto.nombre}</p>
+              <p className="text-[11px] font-label text-stone-400">Desde {origen.ubicacion} · a nombre de {responsable}</p>
+              <button onClick={reset} className="mt-4 px-5 py-2.5 bg-error text-on-error rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-error/90 transition-all">Retirar otro producto</button>
+            </div>
+          )}
+
+          {/* Error */}
+          {paso === 'error' && (
+            <div className="py-8 flex flex-col items-center text-center gap-2">
+              <Icon name="error" className="text-5xl text-error" />
+              <p className="text-lg font-serif text-error">No se pudo</p>
+              <p className="text-sm font-body text-stone-600 max-w-xs">{error}</p>
+              <button onClick={reset} className="mt-4 px-5 py-2.5 bg-surface-container text-on-surface rounded-xl text-xs font-label font-bold uppercase tracking-widest hover:bg-stone-200 transition-all">Intentar de nuevo</button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Historial del día ─────────────────────────────────────────────── */}
