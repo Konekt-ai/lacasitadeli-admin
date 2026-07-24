@@ -162,7 +162,7 @@ function buildProductsConStockCountQuery({ search = '', category = '' } = {}) {
     FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
     GROUP BY codigo_barras HAVING SUM(cantidad) > 0;
 
-    SELECT COUNT(*) AS total
+    SELECT COUNT(DISTINCT a.Art_Codigo) AS total
     FROM #cs cs
     JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
       ON a.Art_Codigo = cs.codigo_barras
@@ -189,7 +189,7 @@ function buildProductsCountQuery({ search = '', category = '', sinPrecio = false
   const joinPrecio  = sinPrecio ? `LEFT JOIN [compucaja].[dbo].[ListaPreciosArt] p WITH (NOLOCK) ON p.Art_Codigo = a.Art_Codigo AND p.LP_Codigo = 1` : '';
   const wherePrecio = sinPrecio ? `AND ISNULL(p.LPA_PrecioVentaImp, 0) = 0` : '';
   return `
-    SELECT COUNT(*) AS total
+    SELECT COUNT(DISTINCT a.Art_Codigo) AS total
     FROM [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)
     ${joinPrecio}
     WHERE a.Art_Descripcion <> ''

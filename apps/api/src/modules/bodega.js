@@ -37,9 +37,9 @@ function areaClave(nombre) {
 }
 async function getAreaList() {
   const r = await mssql.query(
-    `SELECT nombre FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden, nombre`
+    `SELECT nombre, color FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa=1 ORDER BY orden, nombre`
   );
-  return (r.recordset || []).map(u => ({ clave: areaClave(u.nombre), nombre: u.nombre }));
+  return (r.recordset || []).map(u => ({ clave: areaClave(u.nombre), nombre: u.nombre, color: u.color || null }));
 }
 async function getAreaClaves() {
   return (await getAreaList()).map(a => a.clave);
@@ -61,7 +61,7 @@ router.get('/area-counts', async (req, res) => {
       const c = areaClave(row.ubicacion);
       map[c] = (map[c] || 0) + Number(row.total);
     }
-    res.json(areas.map(a => ({ area: a.clave, nombre: a.nombre, total: map[a.clave] || 0 })));
+    res.json(areas.map(a => ({ area: a.clave, nombre: a.nombre, color: a.color || null, total: map[a.clave] || 0 })));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

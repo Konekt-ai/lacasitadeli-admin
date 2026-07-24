@@ -35,11 +35,12 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   // Default del panel = solo productos con stock (igual que la Bodega TC52),
   // ordenados de mayor a menor. "Ver todos" muestra el catálogo completo.
   const [soloConStock,   setSoloConStock]   = useState(true);
+  const [soloFaltantes,  setSoloFaltantes]  = useState(false);
   const [inventoryView,  setInventoryView]  = useState<'list' | 'grid'>('list');
 
   // ── Area assignments (from SQLite) ────────────────────────────────────────────
   const [locationMap, setLocationMap] = useState<Map<string, Area>>(new Map());
-  const [areaOptions, setAreaOptions] = useState<{ area: string; nombre: string }[]>([]);
+  const [areaOptions, setAreaOptions] = useState<{ area: string; nombre: string; color?: string | null }[]>([]);
   // Stock por ubicación (lo que cuenta el TC52): art_codigo → [{area, cantidad}]
   const [ubicMap, setUbicMap] = useState<Map<string, { area: string; cantidad: number }[]>>(new Map());
 
@@ -71,7 +72,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
 
     fetch('/api/bodega/area-counts')
       .then(r => r.json())
-      .then((data: { area: string; nombre: string }[]) => {
+      .then((data: { area: string; nombre: string; color?: string | null }[]) => {
         if (Array.isArray(data)) setAreaOptions(data);
       })
       .catch(() => {});
@@ -93,7 +94,14 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       .catch(() => {});
   }, []);
 
-  const areaName = (area: string) => areaOptions.find(a => a.area === area)?.nombre ?? area;
+  const areaName  = (area: string) => areaOptions.find(a => a.area === area)?.nombre ?? area;
+  const areaColor = (area: string) => areaOptions.find(a => a.area === area)?.color || '#6B7280';
+
+  // Semáforo de stock (como los Zebra): gris = agotado, naranja = por acabarse, verde = ok.
+  const stockColor = (stock: number, min: number) =>
+    stock <= 0 ? 'text-stone-400' : stock <= min ? 'text-orange-600' : 'text-emerald-600';
+  const stockLabel = (stock: number, min: number) =>
+    stock <= 0 ? 'Agotado' : stock <= min ? 'Bajo' : 'En stock';
 
   // ── Fetch products — debounced on search/category, immediate on page ──────────
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -153,9 +161,10 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
   }, [page, fetchProducts]);
 
   // ── Client-side area filter (on current page only) ────────────────────────────
-  const displayed = areaFilter
+  let displayed = areaFilter
     ? products.filter(p => (locationMap.get(String(p.id)) || 'bodega') === areaFilter)
     : products;
+  if (soloFaltantes) displayed = displayed.filter(p => p.stock <= p.minStock);
 
   // ── Edit panel ────────────────────────────────────────────────────────────────
   const openPanel  = (p: Product) => { setEditingProduct(p); setPanel({ stock: String(p.stock), salePrice: String(p.salePrice), image: p.image || '' }); };
@@ -388,6 +397,16 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                 <Icon name="price_change" className="text-base" />
                 Sin precio
               </button>
+              <button
+                onClick={() => setSoloFaltantes(v => !v)}
+                title="Mostrar solo productos por acabarse o agotados (según su mínimo)"
+                className={cn(
+                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                  soloFaltantes ? 'bg-orange-500 text-white border-orange-500' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-orange-600'
+                )}>
+                <Icon name="warning" className="text-base" />
+                Solo faltantes
+              </button>
             </div>
           </div>
           <div className="flex bg-background p-1 rounded-lg border border-outline-variant/10 shrink-0">
@@ -437,7 +456,8 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                               <div className="flex flex-wrap items-center gap-1 mt-1">
                                 {locs.map(l => (
                                   <span key={l.area}
-                                    className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary inline-flex items-center gap-0.5">
+                                    style={{ backgroundColor: `${areaColor(l.area)}18`, color: areaColor(l.area), borderColor: `${areaColor(l.area)}55` }}
+                                    className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-0.5">
                                     <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
                                   </span>
                                 ))}
@@ -473,11 +493,12 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                           onClick={() => { setInlineId(String(p.id)); setInlineVal(String(p.stock)); }}
                           className="group/s flex flex-col items-center hover:bg-primary/5 rounded-lg px-3 py-1 transition-colors w-full"
                           title="Clic para editar stock">
-                          <span className={cn('font-serif text-xl', p.stock <= p.minStock ? 'text-error' : 'text-on-surface')}>
+                          <span className={cn('font-serif text-xl font-bold', stockColor(p.stock, p.minStock))}>
                             {p.stock}
                           </span>
-                          <span className="text-[9px] text-stone-400 font-label flex items-center gap-1">
-                            uds <Icon name="edit" className="text-[9px] opacity-0 group-hover/s:opacity-60 transition-opacity" />
+                          <span className={cn('text-[9px] font-label flex items-center gap-1',
+                            p.stock <= 0 ? 'text-stone-400' : p.stock <= p.minStock ? 'text-orange-600 font-bold' : 'text-stone-400')}>
+                            {p.stock <= 0 ? 'agotado' : p.stock <= p.minStock ? 'bajo' : 'uds'} <Icon name="edit" className="text-[9px] opacity-0 group-hover/s:opacity-60 transition-opacity" />
                           </span>
                         </button>
                       )}
@@ -490,10 +511,10 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
 
                     <td className="px-3 sm:px-6 py-3 sm:py-4 hidden sm:table-cell">
                       <span className={cn(
-                        'px-3 py-1 rounded-full text-[10px] font-label uppercase tracking-widest whitespace-nowrap',
-                        p.stock > p.minStock ? 'bg-primary-fixed text-on-primary-fixed-variant' : 'bg-error-container text-on-error-container'
+                        'px-3 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest whitespace-nowrap',
+                        p.stock <= 0 ? 'bg-stone-100 text-stone-500' : p.stock <= p.minStock ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700'
                       )}>
-                        {p.stock > p.minStock ? 'En Stock' : 'Stock Bajo'}
+                        {stockLabel(p.stock, p.minStock)}
                       </span>
                     </td>
 
@@ -529,7 +550,11 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                 <div className="flex justify-between items-end mt-4">
                   <div>
                     <p className="text-[10px] font-label text-stone-500 uppercase">Stock</p>
-                    <p className={cn('text-xl font-serif', p.stock <= p.minStock ? 'text-error' : 'text-on-surface')}>{p.stock}</p>
+                    <p className={cn('text-xl font-serif font-bold', stockColor(p.stock, p.minStock))}>{p.stock}</p>
+                    <p className={cn('text-[9px] font-label font-bold uppercase tracking-wider mt-0.5',
+                      p.stock <= 0 ? 'text-stone-400' : p.stock <= p.minStock ? 'text-orange-600' : 'text-emerald-600')}>
+                      {stockLabel(p.stock, p.minStock)}
+                    </p>
                   </div>
                   <p className="text-xl font-serif text-primary">${Number(p.salePrice).toFixed(2)}</p>
                 </div>
@@ -540,7 +565,8 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                     <div className="flex flex-wrap items-center gap-1 mt-3 pt-3 border-t border-outline-variant/10">
                       {locs.map(l => (
                         <span key={l.area}
-                          className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded uppercase tracking-wider bg-primary/10 text-primary inline-flex items-center gap-0.5">
+                          style={{ backgroundColor: `${areaColor(l.area)}18`, color: areaColor(l.area), borderColor: `${areaColor(l.area)}55` }}
+                          className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-0.5">
                           <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
                         </span>
                       ))}
@@ -572,8 +598,8 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
         {/* ── Footer: count + pagination ───────────────────────────────────── */}
         <div className="px-6 py-3 border-t border-surface-container bg-surface-container-low/30 flex items-center justify-between gap-4 flex-wrap">
           <p className="text-[10px] font-label text-stone-400 uppercase tracking-widest">
-            {areaFilter
-              ? `${displayed.length} en esta página con área · ${total.toLocaleString('es-MX')} total`
+            {(areaFilter || soloFaltantes)
+              ? `${displayed.length} en esta página${soloFaltantes ? ' con faltante' : ''} · ${total.toLocaleString('es-MX')} total`
               : `Mostrando ${((page - 1) * PAGE_SIZE + 1).toLocaleString('es-MX')}–${Math.min(page * PAGE_SIZE, total).toLocaleString('es-MX')} de ${total.toLocaleString('es-MX')}`}
             {lowStockProducts.length > 0 && (
               <span className="ml-2 text-error font-bold">· {lowStockProducts.length} bajo stock</span>

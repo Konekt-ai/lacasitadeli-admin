@@ -10,6 +10,20 @@ const {
 
 const DEFAULT_MIN_STOCK = parseInt(process.env.LOW_STOCK_THRESHOLD || '5');
 
+// Colapsa filas repetidas del MISMO Art_Codigo. La vista VArticulosUnificados
+// devuelve una fila por GTIN/código alterno, así que un producto con varios códigos
+// sale repetido. Nos quedamos con la de mayor stock para no subreportar.
+// OJO: NO toca "mismo nombre con código distinto" (eso es catálogo duplicado en
+// NovaCaja, no un duplicado de esta consulta).
+function dedupById(rows) {
+  const m = new Map();
+  for (const r of rows) {
+    const prev = m.get(r.id);
+    if (!prev || (r.stock || 0) > (prev.stock || 0)) m.set(r.id, r);
+  }
+  return Array.from(m.values());
+}
+
 const router = express.Router();
 
 // ── In-memory TTL cache ───────────────────────────────────────────────────────
@@ -102,7 +116,7 @@ router.get('/', async (req, res) => {
         buildProductsQuery({ search: q, category, offset: 0, pageSize: 2000, lowStockThreshold: DEFAULT_MIN_STOCK }) +
         '\n    OPTION (MAXDOP 1)'
       );
-      rows  = dataRes.recordset.map(toRow);
+      rows  = dedupById(dataRes.recordset.map(toRow));
       total = rows.length;
       if (lowKey) {
         const lowResult = { data: rows, total, page: 1, pageSize: 2000, pages: 1 };
@@ -117,14 +131,14 @@ router.get('/', async (req, res) => {
         mssql.query(buildProductsConStockQuery({ search: q, category, offset, pageSize: parseInt(pageSize) })),
         mssql.query(buildProductsConStockCountQuery({ search: q, category })),
       ]);
-      rows  = dataRes.recordset.map(toRow);
+      rows  = dedupById(dataRes.recordset.map(toRow));
       total = countRes.recordset[0]?.total || 0;
     } else {
       const [dataRes, countRes] = await Promise.all([
         mssql.query(buildProductsQuery({ search: q, category, offset, pageSize: parseInt(pageSize), sinPrecio: soloSinPrecio })),
         mssql.query(buildProductsCountQuery({ search: q, category, sinPrecio: soloSinPrecio })),
       ]);
-      rows  = dataRes.recordset.map(toRow);
+      rows  = dedupById(dataRes.recordset.map(toRow));
       total = countRes.recordset[0]?.total || 0;
     }
 
