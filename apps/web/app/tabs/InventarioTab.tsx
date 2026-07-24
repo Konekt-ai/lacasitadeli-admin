@@ -436,9 +436,10 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
       <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow-[0px_12px_32px_rgba(28,28,25,0.04)] overflow-hidden">
 
         {/* Toolbar */}
-        <div className="p-4 sm:p-6 border-b border-surface-container flex justify-between items-start sm:items-center bg-surface-container-low/30 flex-wrap gap-3">
-          <div className="flex flex-col sm:flex-row gap-3 flex-1 min-w-0 w-full sm:max-w-2xl">
-            <div className="relative flex-1 min-w-0 w-full">
+        <div className="p-4 sm:p-6 border-b border-surface-container bg-surface-container-low/30 space-y-3">
+          {/* Fila 1: buscar + vista */}
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 min-w-0">
               <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-xl" />
               {loading && searchQuery && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -451,79 +452,63 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                 onChange={e => setSearchQuery(e.target.value)}
               />
             </div>
-            <div className="flex gap-3 flex-wrap">
-              <select
-                value={categoryFilter}
-                onChange={e => setCategoryFilter(e.target.value)}
-                className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[180px]">
-                <option value="">Todas las categorías</option>
-                {categories.map((c, i) => (
-                  <option key={`${c.id}-${i}`} value={String(c.name)}>{c.name}</option>
-                ))}
-              </select>
-              <select
-                value={areaFilter}
-                onChange={e => setAreaFilter(e.target.value)}
-                className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[150px]">
-                <option value="">Todas las áreas</option>
-                {areaOptions.map(a => (
-                  <option key={a.area} value={a.area}>{a.nombre}</option>
-                ))}
-              </select>
-              {catAsignadas.length > 0 && (
-                <select value={miCatFilter} onChange={e => { setMiCatFilter(e.target.value); setPage(1); }}
-                  className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[170px]">
-                  <option value="">Mi categoría (todas)</option>
-                  {catAsignadas.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              )}
-              {tiposAsignados.length > 0 && (
-                <select value={tipoFilter} onChange={e => { setTipoFilter(e.target.value); setPage(1); }}
-                  className="flex-1 sm:flex-none px-4 py-2.5 sm:py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-0 sm:max-w-[150px]">
-                  <option value="">Tipo (todos)</option>
-                  {tiposAsignados.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              )}
-              <button
-                onClick={() => { setSoloConStock(v => !v); setPage(1); }}
-                title="Con stock: solo productos con existencia (como la Bodega), de mayor a menor. Ver todos: catálogo completo."
-                className={cn(
-                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
-                  soloConStock ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary'
-                )}>
-                <Icon name={soloConStock ? 'inventory_2' : 'apps'} className="text-base" />
-                {soloConStock ? 'Con stock' : 'Ver todos'}
+            <div className="flex bg-background p-1 rounded-lg border border-outline-variant/10 shrink-0">
+              <button onClick={() => setInventoryView('list')}
+                className={cn('p-1.5 rounded-md transition-all', inventoryView === 'list' ? 'bg-surface shadow-sm text-primary' : 'text-stone-400')}>
+                <Icon name="list" className="text-lg" />
               </button>
-              <button
-                onClick={() => { setSinPrecio(v => !v); setPage(1); }}
-                title="Mostrar solo productos sin precio de venta registrado"
-                className={cn(
-                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
-                  sinPrecio ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary'
-                )}>
-                <Icon name="price_change" className="text-base" />
-                Sin precio
-              </button>
-              <button
-                onClick={() => setSoloFaltantes(v => !v)}
-                title="Mostrar solo productos por acabarse o agotados (según su mínimo)"
-                className={cn(
-                  'px-3 py-2.5 sm:py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
-                  soloFaltantes ? 'bg-orange-500 text-white border-orange-500' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-orange-600'
-                )}>
-                <Icon name="warning" className="text-base" />
-                Solo faltantes
+              <button onClick={() => setInventoryView('grid')}
+                className={cn('p-1.5 rounded-md transition-all', inventoryView === 'grid' ? 'bg-surface shadow-sm text-primary' : 'text-stone-400')}>
+                <Icon name="grid_view" className="text-lg" />
               </button>
             </div>
           </div>
-          <div className="flex bg-background p-1 rounded-lg border border-outline-variant/10 shrink-0">
-            <button onClick={() => setInventoryView('list')}
-              className={cn('p-1.5 rounded-md transition-all', inventoryView === 'list' ? 'bg-surface shadow-sm text-primary' : 'text-stone-400')}>
-              <Icon name="list" className="text-lg" />
+          {/* Fila 2: filtros (envuelven sin encimarse) */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+              className="px-3 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-[150px]">
+              <option value="">Todas las categorías</option>
+              {categories.map((c, i) => (<option key={`${c.id}-${i}`} value={String(c.name)}>{c.name}</option>))}
+            </select>
+            <select value={areaFilter} onChange={e => setAreaFilter(e.target.value)}
+              className="px-3 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-[140px]">
+              <option value="">Todas las áreas</option>
+              {areaOptions.map(a => (<option key={a.area} value={a.area}>{a.nombre}</option>))}
+            </select>
+            {catAsignadas.length > 0 && (
+              <select value={miCatFilter} onChange={e => { setMiCatFilter(e.target.value); setPage(1); }}
+                className="px-3 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-[150px]">
+                <option value="">Mi categoría (todas)</option>
+                {catAsignadas.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+            {tiposAsignados.length > 0 && (
+              <select value={tipoFilter} onChange={e => { setTipoFilter(e.target.value); setPage(1); }}
+                className="px-3 py-2 bg-background border-none rounded-lg text-sm outline-none focus:ring-1 focus:ring-primary font-body cursor-pointer min-w-[130px]">
+                <option value="">Tipo (todos)</option>
+                {tiposAsignados.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            )}
+            <button onClick={() => { setSoloConStock(v => !v); setPage(1); }}
+              title="Con stock: solo productos con existencia (como la Bodega), de mayor a menor. Ver todos: catálogo completo."
+              className={cn('px-3 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                soloConStock ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary')}>
+              <Icon name={soloConStock ? 'inventory_2' : 'apps'} className="text-base" />
+              {soloConStock ? 'Con stock' : 'Ver todos'}
             </button>
-            <button onClick={() => setInventoryView('grid')}
-              className={cn('p-1.5 rounded-md transition-all', inventoryView === 'grid' ? 'bg-surface shadow-sm text-primary' : 'text-stone-400')}>
-              <Icon name="grid_view" className="text-lg" />
+            <button onClick={() => { setSinPrecio(v => !v); setPage(1); }}
+              title="Mostrar solo productos sin precio de venta registrado"
+              className={cn('px-3 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                sinPrecio ? 'bg-primary text-on-primary border-primary' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-primary')}>
+              <Icon name="price_change" className="text-base" />
+              Sin precio
+            </button>
+            <button onClick={() => setSoloFaltantes(v => !v)}
+              title="Mostrar solo productos por acabarse o agotados (según su mínimo)"
+              className={cn('px-3 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest whitespace-nowrap transition-all border shrink-0 flex items-center gap-1.5',
+                soloFaltantes ? 'bg-orange-500 text-white border-orange-500' : 'bg-background text-stone-500 border-outline-variant/20 hover:text-orange-600')}>
+              <Icon name="warning" className="text-base" />
+              Solo faltantes
             </button>
           </div>
         </div>
@@ -565,7 +550,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                                 {locs.map(l => (
                                   <span key={l.area}
                                     style={{ backgroundColor: `${areaColor(l.area)}18`, color: areaColor(l.area), borderColor: `${areaColor(l.area)}55` }}
-                                    className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-0.5">
+                                    className="text-[10px] font-label font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-1">
                                     <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
                                   </span>
                                 ))}
@@ -677,7 +662,7 @@ export default function InventarioTab({ lowStockProducts, categories, onRefresh 
                       {locs.map(l => (
                         <span key={l.area}
                           style={{ backgroundColor: `${areaColor(l.area)}18`, color: areaColor(l.area), borderColor: `${areaColor(l.area)}55` }}
-                          className="text-[9px] font-label font-bold px-1.5 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-0.5">
+                          className="text-[10px] font-label font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border inline-flex items-center gap-1">
                           <Icon name="place" className="text-[10px]" />{areaName(l.area)}: {l.cantidad}
                         </span>
                       ))}

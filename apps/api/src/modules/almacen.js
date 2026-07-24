@@ -838,19 +838,24 @@ router.get('/merma/historial', async (req, res) => {
 router.get('/ubicaciones', async (req, res) => {
   const { area, q } = req.query;
   try {
+    // Rápido: agrega por código+ubicación (pocos miles de renglones) y resuelve el
+    // nombre con un seek indexado por Art_Codigo. El OUTER APPLY anterior con OR
+    // (GTIN/CodAlt/Art_Codigo) escaneaba la vista de 59k POR CADA renglón → >25s.
     const result = await mssql.query(`
+      WITH ib AS (
+        SELECT codigo_barras, ubicacion, SUM(cantidad) AS cantidad
+        FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
+        WHERE cantidad > 0
+        GROUP BY codigo_barras, ubicacion
+      )
       SELECT
-        i.codigo_barras                            AS art_codigo,
-        ISNULL(v.Art_Descripcion, i.codigo_barras) AS nombre,
-        i.ubicacion,
-        i.cantidad,
-        CONVERT(VARCHAR(23), ISNULL(i.ultima_entrada, i.creado), 120) AS updated_at
-      FROM [compucaja].[dbo].[inventario_bodega] i
-      OUTER APPLY (
-        SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados]
-        WHERE Art_GTIN = i.codigo_barras OR CodAlt_Codigo = i.codigo_barras OR Art_Codigo = i.codigo_barras
-      ) v
-      WHERE i.cantidad > 0
+        ib.codigo_barras AS art_codigo,
+        ISNULL((SELECT TOP 1 Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+                WHERE Art_Codigo = ib.codigo_barras), ib.codigo_barras) AS nombre,
+        ib.ubicacion,
+        ib.cantidad
+      FROM ib
+      OPTION (MAXDOP 1)
     `);
     const mapa = await mapaUbicacionAClave();
     let rows = (result.recordset || []).map(r => ({
@@ -858,7 +863,6 @@ router.get('/ubicaciones', async (req, res) => {
       nombre:     r.nombre,
       area:       mapa[r.ubicacion] || areaClave(r.ubicacion),
       cantidad:   r.cantidad,
-      updated_at: r.updated_at,
     }));
     if (area) rows = rows.filter(r => r.area === area);
     if (q) { const ql = String(q).toLowerCase(); rows = rows.filter(r => (r.nombre || r.art_codigo).toLowerCase().includes(ql)); }
