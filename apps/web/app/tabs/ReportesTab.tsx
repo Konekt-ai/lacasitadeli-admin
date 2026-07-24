@@ -325,13 +325,14 @@ function SalidaView() {
   const [loading, setLoading] = useState(false);
 
   // ── Formulario de nueva salida ─────────────────────────────────────────────
-  const [showForm,    setShowForm]    = useState(false);
+  const [showForm,    setShowForm]    = useState(true);
   const [query,       setQuery]       = useState('');
   const [results,     setResults]     = useState<BusquedaProducto[]>([]);
   const [searching,   setSearching]   = useState(false);
   const [selected,    setSelected]    = useState<BusquedaProducto | null>(null);
   const [cantidad,    setCantidad]    = useState('1');
   const [notas,       setNotas]       = useState('');
+  const [responsable, setResponsable] = useState('');
   const [ubicacion,   setUbicacion]   = useState('Bodega');
   const [ubicaciones, setUbicaciones] = useState<{ ubicacion: string; cantidad: number }[]>([]);
   const [saving,      setSaving]      = useState(false);
@@ -389,22 +390,26 @@ function SalidaView() {
     if (!selected || !cantidad || parseFloat(cantidad) <= 0) {
       notify('Selecciona un producto y una cantidad válida', 'error'); return;
     }
+    if (!responsable.trim()) {
+      notify('Escribe a nombre de quién es el retiro', 'error'); return;
+    }
     setSaving(true);
     try {
       const res  = await fetch('/api/almacen/salida', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          codigo:    selected.codigo,
-          cantidad:  parseFloat(cantidad),
-          ubicacion: ubicacion,
-          notas:     notas.trim() || 'Retiro autorizado',
+          codigo:      selected.codigo,
+          cantidad:    parseFloat(cantidad),
+          ubicacion:   ubicacion,
+          responsable: responsable.trim(),
+          notas:       notas.trim(),
         }),
       });
       const data = await res.json();
       if (res.ok) {
-        notify(`Retiro de ${cantidad} uds desde ${ubicacion}: ${selected.nombre}`);
-        setSelected(null); setQuery(''); setCantidad('1'); setNotas('');
+        notify(`Retiro de ${cantidad} uds desde ${ubicacion} a nombre de ${responsable.trim()}: ${selected.nombre}`);
+        setSelected(null); setQuery(''); setCantidad('1'); setNotas(''); setResponsable('');
         setUbicaciones([]); setUbicacion('Bodega');
         fetchSalidas(today);
       } else {
@@ -495,8 +500,8 @@ function SalidaView() {
                   Ubicación (de dónde sale)
                 </label>
                 {ubicaciones.length === 0 ? (
-                  <div className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body text-stone-400">
-                    Sin stock contado en ninguna ubicación
+                  <div className="w-full px-3 py-2.5 bg-orange-50 border border-orange-200 rounded-xl text-xs font-body text-orange-700">
+                    Este producto no tiene stock contado en bodega (TC52). Cuéntalo primero en el TC52 para poder retirarlo desde aquí.
                   </div>
                 ) : (
                   <select value={ubicacion} onChange={e => setUbicacion(e.target.value)}
@@ -510,6 +515,16 @@ function SalidaView() {
                 )}
               </div>
             )}
+
+            {/* A nombre de (responsable del retiro) — obligatorio */}
+            <div>
+              <label className="text-[10px] font-label uppercase tracking-widest text-stone-500 mb-1 block">
+                A nombre de (responsable) *
+              </label>
+              <input value={responsable} onChange={e => setResponsable(e.target.value)}
+                placeholder="Ej: María José"
+                className="w-full px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl text-sm font-body outline-none focus:border-primary transition-colors" />
+            </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -526,10 +541,10 @@ function SalidaView() {
               </div>
             </div>
 
-            <button onClick={registrar} disabled={saving || !selected}
+            <button onClick={registrar} disabled={saving || !selected || !responsable.trim()}
               className={cn(
                 'w-full py-3 rounded-xl text-xs font-label font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all',
-                saving || !selected
+                saving || !selected || !responsable.trim()
                   ? 'bg-stone-200 text-stone-400 cursor-not-allowed'
                   : 'bg-error text-on-error hover:bg-error/90 shadow-md'
               )}>
@@ -639,7 +654,7 @@ type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
 const PERIOD_CONFIG: Record<TimeFilter, { period: string; limit: number; label: string }> = {
   'Hoy':         { period: 'day',   limit: 2000, label: 'hoy' },
   'Esta semana': { period: 'week',  limit: 5000, label: 'últimos 7 días' },
-  'Este mes':    { period: 'month', limit: 7000, label: 'últimos 30 días' },
+  'Este mes':    { period: 'month', limit: 7000, label: 'este mes' },
 };
 
 interface Props {
@@ -717,7 +732,16 @@ export default function ReportesTab({ timeFilter }: Props) {
     finally { setLiveLoading(false); }
   }, []);
 
-  useEffect(() => { fetchData(config.period); }, [config.period, fetchData]);
+  useEffect(() => {
+    fetchData(config.period);
+    // Auto-refresh cada 2 min (solo si la pestaña está visible) para que las cifras
+    // NO queden congeladas y coincidan con el Dashboard (que también se refresca).
+    const tick  = () => { if (!document.hidden) fetchData(config.period); };
+    const id    = setInterval(tick, 120_000);
+    const onVis = () => { if (!document.hidden) fetchData(config.period); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [config.period, fetchData]);
   useEffect(() => { fetchDesglose(desgloseDate); }, [desgloseDate, fetchDesglose]);
 
   useEffect(() => {

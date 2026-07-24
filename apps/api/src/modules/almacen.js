@@ -229,11 +229,16 @@ router.post('/entrada', async (req, res) => {
 
 // ── POST /api/almacen/salida ──────────────────────────────────────────────────
 router.post('/salida', async (req, res) => {
-  const { codigo, cantidad, ubicacion, notas } = req.body;
+  const { codigo, cantidad, ubicacion, notas, responsable } = req.body;
   const qty  = parseFloat(cantidad);
   const ubic = String(ubicacion || 'Bodega').trim();
   if (!codigo || !qty || qty <= 0)
     return res.status(400).json({ ok: false, mensaje: 'Código y cantidad válida requeridos' });
+  // "A nombre de" (responsable del retiro) + motivo, guardados juntos en notas
+  // (queda visible en el Historial del TC52 y en Movimientos del panel).
+  const resp      = String(responsable || '').trim();
+  const notaFinal = [resp ? `A nombre de: ${resp}` : '', String(notas || '').trim()]
+    .filter(Boolean).join(' · ') || 'Retiro autorizado';
 
   try {
     // Resolver las llaves (código base + GTIN + alterno) para casar con inventario_bodega,
@@ -281,7 +286,7 @@ router.post('/salida', async (req, res) => {
     await mssql.query(`
       INSERT INTO [compucaja].[dbo].[movimientos_bodega]
         (codigo_barras, tipo, cantidad, ubicacion, stock_antes, stock_despues, motivo, notas, fecha)
-      VALUES ('${esc(cbReal)}', 'salida', ${qty}, '${esc(ubic)}', ${stockAntes}, ${stockDespues}, 'retiro', ${notas ? `'${esc(notas)}'` : 'NULL'}, GETDATE())
+      VALUES ('${esc(cbReal)}', 'salida', ${qty}, '${esc(ubic)}', ${stockAntes}, ${stockDespues}, 'retiro', '${esc(notaFinal)}', GETDATE())
     `);
 
     // 3) Descontar también del stock de NovaCaja (para que no muestre stock fantasma),
@@ -292,7 +297,7 @@ router.post('/salida', async (req, res) => {
       WHERE Art_Codigo = '${esc(codigo)}'
     `);
 
-    res.json({ ok: true, stockActual: stockDespues, mensaje: `Retiro de ${qty} pzas desde ${ubic}` });
+    res.json({ ok: true, stockActual: stockDespues, mensaje: `Retiro de ${qty} pzas desde ${ubic}${resp ? ` · a nombre de ${resp}` : ''}` });
   } catch (err) {
     console.error('Error salida:', err.message);
     res.status(500).json({ ok: false, mensaje: 'Error del servidor' });

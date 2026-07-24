@@ -24,7 +24,7 @@ interface Props {
 const PERIOD_OPTS: { id: PeriodOption; label: string; sub: string; icon: string }[] = [
   { id: 'day',    label: 'Hoy',                  sub: 'Todos los tickets del día',        icon: 'today' },
   { id: 'week',   label: 'Esta semana',           sub: 'Últimos 7 días',                   icon: 'date_range' },
-  { id: 'month',  label: 'Este mes',              sub: 'Últimos 30 días',                  icon: 'calendar_month' },
+  { id: 'month',  label: 'Este mes',              sub: 'Del día 1 al día de hoy',          icon: 'calendar_month' },
   { id: 'custom', label: 'Intervalo personalizado', sub: 'Elige fecha inicio y fin',       icon: 'tune' },
 ];
 
@@ -120,7 +120,7 @@ export default function ExportModal({ onClose }: Props) {
       const sheetNames: Record<PeriodOption, string> = {
         day:    'Hoy',
         week:   'Últimos 7 días',
-        month:  'Últimos 30 días',
+        month:  'Este mes',
         custom: `${startDate} al ${endDate}`,
       };
 

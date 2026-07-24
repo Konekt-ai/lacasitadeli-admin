@@ -377,11 +377,11 @@ function buildSalesHtml({ dia, semana, mes, topProductos, caducidades }) {
       <table style="width:100%;border-collapse:collapse"><tr>
         ${card('Hoy', dia, '#012d1d')}
         ${card('Últimos 7 días', semana, '#1b4332')}
-        ${card('Últimos 30 días', mes, '#2d6a4f')}
+        ${card('Este mes', mes, '#2d6a4f')}
       </tr></table>
       ${topRows ? `
       <div style="background:#fff;border:1px solid #ECE5DE;border-radius:12px;margin:16px 6px 0;overflow:hidden">
-        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">Top productos (últimos 30 días)</div>
+        <div style="padding:12px 14px;color:#3E2723;font-size:14px;font-weight:bold;border-bottom:1px solid #F0EAE3">Top productos (este mes)</div>
         <table style="width:100%;border-collapse:collapse;font-size:13px">${topRows}</table>
       </div>` : ''}
       ${cadSection}

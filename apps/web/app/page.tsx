@@ -183,7 +183,7 @@ export default function Dashboard() {
                   {[
                     { v: 'Hoy',         l: 'Hoy' },
                     { v: 'Esta semana', l: 'Últimos 7 días' },
-                    { v: 'Este mes',    l: 'Últimos 30 días' },
+                    { v: 'Este mes',    l: 'Este mes' },
                   ].map(({ v, l }) => (
                     <button key={v} onClick={() => setTimeFilter(v)}
                       className={cn('px-4 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
@@ -217,7 +217,7 @@ export default function Dashboard() {
               {[
                 { key: 'Hoy',         short: 'Hoy' },
                 { key: 'Esta semana', short: '7 días' },
-                { key: 'Este mes',    short: '30 días' },
+                { key: 'Este mes',    short: 'Mes' },
               ].map(({ key, short }) => (
                 <button key={key} onClick={() => setTimeFilter(key)}
                   className={cn('flex-1 py-2 rounded-xl text-[11px] font-label font-bold uppercase tracking-widest transition-all',
