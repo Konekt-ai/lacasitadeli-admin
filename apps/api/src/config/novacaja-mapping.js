@@ -556,7 +556,6 @@ function buildSalesByHourQuery({ months = 3, maxDate } = {}) {
     WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
     GROUP BY DATEPART(HOUR, t.T_Fecha)
     ORDER BY DATEPART(HOUR, t.T_Fecha) ASC
-    OPTION (MAXDOP 1)
   `;
 }
 
@@ -590,7 +589,6 @@ function buildSalesByMonthQuery({ months = 12, maxDate } = {}) {
     WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
     GROUP BY YEAR(t.T_Fecha), MONTH(t.T_Fecha)
     ORDER BY YEAR(t.T_Fecha) ASC, MONTH(t.T_Fecha) ASC
-    OPTION (MAXDOP 1)
   `;
 }
 
@@ -626,7 +624,6 @@ function buildSalesByWeekdayQuery({ months = 3, maxDate } = {}) {
     WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
     GROUP BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7)
     ORDER BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7) ASC
-    OPTION (MAXDOP 1)
   `;
 }
 
@@ -640,7 +637,6 @@ function buildSalesByCategoryQuery({ months = 3, limit = 12, maxDate } = {}) {
     WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
     GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(a.Org_Descripcion)), ''), 'Sin categoría')
     ORDER BY SUM(${TICKET_VENTA}) DESC
-    OPTION (MAXDOP 1)
   `;
 }
 
@@ -659,7 +655,6 @@ function buildTopProductsPeriodQuery({ months = 3, limit = 30, maxDate } = {}) {
       AND ps.[Codigo] IS NOT NULL AND ps.[Codigo] <> '' AND ps.[Codigo] <> '0'
     GROUP BY ps.[Codigo], a.Art_Descripcion, a.Org_Descripcion
     ORDER BY SUM(${TICKET_VENTA}) DESC
-    OPTION (MAXDOP 1)
   `;
 }
 
