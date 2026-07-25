@@ -30,8 +30,8 @@ const HourTooltip = ({ active, payload, label }: any) => {
       <p className="font-serif text-primary text-lg mb-2">{label}</p>
       {payload.map((p: any, i: number) => (
         <div key={i} className="flex justify-between gap-4 text-xs font-label">
-          <span style={{ color: p.color }} className="truncate max-w-[100px]">{p.dataKey === 'unidades' ? 'Total' : p.name}</span>
-          <span className="font-bold text-on-surface">{fmtNum(p.value)}</span>
+          <span style={{ color: p.color }} className="truncate max-w-[100px]">{p.name}</span>
+          <span className="font-bold text-on-surface">{p.dataKey === 'ventas' ? fmtMoney(p.value) : fmtNum(p.value)}</span>
         </div>
       ))}
     </div>
@@ -266,20 +266,19 @@ export default function VentasTab() {
                   <XAxis dataKey="label" tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} interval={isMobile ? 3 : 1} />
                   <YAxis tick={{ fontSize: 10, fontFamily: 'Inter', fill: '#a8a29e' }} tickLine={false} axisLine={false} width={40} />
                   <Tooltip content={<HourTooltip />} />
-                  <Area type="monotone" dataKey="unidades" name="Unidades" stroke="#012d1d" strokeWidth={2} fill="url(#gradUnidades)" dot={false} />
-                  <Area type="monotone" dataKey="tickets"  name="Tickets"  stroke="#7b5819" strokeWidth={1.5} fill="url(#gradTickets)" dot={false} strokeDasharray="4 2" />
+                  <Area type="monotone" dataKey="ventas" name="Ingresos" stroke="#012d1d" strokeWidth={2} fill="url(#gradUnidades)" dot={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
             {hourLineData.length > 0 && (() => {
-              const top3 = [...hourLineData].sort((a, b) => b.unidades - a.unidades).slice(0, 3);
+              const top3 = [...hourLineData].sort((a, b) => b.ventas - a.ventas).slice(0, 3);
               return (
                 <div className="mt-6 flex gap-4 flex-wrap">
                   {top3.map((h, i) => (
                     <div key={i} className="flex items-center gap-3 bg-surface-container-low rounded-lg px-4 py-2">
                       <div className={cn('w-2 h-2 rounded-full', i === 0 ? 'bg-primary' : i === 1 ? 'bg-secondary' : 'bg-stone-300')} />
                       <span className="font-serif text-xl text-on-surface">{h.label}</span>
-                      <span className="text-[10px] font-label text-stone-500 uppercase tracking-widest">{fmtNum(h.unidades)} uds · {h.tickets} tickets</span>
+                      <span className="text-[10px] font-label text-stone-500 uppercase tracking-widest">{fmtMoneyShort(h.ventas)} · {h.tickets} tickets</span>
                     </div>
                   ))}
                   <div className="ml-auto flex items-center gap-2 text-stone-400">
