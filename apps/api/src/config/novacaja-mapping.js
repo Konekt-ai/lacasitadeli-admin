@@ -269,8 +269,9 @@ const TICKETS_FROM   = `
      AND ps.FolDoc_Codigo = t.FolDoc_Codigo AND ps.FolConsecutivo = t.FolConsecutivo
     LEFT JOIN [compucaja].[dbo].[costos_producto] cp WITH (NOLOCK) ON cp.codigo_barras = ps.[Codigo]
     LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = ps.[Codigo]`;
+// Métricas de LÍNEA (sin COUNT(DISTINCT), que es carísimo al agrupar por tiempo).
+// El # de tickets se saca aparte del encabezado (Tickets) con COUNT(*).
 const TICKET_METRICS = `
-      COUNT(DISTINCT ${TICKET_KEY})     AS numTickets,
       SUM(ps.[Cantidad])                AS unidadesVendidas,
       SUM(${TICKET_VENTA})              AS totalVentas,
       SUM(ps.[Cantidad] * ${COSTO_PZA}) AS totalCosto`;
@@ -541,14 +542,23 @@ function buildTopProductsQuery({ period = 'day', limit = 10, maxDate } = {}) {
 // ── ANALYTICS — VOLUMEN POR HORA Y MES ───────────────────────────────────────
 
 function buildSalesByHourQuery({ months = 3, maxDate } = {}) {
+  const W = `T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())`;
   return `
-    SELECT
-      DATEPART(HOUR, t.T_Fecha) AS hora,
-      ${TICKET_METRICS}
-    ${TICKETS_FROM}
-    WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
-    GROUP BY DATEPART(HOUR, t.T_Fecha)
-    ORDER BY DATEPART(HOUR, t.T_Fecha) ASC
+    SELECT hr.hora, hr.numTickets,
+      ISNULL(ln.unidadesVendidas, 0) AS unidadesVendidas,
+      ISNULL(ln.totalVentas, 0)      AS totalVentas,
+      ISNULL(ln.totalCosto, 0)       AS totalCosto
+    FROM (
+      SELECT DATEPART(HOUR, t.T_Fecha) AS hora, COUNT(*) AS numTickets
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK) WHERE t.${W}
+      GROUP BY DATEPART(HOUR, t.T_Fecha)
+    ) hr
+    LEFT JOIN (
+      SELECT DATEPART(HOUR, t.T_Fecha) AS hora, ${TICKET_METRICS}
+      ${TICKETS_FROM} WHERE t.${W}
+      GROUP BY DATEPART(HOUR, t.T_Fecha)
+    ) ln ON ln.hora = hr.hora
+    ORDER BY hr.hora ASC
     OPTION (MAXDOP 1)
   `;
 }
@@ -571,15 +581,23 @@ function buildTopProductsByHourQuery({ months = 3, limit = 10, maxDate } = {}) {
 }
 
 function buildSalesByMonthQuery({ months = 12, maxDate } = {}) {
+  const W = `T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())`;
   return `
-    SELECT
-      YEAR(t.T_Fecha)  AS anio,
-      MONTH(t.T_Fecha) AS mes,
-      ${TICKET_METRICS}
-    ${TICKETS_FROM}
-    WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
-    GROUP BY YEAR(t.T_Fecha), MONTH(t.T_Fecha)
-    ORDER BY YEAR(t.T_Fecha) ASC, MONTH(t.T_Fecha) ASC
+    SELECT hr.anio, hr.mes, hr.numTickets,
+      ISNULL(ln.unidadesVendidas, 0) AS unidadesVendidas,
+      ISNULL(ln.totalVentas, 0)      AS totalVentas,
+      ISNULL(ln.totalCosto, 0)       AS totalCosto
+    FROM (
+      SELECT YEAR(t.T_Fecha) AS anio, MONTH(t.T_Fecha) AS mes, COUNT(*) AS numTickets
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK) WHERE t.${W}
+      GROUP BY YEAR(t.T_Fecha), MONTH(t.T_Fecha)
+    ) hr
+    LEFT JOIN (
+      SELECT YEAR(t.T_Fecha) AS anio, MONTH(t.T_Fecha) AS mes, ${TICKET_METRICS}
+      ${TICKETS_FROM} WHERE t.${W}
+      GROUP BY YEAR(t.T_Fecha), MONTH(t.T_Fecha)
+    ) ln ON ln.anio = hr.anio AND ln.mes = hr.mes
+    ORDER BY hr.anio ASC, hr.mes ASC
     OPTION (MAXDOP 1)
   `;
 }
@@ -605,14 +623,23 @@ function buildTopProductsByMonthQuery({ months = 6, limit = 8, maxDate } = {}) {
 // ── VENTAS por DÍA DE LA SEMANA ──────────────────────────────────────────────
 // DATEDIFF(DAY, 0, fecha) % 7  →  0=Lunes … 6=Domingo (independiente de DATEFIRST)
 function buildSalesByWeekdayQuery({ months = 3, maxDate } = {}) {
+  const W = `T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())`;
   return `
-    SELECT
-      (DATEDIFF(DAY, 0, t.T_Fecha) % 7) AS diaSemana,
-      ${TICKET_METRICS}
-    ${TICKETS_FROM}
-    WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
-    GROUP BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7)
-    ORDER BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7) ASC
+    SELECT hr.diaSemana, hr.numTickets,
+      ISNULL(ln.unidadesVendidas, 0) AS unidadesVendidas,
+      ISNULL(ln.totalVentas, 0)      AS totalVentas,
+      ISNULL(ln.totalCosto, 0)       AS totalCosto
+    FROM (
+      SELECT (DATEDIFF(DAY, 0, t.T_Fecha) % 7) AS diaSemana, COUNT(*) AS numTickets
+      FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK) WHERE t.${W}
+      GROUP BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7)
+    ) hr
+    LEFT JOIN (
+      SELECT (DATEDIFF(DAY, 0, t.T_Fecha) % 7) AS diaSemana, ${TICKET_METRICS}
+      ${TICKETS_FROM} WHERE t.${W}
+      GROUP BY (DATEDIFF(DAY, 0, t.T_Fecha) % 7)
+    ) ln ON ln.diaSemana = hr.diaSemana
+    ORDER BY hr.diaSemana ASC
     OPTION (MAXDOP 1)
   `;
 }
