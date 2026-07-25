@@ -171,19 +171,6 @@ export default function VentasTab() {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
-          {/* Métrica global */}
-          <div className="flex gap-1 bg-surface-container-low rounded-lg p-1">
-            <button onClick={() => setAnalyticsMetric('totalVentas')}
-              className={cn('flex-1 sm:flex-none px-3 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
-                isMoney ? 'bg-primary text-on-primary shadow-sm' : 'text-stone-500 hover:text-primary')}>
-              Ingresos $
-            </button>
-            <button onClick={() => setAnalyticsMetric('unidadesVendidas')}
-              className={cn('flex-1 sm:flex-none px-3 py-1.5 rounded-md text-[10px] font-label font-bold uppercase tracking-widest transition-all',
-                !isMoney ? 'bg-primary text-on-primary shadow-sm' : 'text-stone-500 hover:text-primary')}>
-              Unidades
-            </button>
-          </div>
           {/* Periodo */}
           <div className="flex items-center gap-1.5 sm:gap-2">
             <span className="hidden sm:inline text-[10px] font-label uppercase tracking-widest text-stone-500">Periodo:</span>
