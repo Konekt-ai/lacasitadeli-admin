@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn, hoyMX, diasAtrasMX, mesMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
+import { TicketDetalleModal, type TicketKey } from '../components/TicketDetalleModal';
 import type {
   Area, AreaConfig, AreaCount, AreaProduct,
   SurtidoTransfer, Recuento, StagnantProduct,
@@ -1198,6 +1199,15 @@ const TIPO_META: Record<TipoMovimiento, { label: string; sign: string; badgeCls:
   transferencia: { label: 'Transferencia', sign: '↔', badgeCls: 'bg-blue-50 text-blue-700 border border-blue-200',             iconCls: 'text-blue-600' },
 };
 
+// El sync de ventas guarda en notas "Ticket #<folio> | <tda>-<est>-<doc>" para que
+// cada salida de venta sea rastreable al ticket EXACTO (FolConsecutivo se recicla,
+// por eso hacen falta los 4 campos). Devuelve la llave si la nota trae ese formato.
+function parseTicketRef(notas: string | null | undefined): TicketKey | null {
+  if (!notas) return null;
+  const m = String(notas).match(/Ticket #(\d+)\s*\|\s*(\d+)-(\d+)-(\d+)/);
+  return m ? { folio: +m[1], tda: +m[2], est: +m[3], doc: +m[4] } : null;
+}
+
 // ── TC52 stock row type ────────────────────────────────────────────────────────
 interface Tc52StockRow { art_codigo: string; nombre: string | null; ubicacion: string; cantidad: number; updated_at: string }
 interface Tc52Ubic     { nombre: string; color: string; orden: number }
@@ -1400,6 +1410,8 @@ function ZebraView() {
   const [tipo,        setTipo]        = useState<TipoMovimiento | 'todos'>('todos');
   const [areaFiltro,  setAreaFiltro]  = useState('todas');
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  // Ticket abierto desde una salida de venta (para ver qué se vendió en ESE ticket)
+  const [ticketModal, setTicketModal] = useState<TicketKey | null>(null);
 
   const fetchMovimientos = useCallback(async () => {
     setLoading(true);
@@ -1571,6 +1583,7 @@ function ZebraView() {
                   const pretty = (k: string) => areaMap[k as Area]?.label ?? (k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, ' '));
                   const areaOrigen  = m.area_origen  ? pretty(m.area_origen)  : null;
                   const areaDestino = m.area_destino ? pretty(m.area_destino) : null;
+                  const ticketRef   = parseTicketRef(m.notas);
                   return (
                     <tr key={m.uid} className="hover:bg-background transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap">
@@ -1580,6 +1593,18 @@ function ZebraView() {
                         {m.motivo && (
                           <p className="text-[9px] font-label text-stone-400 mt-0.5">{m.motivo}</p>
                         )}
+                        {ticketRef ? (
+                          <button
+                            onClick={() => setTicketModal(ticketRef)}
+                            className="mt-0.5 flex items-center gap-0.5 text-[10px] font-label text-primary hover:underline"
+                            title="Ver el ticket de esta venta"
+                          >
+                            <Icon name="receipt_long" className="text-[12px]" />
+                            Ticket #{ticketRef.folio}
+                          </button>
+                        ) : m.notas ? (
+                          <p className="text-[9px] font-label text-stone-400 mt-0.5 truncate max-w-[140px]" title={m.notas}>{m.notas}</p>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3">
                         <p className="text-sm font-body text-on-surface">{m.nombre || m.codigo}</p>
@@ -1636,6 +1661,8 @@ function ZebraView() {
           </div>
         </div>
       )}
+
+      {ticketModal && <TicketDetalleModal tk={ticketModal} onClose={() => setTicketModal(null)} />}
     </div>
   );
 }

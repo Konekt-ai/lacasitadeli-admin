@@ -80,28 +80,50 @@ async function procesarVentas() {
       FROM [compucaja].[dbo].[Tickets] t WITH (NOLOCK)
       WHERE ${WHERE_NUEVOS};
 
-      -- Vendido por (producto, area) según la caja del ticket (solo cajas mapeadas)
-      SELECT ps.Codigo AS codigo, m.area AS area, SUM(ps.Cantidad) AS vendido
-      INTO #vend
+      -- UNA fila por (ticket, producto, area). NO se agrega entre tickets: así cada
+      -- ticket deja su PROPIA salida, rastreable a su folio (antes se sumaban varios
+      -- tickets del mismo producto en un solo -N y no se sabía de qué venta salía).
+      SELECT n.ft, n.fe, n.fd, n.fc, n.tf,
+             ps.Codigo AS codigo, m.area AS area, SUM(ps.Cantidad) AS vendido
+      INTO #lineas
       FROM [compucaja].[dbo].[TicketsPS] ps WITH (NOLOCK)
       JOIN #nuevos n ON ps.FolTda_Codigo = n.ft AND ps.FolEst_Codigo = n.fe
         AND ps.FolDoc_Codigo = n.fd AND ps.FolConsecutivo = n.fc
       JOIN [compucaja].[dbo].[estacion_area_map] m ON m.est_codigo = n.fe
-      GROUP BY ps.Codigo, m.area;
+      GROUP BY n.ft, n.fe, n.fd, n.fc, n.tf, ps.Codigo, m.area;
 
+      -- Solo líneas de productos SÍ contados en el área de su caja, con el stock
+      -- actual y el ACUMULADO cronológico (para descontar en cascada por línea).
+      SELECT l.ft, l.fe, l.fd, l.fc, l.tf, l.codigo, l.area, l.vendido,
+             ib.cantidad AS stock_actual,
+             SUM(l.vendido) OVER (PARTITION BY l.codigo, l.area
+                 ORDER BY l.tf, l.fc ROWS UNBOUNDED PRECEDING) AS acum
+      INTO #calc
+      FROM #lineas l
+      JOIN [compucaja].[dbo].[inventario_bodega] ib
+        ON ib.codigo_barras = l.codigo AND ib.ubicacion = l.area;
+
+      -- Una SALIDA por ticket, con el folio en notas (para abrir el ticket exacto).
+      -- El stock por línea baja en cascada (nunca <0); la última línea = stock final.
+      -- fecha = hora REAL del ticket (T_Fecha), no la del batch: así el movimiento
+      -- coincide en tiempo con el ticket.
       INSERT INTO [compucaja].[dbo].[movimientos_bodega]
-        (codigo_barras, tipo, cantidad, ubicacion, stock_antes, stock_despues, motivo, fecha)
-      SELECT ib.codigo_barras, 'salida', v.vendido, ib.ubicacion, ib.cantidad,
-             CASE WHEN ib.cantidad - v.vendido < 0 THEN 0 ELSE ib.cantidad - v.vendido END,
-             'venta', GETDATE()
-      FROM [compucaja].[dbo].[inventario_bodega] ib
-      JOIN #vend v ON v.codigo = ib.codigo_barras AND v.area = ib.ubicacion;
+        (codigo_barras, tipo, cantidad, ubicacion, stock_antes, stock_despues, motivo, notas, fecha)
+      SELECT c.codigo, 'salida', c.vendido, c.area,
+             CASE WHEN c.stock_actual - (c.acum - c.vendido) < 0 THEN 0 ELSE c.stock_actual - (c.acum - c.vendido) END,
+             CASE WHEN c.stock_actual - c.acum < 0 THEN 0 ELSE c.stock_actual - c.acum END,
+             'venta',
+             CONCAT('Ticket #', c.fc, ' | ', c.ft, '-', c.fe, '-', c.fd),
+             c.tf
+      FROM #calc c;
 
+      -- Aplica el stock final por (producto, area): total vendido = SUM de sus líneas.
       UPDATE ib
-        SET ib.cantidad = CASE WHEN ib.cantidad - v.vendido < 0 THEN 0 ELSE ib.cantidad - v.vendido END,
+        SET ib.cantidad = CASE WHEN ib.cantidad - tot.vendido < 0 THEN 0 ELSE ib.cantidad - tot.vendido END,
             ib.ultima_salida = GETDATE()
       FROM [compucaja].[dbo].[inventario_bodega] ib
-      JOIN #vend v ON v.codigo = ib.codigo_barras AND v.area = ib.ubicacion;
+      JOIN ( SELECT codigo, area, SUM(vendido) AS vendido FROM #lineas GROUP BY codigo, area ) tot
+        ON tot.codigo = ib.codigo_barras AND tot.area = ib.ubicacion;
 
       -- Marca TODOS los tickets nuevos (mapeados o no) para no re-escanearlos
       INSERT INTO [compucaja].[dbo].[ventas_procesadas]
@@ -114,12 +136,11 @@ async function procesarVentas() {
 
       SELECT
         (SELECT COUNT(*) FROM #nuevos) AS tickets,
-        (SELECT COUNT(*) FROM #vend v JOIN [compucaja].[dbo].[inventario_bodega] ib
-            ON ib.codigo_barras = v.codigo AND ib.ubicacion = v.area) AS productosDescontados,
-        (SELECT ISNULL(SUM(v.vendido),0) FROM #vend v JOIN [compucaja].[dbo].[inventario_bodega] ib
-            ON ib.codigo_barras = v.codigo AND ib.ubicacion = v.area) AS unidadesDescontadas;
+        (SELECT COUNT(*) FROM (SELECT DISTINCT codigo, area FROM #calc) x) AS productosDescontados,
+        (SELECT ISNULL(SUM(vendido),0) FROM #calc) AS unidadesDescontadas,
+        (SELECT COUNT(*) FROM #calc) AS movimientos;
 
-      DROP TABLE #nuevos; DROP TABLE #vend;
+      DROP TABLE #nuevos; DROP TABLE #lineas; DROP TABLE #calc;
       COMMIT;
     END TRY
     BEGIN CATCH
@@ -133,6 +154,7 @@ async function procesarVentas() {
     tickets: Number(row.tickets) || 0,
     productosDescontados: Number(row.productosDescontados) || 0,
     unidadesDescontadas: Number(row.unidadesDescontadas) || 0,
+    movimientos: Number(row.movimientos) || 0,
   };
 }
 
@@ -145,7 +167,7 @@ async function tick() {
     const cfg = await getConfig();
     if (cfg && cfg.activo) {
       const r = await procesarVentas();
-      if (r && r.tickets) console.log(`[ventas-sync] ${r.tickets} tickets, ${r.unidadesDescontadas} uds descontadas`);
+      if (r && r.tickets) console.log(`[ventas-sync] ${r.tickets} tickets, ${r.movimientos || 0} salidas, ${r.unidadesDescontadas} uds descontadas`);
     }
   } catch (e) {
     console.error('[ventas-sync] tick:', e.message);
