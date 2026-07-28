@@ -640,6 +640,25 @@ function buildSalesByCategoryQuery({ months = 3, limit = 12, maxDate } = {}) {
   `;
 }
 
+// Ventas por PRODUCTO (código) — base para re-agrupar por categoría PROPIA (Excel,
+// SQLite) en la app, y para el top de productos. Trae TODOS los códigos (los
+// genéricos '0'/null cuentan en la mezcla; se filtran en la app para el top).
+function buildSalesByProductQuery({ months = 3, maxDate } = {}) {
+  return `
+    SELECT
+      ps.[Codigo]            AS codigo,
+      MAX(a.Art_Descripcion) AS nombre,
+      MAX(a.Org_Descripcion) AS categoriaNC,
+      SUM(ps.[Cantidad])     AS unidades,
+      SUM(${TICKET_VENTA})   AS ventas,
+      SUM(ps.[Cantidad] * ${COSTO_PZA}) AS costo
+    ${TICKETS_FROM}
+    WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
+    GROUP BY ps.[Codigo]
+    OPTION (MAXDOP 1)
+  `;
+}
+
 // ── TOP PRODUCTOS del periodo (ranking por ingresos / ganancia) ──────────────
 function buildTopProductsPeriodQuery({ months = 3, limit = 30, maxDate } = {}) {
   return `
@@ -762,6 +781,7 @@ module.exports = {
   buildTopProductsByMonthQuery,
   buildSalesByWeekdayQuery,
   buildSalesByCategoryQuery,
+  buildSalesByProductQuery,
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,

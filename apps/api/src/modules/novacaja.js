@@ -14,6 +14,7 @@ const {
   buildSalesByMonthQuery,
   buildSalesByWeekdayQuery,
   buildSalesByCategoryQuery,
+  buildSalesByProductQuery,
   buildTopProductsPeriodQuery,
   buildRecentTicketsQuery,
   buildTicketKPIsQuery,
@@ -31,8 +32,52 @@ const {
   JOIN_CP_A,
 } = require('../config/novacaja-mapping');
 const emailSvc = require('./emailService');
+const { getDb } = require('../db');
 
 const router = express.Router();
+
+// Deriva la mezcla por categoría (top 12 + "Otros") y el top de productos desde las
+// filas por-producto, SUPERPONIENDO las categorías propias del Excel (product_overrides,
+// SQLite) sobre la de NovaCaja. Así la clienta recategoriza (paella→"Alimentos") y la
+// gráfica lo refleja, sin que todo caiga en "ABARROTES".
+function deriveCategoryAndTop(prodRows) {
+  let localCat = new Map();
+  try {
+    localCat = new Map(getDb()
+      .prepare("SELECT art_codigo, categoria FROM product_overrides WHERE categoria IS NOT NULL AND categoria <> ''")
+      .all().map(o => [String(o.art_codigo), o.categoria]));
+  } catch { /* SQLite no disponible → solo NovaCaja */ }
+  const catOf = (r) => localCat.get(String(r.codigo)) || (r.categoriaNC && String(r.categoriaNC).trim()) || 'Sin categoría';
+
+  const catMap = new Map();
+  for (const r of prodRows) {
+    const c = catOf(r);
+    const e = catMap.get(c) || { categoria: c, totalVentas: 0, unidadesVendidas: 0, totalCosto: 0 };
+    e.totalVentas      += Number(r.ventas)   || 0;
+    e.unidadesVendidas += Number(r.unidades) || 0;
+    e.totalCosto       += Number(r.costo)    || 0;
+    catMap.set(c, e);
+  }
+  let cats = [...catMap.values()].sort((a, b) => b.totalVentas - a.totalVentas);
+  let byCategory = cats;
+  if (cats.length > 12) {
+    const otros = cats.slice(12).reduce((e, c) => {
+      e.totalVentas += c.totalVentas; e.unidadesVendidas += c.unidadesVendidas; e.totalCosto += c.totalCosto; return e;
+    }, { categoria: 'Otros', totalVentas: 0, unidadesVendidas: 0, totalCosto: 0 });
+    byCategory = [...cats.slice(0, 12), otros];
+  }
+
+  const topProducts = prodRows
+    .filter(r => { const c = String(r.codigo || '').trim(); return c !== '' && c !== '0'; })
+    .map(r => {
+      const ventas = Number(r.ventas) || 0, costo = Number(r.costo) || 0;
+      return { nombre: r.nombre || r.codigo, categoria: catOf(r), unidades: Number(r.unidades) || 0, ingresos: ventas, costo, ganancia: ventas - costo };
+    })
+    .sort((a, b) => b.ingresos - a.ingresos)
+    .slice(0, 30);
+
+  return { byCategory, topProducts };
+}
 
 // ── In-memory TTL cache ───────────────────────────────────────────────────────
 const _cache = new Map();
@@ -159,20 +204,21 @@ router.get('/analytics', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [byHour, byMonth, byWeekday, byCategory, topProducts] = await Promise.all([
+    const [byHour, byMonth, byWeekday, byProduct] = await Promise.all([
       heavy(buildSalesByHourQuery({ months: m, maxDate })),
       heavy(buildSalesByMonthQuery({ months: m, maxDate })),
       heavy(buildSalesByWeekdayQuery({ months: m, maxDate })),
-      heavy(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate })),
-      heavy(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate })),
+      heavy(buildSalesByProductQuery({ months: m, maxDate })),
     ]);
+    // Mezcla por categoría (con categorías del Excel + "Otros") y top productos.
+    const { byCategory, topProducts } = deriveCategoryAndTop(byProduct.recordset || []);
 
     const result = {
-      byHour:      byHour.recordset      || [],
-      byMonth:     byMonth.recordset     || [],
-      byWeekday:   byWeekday.recordset   || [],
-      byCategory:  byCategory.recordset  || [],
-      topProducts: topProducts.recordset || [],
+      byHour:      byHour.recordset    || [],
+      byMonth:     byMonth.recordset   || [],
+      byWeekday:   byWeekday.recordset || [],
+      byCategory,
+      topProducts,
     };
 
     _set(cacheKey, result, 300_000); // 5 min
@@ -1085,9 +1131,9 @@ async function prewarm() {
     const byHour     = (await heavy(buildSalesByHourQuery({ months: m, maxDate }))).recordset || [];
     const byMonth    = (await heavy(buildSalesByMonthQuery({ months: m, maxDate }))).recordset || [];
     const byWeekday  = (await heavy(buildSalesByWeekdayQuery({ months: m, maxDate }))).recordset || [];
-    const byCategory = (await heavy(buildSalesByCategoryQuery({ months: m, limit: 12, maxDate }))).recordset || [];
-    const topProds   = (await heavy(buildTopProductsPeriodQuery({ months: m, limit: 30, maxDate }))).recordset || [];
-    _set(`analytics:${m}`, { byHour, byMonth, byWeekday, byCategory, topProducts: topProds }, 600_000);
+    const byProduct  = (await heavy(buildSalesByProductQuery({ months: m, maxDate }))).recordset || [];
+    const { byCategory, topProducts } = deriveCategoryAndTop(byProduct);
+    _set(`analytics:${m}`, { byHour, byMonth, byWeekday, byCategory, topProducts }, 600_000);
   } catch (e) {
     console.error('prewarm:', e.message);
   } finally {
