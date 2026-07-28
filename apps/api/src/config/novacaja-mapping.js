@@ -655,7 +655,6 @@ function buildSalesByProductQuery({ months = 3, maxDate } = {}) {
     ${TICKETS_FROM}
     WHERE t.T_Fecha >= DATEADD(MONTH, -${months}, GETDATE())
     GROUP BY ps.[Codigo]
-    OPTION (MAXDOP 1)
   `;
 }
 
