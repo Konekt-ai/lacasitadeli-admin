@@ -208,22 +208,17 @@ router.get('/analytics', async (req, res) => {
   try {
     const maxDate = await getMaxDateString();
 
-    const [byHour, byMonth, byWeekday, byProduct] = await Promise.all([
-      heavy(buildSalesByHourQuery({ months: m, maxDate })),
-      heavy(buildSalesByMonthQuery({ months: m, maxDate })),
-      heavy(buildSalesByWeekdayQuery({ months: m, maxDate })),
-      heavy(buildSalesByProductQuery({ months: m, maxDate })),
-    ]);
+    // SECUENCIAL (no Promise.all): cada consulta es pesada (MAXDOP 1); en paralelo
+    // contendían por CPU y tardaban ~25s con spike en la caja. Una a la vez es más
+    // suave (~16s en frío). Cacheado 5 min + prewarm cada 8 min → casi siempre 0.2s.
+    const byHour    = (await heavy(buildSalesByHourQuery({ months: m, maxDate }))).recordset    || [];
+    const byMonth   = (await heavy(buildSalesByMonthQuery({ months: m, maxDate }))).recordset   || [];
+    const byWeekday = (await heavy(buildSalesByWeekdayQuery({ months: m, maxDate }))).recordset || [];
+    const byProduct = (await heavy(buildSalesByProductQuery({ months: m, maxDate }))).recordset || [];
     // Mezcla por categoría (con categorías del Excel + "Otros") y top productos.
-    const { byCategory, topProducts } = deriveCategoryAndTop(byProduct.recordset || []);
+    const { byCategory, topProducts } = deriveCategoryAndTop(byProduct);
 
-    const result = {
-      byHour:      byHour.recordset    || [],
-      byMonth:     byMonth.recordset   || [],
-      byWeekday:   byWeekday.recordset || [],
-      byCategory,
-      topProducts,
-    };
+    const result = { byHour, byMonth, byWeekday, byCategory, topProducts };
 
     _set(cacheKey, result, 300_000); // 5 min
     res.json(result);
