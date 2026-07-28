@@ -83,6 +83,10 @@ function deriveCategoryAndTop(prodRows) {
 const _cache = new Map();
 const _get = (k) => { const e = _cache.get(k); return e && Date.now() < e.exp ? e.v : null; };
 const _set = (k, v, ttlMs) => _cache.set(k, { v, exp: Date.now() + ttlMs });
+// Borra el caché de analytics (para que un cambio de categorías por Excel se refleje ya).
+function invalidateAnalyticsCache() {
+  for (const k of [..._cache.keys()]) if (String(k).startsWith('analytics:')) _cache.delete(k);
+}
 
 // Consulta PESADA: la limitamos a 1 núcleo (MAXDOP 1) para no acaparar la CPU del
 // servidor que comparte NovaCaja (POS). Tarda un poco más, pero no lo ahoga.
@@ -1147,3 +1151,4 @@ setInterval(prewarm, 480_000);
 
 module.exports = router;
 module.exports.enviarResumenVentas = enviarResumenVentas; // para el cron del lunes
+module.exports.invalidateAnalyticsCache = invalidateAnalyticsCache;

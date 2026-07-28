@@ -300,6 +300,7 @@ router.post('/categorias-import', async (req, res) => {
     });
     tx(items);
     invalidateProductsCache();
+    try { require('./novacaja').invalidateAnalyticsCache(); } catch { /* refresca la mezcla por categoría al instante */ }
     res.json({ ok: true, actualizados: n });
   } catch (err) {
     console.error('Error import categorías:', err.message);
