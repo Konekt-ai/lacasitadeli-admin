@@ -687,12 +687,13 @@ interface LiveTicket {
   importeTotal: number;
 }
 
-type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
+type TimeFilter = 'Hoy' | 'Esta semana' | 'Últimos 30 días' | 'Este mes';
 
 const PERIOD_CONFIG: Record<TimeFilter, { period: string; limit: number; label: string }> = {
-  'Hoy':         { period: 'day',   limit: 2000, label: 'hoy' },
-  'Esta semana': { period: 'week',  limit: 5000, label: 'últimos 7 días' },
-  'Este mes':    { period: 'month', limit: 7000, label: 'este mes' },
+  'Hoy':            { period: 'day',    limit: 2000, label: 'hoy' },
+  'Esta semana':    { period: 'week',   limit: 5000, label: 'últimos 7 días' },
+  'Últimos 30 días': { period: 'days30', limit: 9000, label: 'últimos 30 días' },
+  'Este mes':       { period: 'month',  limit: 9000, label: 'este mes' },
 };
 
 interface Props {

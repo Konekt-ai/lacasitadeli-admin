@@ -35,18 +35,20 @@ interface RecentTicket {
   importeTotal: number;
 }
 
-type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
+type TimeFilter = 'Hoy' | 'Esta semana' | 'Últimos 30 días' | 'Este mes';
 
 const PERIOD_MAP: Record<TimeFilter, string> = {
-  'Hoy':         'day',
-  'Esta semana': 'week',
-  'Este mes':    'month',
+  'Hoy':            'day',
+  'Esta semana':    'week',
+  'Últimos 30 días': 'days30',
+  'Este mes':       'month',
 };
 
 const PERIOD_LABEL: Record<string, string> = {
-  day:   'hoy',
-  week:  'últimos 7 días',
-  month: 'este mes',
+  day:    'hoy',
+  week:   'últimos 7 días',
+  days30: 'últimos 30 días',
+  month:  'este mes',
 };
 
 const BAR_COLORS = ['#012d1d','#1b4332','#2d6a4f','#40916c','#52b788','#7b5819','#a47a23','#c9a843','#eebf76','#ffdeae'];
@@ -71,11 +73,12 @@ interface VcCajero { cajero: string; nombre: string; tickets: number; total: num
 interface VcCross  { caja: string; nombreCaja: string; cajero: string; nombre: string; tickets: number; total: number; }
 interface VcData   { period: string; porCaja: VcCaja[]; porCajero: VcCajero[]; porCajaCajero: VcCross[]; }
 
-// Rango inicial según el filtro global (Hoy/Semana/Mes), en hora de CDMX.
+// Rango inicial según el filtro global (Hoy/7 días/30 días/Mes), en hora de CDMX.
 const seedRango = (p: string): [string, string] =>
-  p === 'day'  ? [hoyMX(), hoyMX()]
-: p === 'week' ? [diasAtrasMX(6), hoyMX()]
-:                [mesMX() + '-01', hoyMX()];
+  p === 'day'    ? [hoyMX(), hoyMX()]
+: p === 'week'   ? [diasAtrasMX(6),  hoyMX()]
+: p === 'days30' ? [diasAtrasMX(29), hoyMX()]
+:                  [mesMX() + '-01', hoyMX()];
 
 function CajasView({ period }: { period: string }) {
   const [desde, setDesde]     = useState(() => seedRango(period)[0]);
@@ -106,6 +109,7 @@ function CajasView({ period }: { period: string }) {
     { label: 'Hoy',      desde: hoyMX(),         hasta: hoyMX() },
     { label: 'Ayer',     desde: diasAtrasMX(1),  hasta: diasAtrasMX(1) },
     { label: '7 días',   desde: diasAtrasMX(6),  hasta: hoyMX() },
+    { label: '30 días',  desde: diasAtrasMX(29), hasta: hoyMX() },
     { label: 'Este mes', desde: mesMX() + '-01', hasta: hoyMX() },
     { label: 'Todo',     desde: '2000-01-01',    hasta: hoyMX() },
   ];

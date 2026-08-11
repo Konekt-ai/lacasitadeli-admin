@@ -228,20 +228,23 @@ function buildDashboardLowStockCountQuery() {
 
 function _dateFilter(period, col, maxDate) {
   if (!maxDate) return '1=1';
-  if (period === 'day')   return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
-  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  '${maxDate}')`;
+  if (period === 'day')    return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
+  if (period === 'week')   return `${col} >= DATEADD(DAY,  -7, '${maxDate}')`;
+  if (period === 'days30') return `${col} >= DATEADD(DAY, -30, '${maxDate}')`;
   // "Mes" = mes de CALENDARIO (del día 1 a hoy), no 30 días móviles. Usa GETDATE
   // (no maxDate) para que ventas y conteo de tickets cubran el MISMO rango.
-  if (period === 'month') return `${col} >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
+  if (period === 'month')  return `${col} >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
   return `CAST(${col} AS DATE) = CAST('${maxDate}' AS DATE)`;
 }
 
 // Filtro de fecha en TIEMPO REAL (tabla Tickets, ancla GETDATE — el día de hoy
-// real, no el último día de pólizas que va con retraso).
+// real, no el último día de pólizas que va con retraso). TODOS los periodos se
+// anclan a GETDATE para que semana ⊆ mes ⊆ 30 días midan la MISMA línea de tiempo.
 function _ticketDateFilter(period, col = 'T_Fecha') {
-  if (period === 'week')  return `${col} >= DATEADD(DAY, -7,  GETDATE())`;
+  if (period === 'week')   return `${col} >= DATEADD(DAY,  -7, GETDATE())`;
+  if (period === 'days30') return `${col} >= DATEADD(DAY, -30, GETDATE())`;
   // "Mes" = mes de CALENDARIO (del día 1 a hoy), no 30 días móviles.
-  if (period === 'month') return `${col} >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
+  if (period === 'month')  return `${col} >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
   return `CAST(${col} AS DATE) = CAST(GETDATE() AS DATE)`;
 }
 
@@ -696,14 +699,17 @@ function buildRecentTicketsQuery({ limit = 50 } = {}) {
 
 function buildTicketKPIsQuery({ period = 'day', maxDate = null } = {}) {
   let whereClause;
-  // Usar maxDate como ancla si está disponible (consistente con VBasePolizaVentas)
-  // Si no hay maxDate (endpoint independiente), usar GETDATE()
+  // Solo el DÍA usa ancla (maxDate = un día histórico del calendario de Historial;
+  // si no, hoy). Semana / 30 días / mes se anclan SIEMPRE a GETDATE (tiempo real):
+  // así todos los periodos miden la MISMA línea de tiempo y reconcilian entre sí.
+  // Antes "semana" se anclaba a maxDate (última fecha de PÓLIZAS, con ~2 días de
+  // retraso) mientras "mes" usaba GETDATE -> medían ventanas distintas y por eso
+  // "semana" salía mayor que "mes". Ya no.
   const anchor = maxDate ? `'${maxDate}'` : 'GETDATE()';
-  if (period === 'week')       whereClause = `WHERE T_Fecha >= DATEADD(DAY, -7, ${anchor})`;
-  // "Mes" = mes de CALENDARIO (del día 1 a hoy). Debe coincidir con _dateFilter
-  // para que ventas (pólizas) y conteo de tickets cubran el mismo rango.
-  else if (period === 'month') whereClause = `WHERE T_Fecha >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
-  else                         whereClause = `WHERE CAST(T_Fecha AS DATE) = CAST(${anchor} AS DATE)`;
+  if      (period === 'week')   whereClause = `WHERE T_Fecha >= DATEADD(DAY,  -7, GETDATE())`;
+  else if (period === 'days30') whereClause = `WHERE T_Fecha >= DATEADD(DAY, -30, GETDATE())`;
+  else if (period === 'month')  whereClause = `WHERE T_Fecha >= DATEFROMPARTS(YEAR(GETDATE()),MONTH(GETDATE()),1)`;
+  else                          whereClause = `WHERE CAST(T_Fecha AS DATE) = CAST(${anchor} AS DATE)`;
 
   return `
     SELECT

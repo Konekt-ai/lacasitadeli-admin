@@ -276,23 +276,23 @@ router.get('/sin-costo', async (req, res) => {
   }
 });
 
-// KPIs de un periodo (day/week/month) con la MISMA lógica del dashboard: día =
-// tickets reales + costo de TicketsPS; semana/mes = pólizas (ventas/costo) +
-// conteo REAL de tickets. Reusado por el dashboard y por el resumen por correo.
-async function kpisDelPeriodo(period, maxDate) {
-  const esDia = period === 'day';
-  const [kpiRes, costRes, realCountRes] = await Promise.all([
-    heavy(esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate })),
-    esDia ? heavy(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
-    esDia ? Promise.resolve(null) : heavy(buildTicketKPIsQuery({ period, maxDate })),
+// KPIs de un periodo (day/week/days30/month) SIEMPRE desde los TICKETS REALES
+// (Tickets + TicketsPS), anclados a GETDATE. Antes semana/mes salían de PÓLIZAS
+// (con ~2 días de retraso y anclas de tiempo distintas) -> "semana" salía mayor
+// que "mes", cifras imposibles. Ahora: tickets + ventas del ENCABEZADO (Tickets)
+// y unidades + costo de los RENGLONES (TicketsPS); todo reconcilia y es tiempo
+// real. Reusado por el dashboard y por el resumen por correo.
+async function kpisDelPeriodo(period) {
+  const [kpiRes, costRes] = await Promise.all([
+    heavy(buildTicketKPIsQuery({ period })),
+    heavy(buildDashboardCostQuery({ period })),
   ]);
-  const kpi       = kpiRes.recordset[0]  || {};
-  const cost      = costRes.recordset[0] || {};
-  const realCount = realCountRes?.recordset?.[0] || null;
-  const totalVentas  = Number(kpi.totalVentas) || 0;
-  const totalTickets = Number(esDia ? kpi.totalTickets : (realCount?.totalTickets ?? kpi.totalTickets)) || 0;
-  const totalCosto   = Number(esDia ? cost.totalCosto : kpi.totalCosto) || 0;
-  const unidades     = Number(esDia ? cost.unidadesVendidas : kpi.unidadesVendidas) || 0;
+  const kpi          = kpiRes.recordset[0]  || {};
+  const cost         = costRes.recordset[0] || {};
+  const totalVentas  = Number(kpi.totalVentas)  || 0;
+  const totalTickets = Number(kpi.totalTickets) || 0;
+  const totalCosto   = Number(cost.totalCosto)  || 0;
+  const unidades     = Number(cost.unidadesVendidas) || 0;
   return {
     totalTickets, totalVentas, totalCosto,
     ganancia:         totalVentas - totalCosto,
@@ -305,12 +305,14 @@ async function kpisDelPeriodo(period, maxDate) {
 // Calcula el resumen de ventas (día + semana + mes + top del mes) y lo manda por
 // correo. Reusado por el endpoint manual (Análisis) y por el cron del lunes.
 async function enviarResumenVentas() {
-  const maxDate = await getMaxDateString();
+  // Todo desde TICKETS REALES (mismo origen que el dashboard): KPIs por periodo y
+  // el top del mes. Antes el top salía de PÓLIZAS (con retraso) -> no cuadraba con
+  // los KPIs. Secuencial-friendly vía Promise.all sobre consultas MAXDOP 1.
   const [dia, semana, mes, topRes] = await Promise.all([
     kpisDelPeriodo('day'),
-    kpisDelPeriodo('week',  maxDate),
-    kpisDelPeriodo('month', maxDate),
-    heavy(buildTopProductsQuery({ period: 'month', limit: 5, maxDate })),
+    kpisDelPeriodo('week'),
+    kpisDelPeriodo('month'),
+    heavy(buildTopProductsRealtimeQuery({ period: 'month', limit: 5 })),
   ]);
   // Caducidades reales (recepciones/TC52) para la sección del correo. Si falla,
   // el resumen se manda igual (sin la sección) en vez de romperse.
@@ -393,53 +395,52 @@ router.get('/dashboard', async (req, res) => {
   const cached   = _get(cacheKey);
   if (cached) return res.json(cached);
 
-  const days = period === 'day' ? 1 : period === 'week' ? 7 : 30;
-
   try {
     const maxDate = await getMaxDateString();
 
-    // "Día": TIEMPO REAL → ventas/tickets de la tabla Tickets (igual que el feed)
-    //   y costo/unidades de los renglones reales (TicketsPS). Las pólizas se
-    //   postean con retraso, por eso el día no puede salir de ahí.
-    // "Semana/Mes": TODO de PÓLIZAS (mismo origen que Análisis → las cifras
-    //   coinciden). El escaneo de TicketsPS a 30 días truena por tamaño.
-    const esDia     = period === 'day';
-    const kpiQuery  = esDia ? buildTicketKPIsQuery({ period }) : buildDashboardKPIsQuery({ period, maxDate });
-    const topQuery  = esDia ? buildTopProductsRealtimeQuery({ period, limit: 10 }) : buildTopProductsQuery({ period, limit: 10, maxDate });
+    // TODO el dashboard (día/semana/30días/mes) sale de los TICKETS REALES
+    // (Tickets + TicketsPS), anclado a GETDATE:
+    //   · tickets + ventas  → encabezado (tabla Tickets, COUNT/SUM, barato).
+    //   · unidades + costo   → renglones (TicketsPS, costo real por pieza).
+    //   · top productos      → renglones (TicketsPS).
+    // Antes semana/mes salían de PÓLIZAS (VBasePolizaVentas), que se postean con
+    // ~2 días de RETRASO y con ancla de tiempo distinta a "mes" -> "semana" salía
+    // MAYOR que "mes" (imposible) y el mes mostraba casi nada. Ya no: una sola
+    // fuente y una sola ancla, todo reconcilia y es tiempo real.
+    const esDia = period === 'day';
 
-    // Semana/Mes: el CONTEO de tickets REAL sale de la tabla Tickets (mismo origen
-    // y ventana que el día, que ya cuenta bien). La póliza agrupa varias ventas en
-    // pocos folios, así que COUNT(DISTINCT v.ticket) daba un número absurdo (p.ej.
-    // 82 tickets/semana, promedio $25,000). Ventas, costo y margen se quedan de
-    // pólizas (no se tocan: ya cuadran con Análisis). El día ya cuenta de Tickets.
-    const realCountQuery = esDia ? null : buildTicketKPIsQuery({ period, maxDate });
+    // El escaneo de renglones (costo/top) para semana/30días/mes es pesado; se
+    // sirve de CACHE que pre-calcula el scheduler (prewarm) con MAXDOP 1, así el
+    // panel no escanea TicketsPS en cada visita ni acapara la CPU del POS. El día
+    // es 1 día -> se calcula en vivo (barato). getCached: si el prewarm ya lo puso,
+    // lo usa; si no (arranque frío), lo calcula una vez y lo guarda.
+    const costPromise = esDia
+      ? heavy(buildDashboardCostQuery({ period })).then(r => r.recordset[0] || {})
+      : getCached(`dash:cost:${period}`, () => heavy(buildDashboardCostQuery({ period })).then(r => r.recordset[0] || {}), 600_000);
+    const topPromise = esDia
+      ? heavy(buildTopProductsRealtimeQuery({ period, limit: 10 })).then(r => r.recordset || [])
+      : getCached(`dash:top:${period}`, () => heavy(buildTopProductsRealtimeQuery({ period, limit: 10 })).then(r => r.recordset || []), 600_000);
 
     // Tendencia 30 días, por proveedor y los conteos cambian lento y son PESADOS
     // (escanean pólizas/catálogo). Se leen de cache largo (los pre-calcula el
     // scheduler en segundo plano) → no se escanean en cada visita al dashboard.
-    const [kpiRes, costRes, topRes, byDayData, bySupplierData, totalProducts, lowStockAlerts, realCountRes] = await Promise.all([
-      heavy(kpiQuery),
-      esDia ? heavy(buildDashboardCostQuery({ period })) : Promise.resolve({ recordset: [{}] }),
-      heavy(topQuery),
+    const [kpiRes, cost, topProducts, byDayData, bySupplierData, totalProducts, lowStockAlerts] = await Promise.all([
+      heavy(buildTicketKPIsQuery({ period })),
+      costPromise,
+      topPromise,
       getCached('dash:byDay',                  () => heavy(buildSalesByDayQuery({ days: 30, maxDate })).then(r => r.recordset || []),        600_000),
       getCached(`dash:bySupplier:${period}`,   () => heavy(buildSalesBySupplierQuery({ period, maxDate })).then(r => r.recordset || []),     600_000),
       getCached('dash:prodCount', () => mssql.query(buildDashboardProductsCountQuery()).then(r => r.recordset[0]?.totalProducts  || 0), 1800_000),
       getCached('dash:lowStock',  () => mssql.query(buildDashboardLowStockCountQuery()).then(r => r.recordset[0]?.lowStockAlerts || 0),  600_000),
-      realCountQuery ? heavy(realCountQuery) : Promise.resolve(null),
     ]);
 
-    const kpi  = kpiRes.recordset[0]  || {};
-    const cost = costRes.recordset[0] || {};
-    const realCount = realCountRes?.recordset?.[0] || null;
+    const kpi = kpiRes.recordset[0] || {};
 
     // Todo reconcilia: ganancia = ventas - costo; ticketPromedio = ventas/tickets.
-    const totalVentasN  = Number(kpi.totalVentas)  || 0;
-    // Día: kpi ya viene de la tabla Tickets (conteo real). Semana/mes: usar el
-    // conteo REAL de Tickets (la póliza agrupaba -> 82/semana). Si algo falla, cae
-    // al de la póliza para no romper el dashboard.
-    const totalTicketsN = Number(esDia ? kpi.totalTickets : (realCount?.totalTickets ?? kpi.totalTickets)) || 0;
-    const totalCostoN   = Number(esDia ? cost.totalCosto       : kpi.totalCosto)       || 0;
-    const unidadesN     = Number(esDia ? cost.unidadesVendidas : kpi.unidadesVendidas) || 0;
+    const totalVentasN  = Number(kpi.totalVentas)      || 0;
+    const totalTicketsN = Number(kpi.totalTickets)     || 0;
+    const totalCostoN   = Number(cost.totalCosto)      || 0;
+    const unidadesN     = Number(cost.unidadesVendidas) || 0;
     const kpisFull = {
       totalTickets:     totalTicketsN,
       ticketPromedio:   totalTicketsN > 0 ? totalVentasN / totalTicketsN : 0,
@@ -461,7 +462,7 @@ router.get('/dashboard', async (req, res) => {
       alerts:       lowStockAlerts,
       productos:    totalProducts,
       alertas:      lowStockAlerts,
-      topProducts:  topRes.recordset || [],
+      topProducts:  topProducts,
       byDay:        byDayData,
       bySupplier:   bySupplierData,
     };
@@ -566,9 +567,10 @@ router.get('/proveedores', async (req, res) => {
     const maxDate = await getMaxDateString();
 
     let joinFilter;
-    if (period === 'week')       joinFilter = `v.Fecha >= DATEADD(DAY, -7,  '${maxDate}')`;
-    else if (period === 'month') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
-    else                         joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+    if      (period === 'week')   joinFilter = `v.Fecha >= DATEADD(DAY,  -7, '${maxDate}')`;
+    else if (period === 'days30') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
+    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(CAST('${maxDate}' AS DATETIME)), MONTH(CAST('${maxDate}' AS DATETIME)), 1)`;
+    else                          joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
 
     const [suppRes, totalRes] = await Promise.all([
       heavy(`
@@ -657,9 +659,10 @@ router.get('/proveedores/:id/products', async (req, res) => {
     const maxDate = await getMaxDateString();
 
     let joinFilter;
-    if (period === 'week')       joinFilter = `v.Fecha >= DATEADD(DAY, -7,  '${maxDate}')`;
-    else if (period === 'month') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
-    else                         joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
+    if      (period === 'week')   joinFilter = `v.Fecha >= DATEADD(DAY,  -7, '${maxDate}')`;
+    else if (period === 'days30') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
+    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(CAST('${maxDate}' AS DATETIME)), MONTH(CAST('${maxDate}' AS DATETIME)), 1)`;
+    else                          joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
 
     const result = await mssql.query(`
       SELECT TOP 10
@@ -769,7 +772,7 @@ router.get('/poliza-ventas', async (req, res) => {
   if (cached) return res.json(cached);
 
   try {
-    const topLimit = date ? 2000 : (period === 'week' ? 5000 : period === 'month' ? 7000 : 2000);
+    const topLimit = date ? 2000 : (period === 'week' ? 5000 : (period === 'month' || period === 'days30') ? 9000 : 2000);
     const opts     = date ? { date, topLimit } : { period, topLimit };
 
     // Desglose desde TICKETS REALES (Tickets + TicketsPS) por la llave de 4 campos:
@@ -1119,8 +1122,16 @@ async function prewarm() {
   try {
     const maxDate = await getMaxDateString();
     await heavy(buildSalesByDayQuery({ days: 30, maxDate })).then(r => _set('dash:byDay', r.recordset || [], 600_000));
-    for (const period of ['day', 'week', 'month']) {
+    for (const period of ['day', 'week', 'days30', 'month']) {
       await heavy(buildSalesBySupplierQuery({ period, maxDate })).then(r => _set(`dash:bySupplier:${period}`, r.recordset || [], 600_000));
+    }
+    // KPIs pesados del dashboard (costo/unidades y top productos) por periodo, desde
+    // los renglones reales (TicketsPS). Solo semana/30días/mes: el "día" se calcula
+    // en vivo (barato). Secuencial + MAXDOP 1 para no acaparar el POS; el dashboard
+    // los lee de este cache en vez de escanear TicketsPS en cada visita.
+    for (const period of ['week', 'days30', 'month']) {
+      await heavy(buildDashboardCostQuery({ period })).then(r => _set(`dash:cost:${period}`, r.recordset[0] || {}, 600_000));
+      await heavy(buildTopProductsRealtimeQuery({ period, limit: 10 })).then(r => _set(`dash:top:${period}`, r.recordset || [], 600_000));
     }
     await mssql.query(buildDashboardProductsCountQuery()).then(r => _set('dash:prodCount', r.recordset[0]?.totalProducts  || 0, 1800_000));
     await mssql.query(buildDashboardLowStockCountQuery()).then(r => _set('dash:lowStock',  r.recordset[0]?.lowStockAlerts || 0,  600_000));

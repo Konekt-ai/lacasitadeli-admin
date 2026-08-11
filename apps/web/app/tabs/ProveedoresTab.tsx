@@ -4,9 +4,9 @@ import * as XLSX from 'xlsx';
 import { cn, hoyMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 
-type TimeFilter = 'Hoy' | 'Esta semana' | 'Este mes';
-const PERIOD_MAP: Record<string, string> = { 'Hoy': 'day', 'Esta semana': 'week', 'Este mes': 'month' };
-const PERIOD_LABEL: Record<string, string> = { day: 'hoy', week: 'esta semana', month: 'este mes' };
+type TimeFilter = 'Hoy' | 'Esta semana' | 'Últimos 30 días' | 'Este mes';
+const PERIOD_MAP: Record<string, string> = { 'Hoy': 'day', 'Esta semana': 'week', 'Últimos 30 días': 'days30', 'Este mes': 'month' };
+const PERIOD_LABEL: Record<string, string> = { day: 'hoy', week: 'últimos 7 días', days30: 'últimos 30 días', month: 'este mes' };
 
 interface Supplier {
   id: string;
@@ -162,7 +162,7 @@ export default function ProveedoresTab({ timeFilter }: Props) {
     const date        = hoyMX();
     const currFmt     = '"$"#,##0.00';
     const pctFmt      = '0.00"%"';
-    const pLabel: Record<string, string> = { day: 'Hoy', week: 'Últimos 7 días', month: 'Últimos 30 días' };
+    const pLabel: Record<string, string> = { day: 'Hoy', week: 'Últimos 7 días', days30: 'Últimos 30 días', month: 'Este mes' };
 
     const totVentas    = suppliers.reduce((s, p) => s + p.totalVentas,      0);
     const totCosto     = suppliers.reduce((s, p) => s + p.totalCosto,       0);
