@@ -569,7 +569,7 @@ router.get('/proveedores', async (req, res) => {
     let joinFilter;
     if      (period === 'week')   joinFilter = `v.Fecha >= DATEADD(DAY,  -7, '${maxDate}')`;
     else if (period === 'days30') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
-    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(CAST('${maxDate}' AS DATETIME)), MONTH(CAST('${maxDate}' AS DATETIME)), 1)`;
+    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)`;  // mes CALENDARIO ancla GETDATE, igual que _dateFilter/dashboard (no maxDate: al inicio de mes maxDate aún cae en el mes anterior)
     else                          joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
 
     const [suppRes, totalRes] = await Promise.all([
@@ -661,7 +661,7 @@ router.get('/proveedores/:id/products', async (req, res) => {
     let joinFilter;
     if      (period === 'week')   joinFilter = `v.Fecha >= DATEADD(DAY,  -7, '${maxDate}')`;
     else if (period === 'days30') joinFilter = `v.Fecha >= DATEADD(DAY, -30, '${maxDate}')`;
-    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(CAST('${maxDate}' AS DATETIME)), MONTH(CAST('${maxDate}' AS DATETIME)), 1)`;
+    else if (period === 'month')  joinFilter = `v.Fecha >= DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1)`;  // mes CALENDARIO ancla GETDATE, igual que _dateFilter/dashboard (no maxDate: al inicio de mes maxDate aún cae en el mes anterior)
     else                          joinFilter = `CAST(v.Fecha AS DATE) = CAST('${maxDate}' AS DATE)`;
 
     const result = await mssql.query(`
