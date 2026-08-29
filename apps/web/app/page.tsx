@@ -16,6 +16,7 @@ const ReportesTab   = dynamic(() => import('./tabs/ReportesTab'),   { ssr: false
 const AlertasTab      = dynamic(() => import('./tabs/AlertasTab'),      { ssr: false });
 const ProveedoresTab  = dynamic(() => import('./tabs/ProveedoresTab'),  { ssr: false });
 const BodegaTab        = dynamic(() => import('./tabs/BodegaTab'),        { ssr: false });
+const PaginaWebTab     = dynamic(() => import('./tabs/PaginaWebTab'),     { ssr: false });
 const AdminConsoleTab  = dynamic(() => import('./tabs/AdminConsoleTab'),  { ssr: false });
 
 const TABS = [
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'Alertas',       label: 'Alertas',    icon: 'notifications' },
   { id: 'Proveedores',   label: 'Proveedores', icon: 'local_shipping' },
   { id: 'Bodega',        label: 'Bodega',     icon: 'warehouse' },
+  { id: 'PaginaWeb',     label: 'Página web', icon: 'language' },
   { id: 'AdminConsole',  label: 'Consola',    icon: 'terminal' },
 ] as const;
 
@@ -115,6 +117,7 @@ export default function Dashboard() {
         {activeTab === 'Alertas'     && <AlertasTab     lowStockProducts={lowStockProducts} onRefresh={fetchData} />}
         {activeTab === 'Proveedores' && <ProveedoresTab timeFilter={timeFilter} />}
         {activeTab === 'Bodega'       && <BodegaTab />}
+        {activeTab === 'PaginaWeb'    && <PaginaWebTab />}
         {activeTab === 'AdminConsole' && <AdminConsoleTab />}
       </Suspense>
     );
@@ -169,7 +172,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center px-4 lg:px-8 py-3 lg:py-4">
             <div className="flex items-center gap-3 min-w-0">
               <h2 className="text-xl lg:text-2xl font-serif italic tracking-tight text-primary uppercase truncate">
-                {activeTab === 'Ventas' ? 'Análisis' : activeTab === 'AdminConsole' ? 'Admin Console' : activeTab}
+                {activeTab === 'Ventas' ? 'Análisis' : activeTab === 'AdminConsole' ? 'Admin Console' : activeTab === 'PaginaWeb' ? 'Página web' : activeTab}
               </h2>
               <div className="hidden lg:block px-3 py-1 bg-secondary-fixed text-on-secondary-fixed text-[10px] font-label uppercase tracking-widest rounded-full flex-shrink-0">
                 Live Dashboard

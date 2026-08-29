@@ -17,20 +17,15 @@
 // ============================================================================
 const express = require('express');
 const mssql   = require('../db/mssql');
+const shopify = require('./shopify-api');
 
 const router = express.Router();
 
-const SHOP        = process.env.SHOPIFY_SHOP || '';
-const CLIENT_ID   = process.env.SHOPIFY_CLIENT_ID || '';
-const CLIENT_SEC  = process.env.SHOPIFY_CLIENT_SECRET || '';
-const LOCATION_ID = process.env.SHOPIFY_LOCATION_ID || '';
-const API_VER     = process.env.SHOPIFY_API_VERSION || '2026-07';
+const { LOCATION_ID, apiUrl, shopifyFetch, configurado } = shopify;
 const INTERVAL_MIN  = Math.max(1, parseInt(process.env.SHOPIFY_SYNC_INTERVAL_MIN || '5'));
 const REFRESH_HORAS = Math.max(1, parseInt(process.env.SHOPIFY_SYNC_REFRESH_HORAS || '6'));
 const AREAS = (process.env.SHOPIFY_SYNC_AREAS || 'Casita 1,Casita 2,Bodega')
   .split(',').map(s => s.trim()).filter(Boolean);
-
-const configurado = () => !!(SHOP && CLIENT_ID && CLIENT_SEC && LOCATION_ID);
 
 // ── Migración ligera: tablas de config y estado ────────────────────────────────
 async function migrar() {
@@ -56,56 +51,17 @@ async function getConfig() {
   return r.recordset && r.recordset[0] ? r.recordset[0] : null;
 }
 
-// ── Token (client credentials, dura 24 h) ──────────────────────────────────────
-let tokenCache = { token: null, expira: 0 };
-async function getToken(forzar = false) {
-  const ahora = Date.now();
-  if (!forzar && tokenCache.token && ahora < tokenCache.expira - 60 * 60 * 1000) return tokenCache.token;
-  const res = await fetch(`https://${SHOP}.myshopify.com/admin/oauth/access_token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: CLIENT_ID, client_secret: CLIENT_SEC }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || !body.access_token) throw new Error(`Token Shopify falló (${res.status}): ${JSON.stringify(body).slice(0, 200)}`);
-  tokenCache = { token: body.access_token, expira: ahora + (body.expires_in || 86399) * 1000 };
-  return tokenCache.token;
-}
-
-// fetch al API de Shopify con token, reintento en 401 (token viejo) y 429 (rate limit)
-async function shopifyFetch(url, opts = {}, intento = 0) {
-  const token = await getToken();
-  const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Shopify-Access-Token': token } });
-  if (res.status === 401 && intento === 0) { await getToken(true); return shopifyFetch(url, opts, 1); }
-  if (res.status === 429 && intento < 5) {
-    const espera = parseFloat(res.headers.get('retry-after') || '2') * 1000;
-    await new Promise(r => setTimeout(r, espera));
-    return shopifyFetch(url, opts, intento + 1);
-  }
-  return res;
-}
-
 // ── Mapa barcode -> { inventory_item_id, qty en Shopify } ─────────────────────
 let mapa = null;          // Map(barcode -> {itemId, qty})
 let mapaFecha = 0;
 async function cargarMapa(forzar = false) {
   if (!forzar && mapa && Date.now() - mapaFecha < REFRESH_HORAS * 3600 * 1000) return mapa;
   const m = new Map();
-  let url = `https://${SHOP}.myshopify.com/admin/api/${API_VER}/products.json?limit=250&fields=id,variants`;
-  while (url) {
-    const res = await shopifyFetch(url);
-    if (!res.ok) throw new Error(`products.json falló (${res.status})`);
-    const body = await res.json();
-    for (const p of body.products || []) {
-      for (const v of p.variants || []) {
-        const bc = (v.barcode || '').trim();
-        if (bc) m.set(bc, { itemId: v.inventory_item_id, qty: v.inventory_quantity });
-      }
+  for (const p of await shopify.listarProductos('id,variants')) {
+    for (const v of p.variants || []) {
+      const bc = (v.barcode || '').trim();
+      if (bc) m.set(bc, { itemId: v.inventory_item_id, qty: v.inventory_quantity });
     }
-    const link = res.headers.get('link') || '';
-    const match = link.match(/<([^>]+)>;\s*rel="next"/);
-    url = match ? match[1] : null;
-    await new Promise(r => setTimeout(r, 350)); // rate limit REST: 2 req/s
   }
   mapa = m;
   mapaFecha = Date.now();
@@ -158,7 +114,7 @@ async function correrSync({ reconciliar = false } = {}) {
 
     let ok = 0, fallos = 0;
     for (const p of pendientes) {
-      const res = await shopifyFetch(`https://${SHOP}.myshopify.com/admin/api/${API_VER}/inventory_levels/set.json`, {
+      const res = await shopifyFetch(apiUrl('inventory_levels/set.json'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ location_id: parseInt(LOCATION_ID), inventory_item_id: p.itemId, available: p.target }),

@@ -49,6 +49,7 @@ const ventasSync = require('./modules/ventas-sync');
 app.use('/api/ventas-sync', ventasSync.router);
 const shopifySync = require('./modules/shopify-sync');
 app.use('/api/shopify-sync', shopifySync.router);
+app.use('/api/shopify-web', require('./modules/shopify-web').router);
 setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
