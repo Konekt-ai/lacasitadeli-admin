@@ -47,6 +47,8 @@ app.use('/api/facturas', require('./modules/facturas'));
 app.use('/api/admin',   require('./modules/admin'));
 const ventasSync = require('./modules/ventas-sync');
 app.use('/api/ventas-sync', ventasSync.router);
+const shopifySync = require('./modules/shopify-sync');
+app.use('/api/shopify-sync', shopifySync.router);
 setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
@@ -88,6 +90,10 @@ process.on('unhandledRejection', (reason) => {
 // Sincronización de ventas (tickets -> inventario_bodega). Solo actúa si está
 // activada en ventas_sync_config (apagada por defecto).
 ventasSync.startScheduler();
+
+// Inventario bodega -> Shopify (por código de barras). Solo actúa si está
+// activado en shopify_sync_config (apagado por defecto).
+shopifySync.startScheduler();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);
