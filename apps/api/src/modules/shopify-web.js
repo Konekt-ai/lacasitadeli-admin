@@ -120,18 +120,22 @@ router.use((req, res, next) => {
 router.get('/resumen', async (req, res) => {
   try {
     const [cat, stock] = [await getCatalogo(), await getStockBodega()];
-    const activos = cat.filter(p => p.status === 'active');
+    // REGLA DE ORO de estos números: cada tarjeta debe dar EXACTAMENTE el mismo
+    // total que la lista al hacerle clic (mismo predicado que el filtro de
+    // /productos). Los archivados no cuentan en los pendientes (son producto
+    // retirado a propósito, no "trabajo por hacer").
+    const noArchivados = cat.filter(p => p.status !== 'archived');
     let faltaPagina = 0;
     for (const [codigo, s] of stock) if (s.qty > 0 && !barcodesShopify.has(codigo)) faltaPagina++;
     res.json({
       total: cat.length,
-      activos: activos.length,
+      activos: cat.filter(p => p.status === 'active').length,
       borradores: cat.filter(p => p.status === 'draft').length,
       archivados: cat.filter(p => p.status === 'archived').length,
-      sin_foto: activos.filter(p => !p.image).length,
-      sin_precio: activos.filter(p => !p.price).length,
-      sin_codigo: cat.filter(p => !p.barcode).length,
-      con_stock_bodega: cat.filter(p => {
+      sin_foto: noArchivados.filter(p => !p.image).length,
+      sin_precio: noArchivados.filter(p => !p.price).length,
+      sin_codigo: noArchivados.filter(p => !p.barcode).length,
+      con_stock_bodega: noArchivados.filter(p => {
         const s = p.barcode ? stock.get(p.barcode) : null;
         return s && s.qty > 0;
       }).length,
@@ -184,8 +188,12 @@ router.get('/productos', async (req, res) => {
         return { ...p, stock_bodega: s ? s.qty : null, faltantes: faltantesDe(p, stock) };
       });
       if (buscar) lista = lista.filter(p => p.title.toLowerCase().includes(buscar) || (p.barcode || '').includes(buscar));
+      // Mismos predicados que las tarjetas del resumen (tarjeta = lista)
       if (filtro === 'completos') lista = lista.filter(p => p.status === 'active' && !p.faltantes.length);
-      else if (filtro) lista = lista.filter(p => p.faltantes.includes(filtro));
+      else if (filtro === 'publicado') lista = lista.filter(p => p.status === 'active');
+      else if (filtro === 'archivado') lista = lista.filter(p => p.status === 'archived');
+      else if (filtro === 'con_stock') lista = lista.filter(p => p.status !== 'archived' && (p.stock_bodega || 0) > 0);
+      else if (filtro) lista = lista.filter(p => p.status !== 'archived' && p.faltantes.includes(filtro));
       // primero los que más venden sentido tienen arreglar: activos con faltantes y stock
       lista.sort((a, b) => (b.stock_bodega || 0) - (a.stock_bodega || 0));
     }

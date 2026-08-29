@@ -252,12 +252,15 @@ export default function PaginaWebTab() {
   const money = (v: number | string | null) =>
     v == null || v === '' || Number(v) === 0 ? '—' : `$${Number(v).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
 
+  // Cada tarjeta aplica EXACTAMENTE el filtro con el que se calculó su número
+  // (mismo predicado en el backend): tarjeta y lista siempre cuadran.
+  const irFiltro = (f: string) => { setVista('en_pagina'); setFiltro(f); };
   const kpis: { label: string; valor: number | string; icon: string; onClick?: () => void; activo?: boolean }[] = resumen ? [
-    { label: 'En la página',   valor: resumen.activos,      icon: 'storefront', onClick: () => { setVista('en_pagina'); setFiltro(''); }, activo: vista === 'en_pagina' && !filtro },
-    { label: 'Borradores',     valor: resumen.borradores,   icon: 'edit_note',  onClick: () => { setVista('en_pagina'); setFiltro('borrador'); }, activo: filtro === 'borrador' },
-    { label: 'Sin foto',       valor: resumen.sin_foto,     icon: 'no_photography', onClick: () => { setVista('en_pagina'); setFiltro('sin_foto'); }, activo: filtro === 'sin_foto' },
-    { label: 'Sin precio',     valor: resumen.sin_precio,   icon: 'money_off',  onClick: () => { setVista('en_pagina'); setFiltro('sin_precio'); }, activo: filtro === 'sin_precio' },
-    { label: 'Con stock aquí', valor: resumen.con_stock_bodega, icon: 'warehouse' },
+    { label: 'En la página',   valor: resumen.activos,      icon: 'storefront', onClick: () => irFiltro('publicado'), activo: vista === 'en_pagina' && filtro === 'publicado' },
+    { label: 'Borradores',     valor: resumen.borradores,   icon: 'edit_note',  onClick: () => irFiltro('borrador'), activo: vista === 'en_pagina' && filtro === 'borrador' },
+    { label: 'Sin foto',       valor: resumen.sin_foto,     icon: 'no_photography', onClick: () => irFiltro('sin_foto'), activo: vista === 'en_pagina' && filtro === 'sin_foto' },
+    { label: 'Sin precio',     valor: resumen.sin_precio,   icon: 'money_off',  onClick: () => irFiltro('sin_precio'), activo: vista === 'en_pagina' && filtro === 'sin_precio' },
+    { label: 'Con stock aquí', valor: resumen.con_stock_bodega, icon: 'warehouse', onClick: () => irFiltro('con_stock'), activo: vista === 'en_pagina' && filtro === 'con_stock' },
     { label: 'Faltan en página', valor: resumen.falta_pagina, icon: 'add_business', onClick: () => { setVista('falta_pagina'); setFiltro(''); }, activo: vista === 'falta_pagina' },
   ] : [];
 
@@ -307,10 +310,12 @@ export default function PaginaWebTab() {
           <select value={filtro} onChange={e => setFiltro(e.target.value)}
             className="px-3 py-2.5 bg-background border border-outline-variant/20 rounded-xl outline-none focus:ring-1 focus:ring-primary font-body text-sm">
             <option value="">Todos</option>
+            <option value="publicado">Publicados</option>
             <option value="sin_foto">Sin foto</option>
             <option value="sin_precio">Sin precio</option>
             <option value="borrador">Borradores</option>
             <option value="archivado">Archivados</option>
+            <option value="con_stock">Con stock aquí</option>
             <option value="sin_conteo_bodega">Sin conteo en bodega</option>
             <option value="completos">Completos (listos)</option>
           </select>
