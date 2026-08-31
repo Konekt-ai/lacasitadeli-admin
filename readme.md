@@ -292,6 +292,15 @@ lacasitadeli-admin/
 | **Alertas** | Productos por caducar, estancados (+30 días sin venta), sin ventas en el mes |
 | **Proveedores** | Rendimiento por proveedor, directorio, agregar/eliminar, reasignación |
 | **Reportes** | Pólizas diarias detalladas, exportación a Excel |
+| **Página web** | Catálogo de Shopify vs inventario: fotos, precios, publicar, crear borradores |
+| **Pedidos web** | Pedidos de la tienda en línea (Shopify): al pagar se **apartan** en bodega (baja el disponible, no el físico), se preparan escaneando con la TC52 y al **entregar/enviar** sale físicamente (`movimientos_bodega` motivo `venta_web`). Ventas en línea por periodo, apartados activos y configuración |
+
+### Pedidos web (Shopify → inventario)
+
+- Módulo `apps/api/src/modules/pedidos-web.js` (`/api/pedidos-web`). Baja los pedidos de Shopify cada N min (necesita el permiso **`read_orders`** en la app "Inventario Casita"; opcional `write_merchant_managed_fulfillment_orders` para marcarlos como preparados/enviados en Shopify).
+- Stock: **físico** = `inventario_bodega.cantidad` · **apartado** = `reservas_bodega` activas · **disponible** = físico − apartado (vista `v_stock_disponible`). El sync de Shopify empuja el **disponible**, así la web nunca vende lo apartado.
+- Estados: `nuevo → preparando → listo → entregado | enviado`, o `cancelado` (libera el apartado si aún no salió). El escaneo de la TC52 solo valida piezas; **no** descuenta. La salida física ocurre al entregar/enviar y queda con stock antes/después y el número de pedido.
+- Tablas nuevas (se crean solas): `pedidos_web`, `pedidos_web_lineas`, `pedidos_web_eventos`, `reservas_bodega`, `pedidos_web_config`.
 
 ### Sub-módulos de Bodega
 

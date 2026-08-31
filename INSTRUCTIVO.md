@@ -266,7 +266,7 @@ El ícono en la bandeja del sistema funciona igual que Discord o WhatsApp Web:
 
 ## Navegación principal
 
-El menú superior tiene 7 secciones. Cada una se describe abajo.
+El menú tiene 10 secciones (Dashboard, Inventario, Análisis, Reportes, Alertas, Proveedores, Bodega, Página web, Pedidos web y Consola). Las principales se describen abajo.
 
 ---
 
@@ -572,11 +572,32 @@ Filtros por tipo y por fecha. Cada registro muestra: producto, cantidad, área, 
 
 ---
 
+## 8. Pedidos web (compras en la página)
+
+**Para qué sirve:** Ver y preparar los pedidos que los clientes hacen en la tienda en línea, y que el inventario cuadre solo.
+
+**Cómo funciona:**
+1. Cuando un cliente compra en la página, en 1-2 minutos el pedido aparece en **Pedidos web** como **Nuevo** y sus piezas quedan **apartadas** (el stock físico NO baja todavía; baja el *disponible*, que es lo que ve la página. Así no se vende dos veces).
+2. En bodega se prepara con la TC52 (pestaña **Pedidos**): se escanea cada producto y el sistema valida que sean los correctos y la cantidad exacta. Escanear **no descuenta** nada.
+3. Cuando todo está escaneado se marca **Listo**. Al entregarlo al cliente (**Entregado**) o mandarlo (**Enviado**) se hace la **salida física**: baja el stock del área elegida y queda el movimiento en *Bodega → Movimientos TC52* como "Salida · Venta página web · Pedido web #1001".
+4. Si el pedido se cancela antes de entregarse, las piezas apartadas regresan solas al disponible. Si el pago no está aprobado, el sistema pide confirmar que ya se cobró antes de entregar.
+
+**Vistas:** *Pedidos* (lista y detalle: cliente, entrega, pago, productos, de qué área se surte, historial), *Ventas* (cuánto se vendió en línea en el periodo), *Apartados* (qué piezas están reservadas para pedidos), *Configuración* (área por defecto para surtir, apartar o no con pago pendiente, etc.).
+
+**Requisito:** la app de Shopify "Inventario Casita" debe tener el permiso `read_orders`. Si falta, la sección lo avisa en rojo y no puede bajar pedidos.
+
+---
+
 ## TC52 — App del Escáner Zebra (Bodega)
 
 Aplicación instalada en el escáner de mano. Se abre desde el navegador del dispositivo.
 
 ### Pantallas disponibles:
+
+**Pedidos (página web)**
+1. Muestra los pedidos en línea por preparar (Nuevo / Preparando / Listo)
+2. Al abrir uno, escanea cada producto: valida que esté en el pedido y cuenta las piezas (no descuenta inventario)
+3. Con todo escaneado → **Marcar listo**; al entregar o enviar → **Entregado / Enviado** (ahí sí sale de bodega)
 
 **Recepción de Mercancía**
 1. Muestra los pedidos abiertos con barra de progreso
@@ -626,6 +647,8 @@ También puedes enviarlo manualmente desde **Bodega → Discrepancias → Report
 | Quiero ver qué tiene Casita 1 ahorita | Bodega → Surtido → tab Casita 1 |
 | Un producto ya venció | Bodega → Merma / Caducidad → Registrar Caducidad |
 | Quiero exportar las ventas | Reportes → Exportar Excel |
+| Entró una compra por la página | Pedidos web (aparece sola y queda apartada) → TC52 → Pedidos → escanear → Entregado/Enviado |
+| Quiero saber cuánto se vendió en línea | Pedidos web → Ventas (o tarjeta "Ventas en línea" del Dashboard) |
 | Quiero saber qué no se vende | Alertas o Bodega → Discrepancias |
 | El servidor está rojo en la bandeja | Doble clic en iniciar-silencioso.vbs |
 

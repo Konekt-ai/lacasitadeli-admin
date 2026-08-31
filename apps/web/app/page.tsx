@@ -17,6 +17,7 @@ const AlertasTab      = dynamic(() => import('./tabs/AlertasTab'),      { ssr: f
 const ProveedoresTab  = dynamic(() => import('./tabs/ProveedoresTab'),  { ssr: false });
 const BodegaTab        = dynamic(() => import('./tabs/BodegaTab'),        { ssr: false });
 const PaginaWebTab     = dynamic(() => import('./tabs/PaginaWebTab'),     { ssr: false });
+const PedidosWebTab    = dynamic(() => import('./tabs/PedidosWebTab'),    { ssr: false });
 const AdminConsoleTab  = dynamic(() => import('./tabs/AdminConsoleTab'),  { ssr: false });
 
 const TABS = [
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'Proveedores',   label: 'Proveedores', icon: 'local_shipping' },
   { id: 'Bodega',        label: 'Bodega',     icon: 'warehouse' },
   { id: 'PaginaWeb',     label: 'Página web', icon: 'language' },
+  { id: 'PedidosWeb',    label: 'Pedidos web', icon: 'shopping_cart' },
   { id: 'AdminConsole',  label: 'Consola',    icon: 'terminal' },
 ] as const;
 
@@ -48,6 +50,8 @@ export default function Dashboard() {
   const [notification,     setNotification]     = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [timeFilter,       setTimeFilter]       = useState('Hoy');
   const [dashRefreshKey,   setDashRefreshKey]   = useState(0);
+  // Pedidos web activos (nuevo + preparando + listo) para el globito del menú
+  const [pedidosWebActivos, setPedidosWebActivos] = useState(0);
 
   const notify = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -73,6 +77,26 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Globito de "Pedidos web": cuenta los pedidos activos cada 60 s (solo con la
+  // pestaña visible). Si falla o es 0, no se muestra.
+  useEffect(() => {
+    let vivo = true;
+    const contar = async () => {
+      try {
+        const res = await fetch('/api/pedidos-web/estado');
+        const data = await res.json();
+        const c = data?.contadores;
+        if (!vivo) return;
+        setPedidosWebActivos(res.ok && c ? (Number(c.nuevos) || 0) + (Number(c.preparando) || 0) + (Number(c.listos) || 0) : 0);
+      } catch { if (vivo) setPedidosWebActivos(0); }
+    };
+    contar();
+    const tick  = () => { if (!document.hidden) contar(); };
+    const id    = setInterval(tick, 60_000);
+    document.addEventListener('visibilitychange', tick);
+    return () => { vivo = false; clearInterval(id); document.removeEventListener('visibilitychange', tick); };
+  }, []);
 
   // Auto-recuperación de ChunkLoadError: cuando el sistema se actualiza/recompila
   // y una pestaña vieja quedó abierta, al navegar a un tab puede fallar la carga
@@ -118,12 +142,13 @@ export default function Dashboard() {
         {activeTab === 'Proveedores' && <ProveedoresTab timeFilter={timeFilter} />}
         {activeTab === 'Bodega'       && <BodegaTab />}
         {activeTab === 'PaginaWeb'    && <PaginaWebTab />}
+        {activeTab === 'PedidosWeb'   && <PedidosWebTab timeFilter={timeFilter} setActiveTab={setActiveTab} />}
         {activeTab === 'AdminConsole' && <AdminConsoleTab />}
       </Suspense>
     );
   };
 
-  const showTimeFilter = activeTab === 'Dashboard' || activeTab === 'Reportes' || activeTab === 'Proveedores';
+  const showTimeFilter = activeTab === 'Dashboard' || activeTab === 'Reportes' || activeTab === 'Proveedores' || activeTab === 'PedidosWeb';
 
   return (
     <div className="flex min-h-screen bg-background text-on-surface font-sans w-full">
@@ -157,6 +182,9 @@ export default function Dashboard() {
               {item.id === 'Alertas' && lowStockProducts.length > 0 && (
                 <span className="ml-auto bg-error text-on-error text-[8px] font-bold px-1.5 py-0.5 rounded-full">{lowStockProducts.length}</span>
               )}
+              {item.id === 'PedidosWeb' && pedidosWebActivos > 0 && (
+                <span className="ml-auto bg-error text-on-error text-[8px] font-bold px-1.5 py-0.5 rounded-full">{pedidosWebActivos}</span>
+              )}
             </button>
           ))}
         </nav>
@@ -172,7 +200,7 @@ export default function Dashboard() {
           <div className="flex justify-between items-center px-4 lg:px-8 py-3 lg:py-4">
             <div className="flex items-center gap-3 min-w-0">
               <h2 className="text-xl lg:text-2xl font-serif italic tracking-tight text-primary uppercase truncate">
-                {activeTab === 'Ventas' ? 'Análisis' : activeTab === 'AdminConsole' ? 'Admin Console' : activeTab === 'PaginaWeb' ? 'Página web' : activeTab}
+                {activeTab === 'Ventas' ? 'Análisis' : activeTab === 'AdminConsole' ? 'Admin Console' : activeTab === 'PaginaWeb' ? 'Página web' : activeTab === 'PedidosWeb' ? 'Pedidos web' : activeTab}
               </h2>
               <div className="hidden lg:block px-3 py-1 bg-secondary-fixed text-on-secondary-fixed text-[10px] font-label uppercase tracking-widest rounded-full flex-shrink-0">
                 Live Dashboard
@@ -259,6 +287,11 @@ export default function Dashboard() {
               {item.id === 'Alertas' && lowStockProducts.length > 0 && (
                 <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">
                   {lowStockProducts.length}
+                </span>
+              )}
+              {item.id === 'PedidosWeb' && pedidosWebActivos > 0 && (
+                <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">
+                  {pedidosWebActivos}
                 </span>
               )}
             </div>

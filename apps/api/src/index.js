@@ -50,6 +50,8 @@ app.use('/api/ventas-sync', ventasSync.router);
 const shopifySync = require('./modules/shopify-sync');
 app.use('/api/shopify-sync', shopifySync.router);
 app.use('/api/shopify-web', require('./modules/shopify-web').router);
+const pedidosWeb = require('./modules/pedidos-web');
+app.use('/api/pedidos-web', pedidosWeb.router);
 setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
@@ -95,6 +97,10 @@ ventasSync.startScheduler();
 // Inventario bodega -> Shopify (por código de barras). Solo actúa si está
 // activado en shopify_sync_config (apagado por defecto).
 shopifySync.startScheduler();
+
+// Pedidos de la página web (Shopify -> apartado -> salida física). Requiere el
+// permiso read_orders en la app de Shopify; si falta, lo reporta en /estado.
+pedidosWeb.startScheduler();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);

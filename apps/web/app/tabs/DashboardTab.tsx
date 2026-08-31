@@ -18,6 +18,13 @@ interface DashKPI {
   lowStockAlerts:    number;
 }
 
+// Ventas de la página web (GET /api/pedidos-web/ventas?period=)
+interface VentasWeb {
+  pedidos:  number;
+  total:    number;
+  unidades: number;
+}
+
 interface DashProduct {
   name:             string;
   category:         string;
@@ -273,6 +280,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
   const [recentTickets,  setRecentTickets]  = useState<RecentTicket[]>([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
   const [lastRefresh,    setLastRefresh]    = useState<Date | null>(null);
+  const [ventasWeb,      setVentasWeb]      = useState<VentasWeb | null>(null);
 
   const period = PERIOD_MAP[timeFilter as TimeFilter] ?? 'day';
 
@@ -289,17 +297,33 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
     finally { setLoading(false); }
   }, []);
 
+  // Ventas de la página web para el mismo periodo. Si el endpoint aún no existe o
+  // falla, la tarjeta muestra "—" / "Sin datos" y el resto del dashboard sigue igual.
+  const fetchVentasWeb = useCallback(async (p: string) => {
+    try {
+      const res  = await fetch(`/api/pedidos-web/ventas?period=${p}`);
+      if (!res.ok) { setVentasWeb(null); return; }
+      const data = await res.json();
+      if (!data || data.error) { setVentasWeb(null); return; }
+      setVentasWeb({
+        pedidos:  Number(data.pedidos)  || 0,
+        total:    Number(data.total)    || 0,
+        unidades: Number(data.unidades) || 0,
+      });
+    } catch { setVentasWeb(null); }
+  }, []);
+
   // Carga inicial + auto-refresh cada 2 min SOLO si la pestaña está visible
   // (para no cargar la BD de compucaja cuando el panel está en segundo plano).
   // Además refresca al volver a la pestaña.
   useEffect(() => {
-    fetchDash(period);
-    const tick  = () => { if (!document.hidden) fetchDash(period); };
+    fetchDash(period); fetchVentasWeb(period);
+    const tick  = () => { if (!document.hidden) { fetchDash(period); fetchVentasWeb(period); } };
     const id    = setInterval(tick, 120_000);
-    const onVis = () => { if (!document.hidden) fetchDash(period); };
+    const onVis = () => { if (!document.hidden) { fetchDash(period); fetchVentasWeb(period); } };
     document.addEventListener('visibilitychange', onVis);
     return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
-  }, [period, fetchDash]);
+  }, [period, fetchDash, fetchVentasWeb]);
 
   const fetchRecentTickets = useCallback(async () => {
     setTicketsLoading(true);
@@ -360,6 +384,20 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
       bg:    kpis.ganancia >= 0 ? 'bg-primary-fixed/30' : 'bg-error-container/30',
       danger: kpis.ganancia < 0,
     },
+    {
+      label: 'Ventas en línea',
+      value: ventasWeb ? fmt(ventasWeb.total) : '—',
+      sub:   ventasWeb
+        ? (ventasWeb.pedidos > 0
+            ? `${ventasWeb.pedidos.toLocaleString('es-MX')} pedidos · ${ventasWeb.unidades.toLocaleString('es-MX')} pzas`
+            : 'Sin pedidos')
+        : 'Sin datos',
+      icon:  'shopping_cart',
+      color: 'text-sky-700',
+      bg:    'bg-sky-100',
+      // Clic → pestaña de pedidos de la página web
+      onClick: () => setActiveTab('PedidosWeb'),
+    },
   ] : [];
 
   const chartData = topProducts.slice(0, 8).map(p => ({
@@ -404,17 +442,21 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
 
       {/* ── KPI Cards ─────────────────────────────────────────────────────────── */}
       {loading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-10">
-          {[0,1,2,3].map(i => (
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-6 mb-6 lg:mb-10">
+          {[0,1,2,3,4].map(i => (
             <div key={i} className="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/15 h-28 animate-pulse bg-stone-100" />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6 lg:mb-10">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-6 mb-6 lg:mb-10">
           {kpiCards.map((card, i) => (
-            <div key={i} className={cn(
+            <div key={i}
+              onClick={card.onClick}
+              title={card.onClick ? 'Ver los pedidos de la página web' : undefined}
+              className={cn(
               'bg-surface-container-lowest p-4 sm:p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between shadow-[0px_12px_32px_rgba(28,28,25,0.04)] min-w-0 overflow-hidden',
-              card.danger && 'border-l-4 border-l-error'
+              card.danger && 'border-l-4 border-l-error',
+              card.onClick && 'cursor-pointer hover:border-primary/30 hover:shadow-lg transition-all'
             )}>
               <div className="flex justify-between items-start gap-2 mb-3 sm:mb-4">
                 <span className="text-[10px] font-label uppercase tracking-widest text-stone-500">{card.label}</span>
@@ -427,7 +469,7 @@ export default function DashboardTab({ timeFilter, dbStatus, lowStockProducts, s
             </div>
           ))}
           {/* Si aún no hay datos muestra placeholders */}
-          {!kpis && !loading && [0,1,2,3].map(i => (
+          {!kpis && !loading && [0,1,2,3,4].map(i => (
             <div key={i} className="bg-surface-container-lowest p-6 rounded-xl border border-outline-variant/15 flex flex-col justify-between shadow-[0px_12px_32px_rgba(28,28,25,0.04)]">
               <span className="text-[10px] font-label uppercase tracking-widest text-stone-400">Sin datos</span>
               <p className="text-3xl font-serif text-stone-200 mt-4">—</p>

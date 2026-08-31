@@ -53,30 +53,54 @@ async function getConfig() {
 
 // ── Mapa barcode -> { inventory_item_id, qty en Shopify } ─────────────────────
 let mapa = null;          // Map(barcode -> {itemId, qty})
+let porVariante = new Map(); // Map(variant_id -> barcode) — lo usa pedidos-web para las líneas de un pedido
 let mapaFecha = 0;
 async function cargarMapa(forzar = false) {
   if (!forzar && mapa && Date.now() - mapaFecha < REFRESH_HORAS * 3600 * 1000) return mapa;
   const m = new Map();
+  const pv = new Map();
   for (const p of await shopify.listarProductos('id,variants')) {
     for (const v of p.variants || []) {
       const bc = (v.barcode || '').trim();
       if (bc) m.set(bc, { itemId: v.inventory_item_id, qty: v.inventory_quantity });
+      if (v.id) pv.set(Number(v.id), bc || null);
     }
   }
   mapa = m;
+  porVariante = pv;
   mapaFecha = Date.now();
   console.log(`[shopify-sync] Mapa refrescado: ${m.size} variantes con barcode`);
   return m;
 }
+// Código de barras de una variante (desde el mapa en memoria; null si no se conoce).
+async function barcodeDeVariante(variantId) {
+  if (!mapa) { try { await cargarMapa(); } catch { return null; } }
+  return porVariante.get(Number(variantId)) || null;
+}
 
 // ── Stock objetivo desde bodega ────────────────────────────────────────────────
+// Se empuja el DISPONIBLE = físico − apartado por pedidos web (reservas_bodega
+// activas). Así la web nunca vuelve a vender lo que ya está apartado para un
+// pedido en línea, y no "regresa" el stock cuando Shopify lo descuenta solo.
+let hayReservas = false; // se vuelve true en cuanto exista la tabla (la crea pedidos-web)
 async function stockBodega() {
   const enList = AREAS.map(a => `'${a.replace(/'/g, "''")}'`).join(',');
+  if (!hayReservas) {
+    // SQL Server enlaza TODAS las tablas al compilar: no sirve un CASE/WHERE con
+    // OBJECT_ID. Se pregunta primero y se arma la consulta según exista o no.
+    const t = await mssql.query(`SELECT OBJECT_ID('[compucaja].[dbo].[reservas_bodega]') AS oid`);
+    hayReservas = !!(t.recordset && t.recordset[0] && t.recordset[0].oid);
+  }
+  const apartado = hayReservas ? `
+           - ISNULL((
+             SELECT SUM(rb.cantidad) FROM [compucaja].[dbo].[reservas_bodega] rb WITH (NOLOCK)
+             WHERE rb.activa = 1 AND rb.codigo_barras = ib.codigo_barras AND rb.ubicacion IN (${enList})
+           ), 0)` : '';
   const r = await mssql.query(`
-    SELECT codigo_barras AS codigo, SUM(cantidad) AS qty
-    FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
-    WHERE ubicacion IN (${enList})
-    GROUP BY codigo_barras
+    SELECT ib.codigo_barras AS codigo, SUM(ib.cantidad)${apartado} AS qty
+    FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+    WHERE ib.ubicacion IN (${enList})
+    GROUP BY ib.codigo_barras
     OPTION (MAXDOP 1)
   `);
   const m = new Map();
@@ -200,4 +224,13 @@ router.post('/correr', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-module.exports = { router, startScheduler, correrSync };
+// Corre un ciclo solo si el sync está activado (lo llama pedidos-web cuando
+// cambia el disponible: apartado, liberación o salida de un pedido).
+async function correrSiActivo() {
+  if (!configurado()) return { skip: 'sin credenciales' };
+  const cfg = await getConfig();
+  if (!cfg || !cfg.activo) return { skip: 'sync apagado' };
+  return correrSync();
+}
+
+module.exports = { router, startScheduler, correrSync, correrSiActivo, barcodeDeVariante };

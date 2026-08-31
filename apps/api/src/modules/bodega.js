@@ -83,6 +83,20 @@ router.get('/products-by-area', async (req, res) => {
 
 // ── GET /api/bodega/areas/:area/products ─────────────────────────────────────
 // Products in a given area. For 'bodega': everything not assigned elsewhere.
+// `apartado` = piezas reservadas para pedidos de la página web (reservas_bodega,
+// la crea el módulo pedidos-web). En una instalación donde esa tabla todavía no
+// existe la columna regresa 0. OJO: SQL Server valida los nombres de tabla al
+// compilar la consulta, así que un CASE WHEN OBJECT_ID(...) NO evita el error
+// "Invalid object name"; por eso se checa antes y se recuerda solo cuando ya existe.
+let _hayReservasBodega = false;
+async function hayReservasBodega() {
+  if (_hayReservasBodega) return true;
+  try {
+    const r = await mssql.query(`SELECT OBJECT_ID('[compucaja].[dbo].[reservas_bodega]') AS oid`);
+    _hayReservasBodega = !!(r.recordset && r.recordset[0] && r.recordset[0].oid);
+  } catch (e) { _hayReservasBodega = false; }
+  return _hayReservasBodega;
+}
 router.get('/areas/:area/products', async (req, res) => {
   const { area } = req.params;
   const search   = (req.query.search || '').trim();
@@ -90,6 +104,11 @@ router.get('/areas/:area/products', async (req, res) => {
     const areas = await getAreaList();
     const match = areas.find(a => a.clave === area);
     if (!match) return res.status(400).json({ error: 'Área inválida' });
+
+    const apartadoCol = (await hayReservasBodega())
+      ? `ISNULL((SELECT SUM(rb.cantidad) FROM [compucaja].[dbo].[reservas_bodega] rb WITH (NOLOCK)
+                 WHERE rb.activa = 1 AND rb.codigo_barras = ib.codigo_barras AND rb.ubicacion = ib.ubicacion), 0)`
+      : '0';
 
     const searchClause = search
       ? `AND (ISNULL(a.Art_Descripcion, ib.nombre) LIKE '%${esc(search)}%' OR ib.codigo_barras LIKE '%${esc(search)}%')`
@@ -101,6 +120,7 @@ router.get('/areas/:area/products', async (req, res) => {
         ib.codigo_barras                                 AS id,
         ISNULL(NULLIF(a.Art_Descripcion, ''), ib.nombre) AS name,
         ib.cantidad                                      AS stock,
+        ${apartadoCol}                                   AS apartado,
         a.Org_Descripcion                                AS category
       FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
       LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK)

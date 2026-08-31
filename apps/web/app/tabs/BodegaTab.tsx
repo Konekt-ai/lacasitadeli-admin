@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn, hoyMX, diasAtrasMX, mesMX } from '../lib/utils';
 import { Icon } from '../components/Icon';
 import { TicketDetalleModal, type TicketKey } from '../components/TicketDetalleModal';
+import { PedidoWebDetalle } from '../components/PedidoWebDetalle';
 import type {
   Area, AreaConfig, AreaCount, AreaProduct,
   SurtidoTransfer, Recuento, StagnantProduct,
@@ -278,6 +279,16 @@ function AreasView() {
                   </td>
                   <td className="px-5 py-3 text-center">
                     <span className="font-serif text-lg text-on-surface">{p.stock}</span>
+                    {(p.apartado ?? 0) > 0 && (
+                      <p className="mt-0.5">
+                        <span
+                          className="inline-block px-2 py-0.5 rounded-full text-[9px] font-label font-bold bg-purple-50 text-purple-700 border border-purple-200 whitespace-nowrap"
+                          title="Piezas apartadas para pedidos de la página web (ya no se pueden vender en tienda)"
+                        >
+                          {Number(p.apartado).toLocaleString('es-MX')} apartadas · disp {Math.max(0, Number(p.stock) - Number(p.apartado)).toLocaleString('es-MX')}
+                        </span>
+                      </p>
+                    )}
                   </td>
                   <td className="px-5 py-3">
                     <span className="text-[10px] font-label text-stone-500 bg-surface-container px-2 py-0.5 rounded uppercase tracking-wider">
@@ -1197,7 +1208,21 @@ const TIPO_META: Record<TipoMovimiento, { label: string; sign: string; badgeCls:
   salida:        { label: 'Salida',        sign: '−', badgeCls: 'bg-red-50 text-red-700 border border-red-200',                iconCls: 'text-red-600' },
   merma:         { label: 'Merma',         sign: '−', badgeCls: 'bg-orange-50 text-orange-700 border border-orange-200',       iconCls: 'text-orange-600' },
   transferencia: { label: 'Transferencia', sign: '↔', badgeCls: 'bg-blue-50 text-blue-700 border border-blue-200',             iconCls: 'text-blue-600' },
+  // Pedidos de la página web: apartado = piezas reservadas (siguen en el físico,
+  // pero ya no se pueden vender); liberado = apartado que regresa (pedido cancelado).
+  apartado:      { label: 'Apartado',      sign: '',  badgeCls: 'bg-purple-50 text-purple-700 border border-purple-200',       iconCls: 'text-purple-600' },
+  liberado:      { label: 'Liberado',      sign: '+', badgeCls: 'bg-sky-50 text-sky-700 border border-sky-200',                iconCls: 'text-sky-600' },
 };
+
+// Motivo crudo del movimiento → texto claro para el personal (desconocido = tal cual).
+const MOTIVO_LABEL: Record<string, string> = {
+  venta_web:     'Venta página web',
+  pedido_web:    'Pedido página web',
+  cancelado_web: 'Pedido web cancelado',
+  venta:         'Venta en caja',
+  retiro:        'Retiro',
+};
+const motivoLabel = (motivo: string) => MOTIVO_LABEL[motivo] ?? motivo;
 
 // El sync de ventas guarda en notas "Ticket #<folio> | <tda>-<est>-<doc>" para que
 // cada salida de venta sea rastreable al ticket EXACTO (FolConsecutivo se recicla,
@@ -1206,6 +1231,15 @@ function parseTicketRef(notas: string | null | undefined): TicketKey | null {
   if (!notas) return null;
   const m = String(notas).match(/Ticket #(\d+)\s*\|\s*(\d+)-(\d+)-(\d+)/);
   return m ? { folio: +m[1], tda: +m[2], est: +m[3], doc: +m[4] } : null;
+}
+
+// Los pedidos de la página web guardan en notas "Pedido web #1001 | shopify:<id>"
+// (apartado, liberación y la salida real al entregar). Devuelve el número del
+// pedido para poder abrirlo desde el feed.
+function parsePedidoWebRef(notas: string | null | undefined): { numero: string; shopifyId: number } | null {
+  if (!notas) return null;
+  const m = String(notas).match(/Pedido web (#?[\w-]+)\s*\|\s*shopify:(\d+)/);
+  return m ? { numero: m[1], shopifyId: +m[2] } : null;
 }
 
 // ── TC52 stock row type ────────────────────────────────────────────────────────
@@ -1412,6 +1446,14 @@ function ZebraView() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   // Ticket abierto desde una salida de venta (para ver qué se vendió en ESE ticket)
   const [ticketModal, setTicketModal] = useState<TicketKey | null>(null);
+  // Pedido de la página web abierto desde un apartado / liberación / venta web
+  const [pedidoWebModal, setPedidoWebModal] = useState<number | null>(null);
+  const [buscandoPedido, setBuscandoPedido] = useState<string | null>(null);
+  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type });
+    setTimeout(() => setNotif(null), 3000);
+  };
 
   const fetchMovimientos = useCallback(async () => {
     setLoading(true);
@@ -1433,8 +1475,23 @@ function ZebraView() {
 
   useEffect(() => { fetchMovimientos(); }, [fetchMovimientos]);
 
+  // El feed solo trae el NÚMERO del pedido (#1001); el detalle necesita el id interno.
+  // El backend busca con LIKE, por eso se prefiere el que coincide exacto (#1001 vs #10010).
+  const abrirPedidoWeb = async (numero: string) => {
+    const num = numero.startsWith('#') ? numero : `#${numero}`;
+    setBuscandoPedido(num);
+    try {
+      const data  = await fetch(`/api/pedidos-web/pedidos?q=${encodeURIComponent(num)}&limit=10`).then(r => r.json());
+      const lista: { id: number; numero?: string }[] = Array.isArray(data?.pedidos) ? data.pedidos : [];
+      const hit   = lista.find(p => p.numero === num) ?? lista[0];
+      if (hit?.id) setPedidoWebModal(hit.id);
+      else notify(`No se encontró el pedido web ${num}`, 'error');
+    } catch { notify('No se pudo buscar el pedido web', 'error'); }
+    finally { setBuscandoPedido(null); }
+  };
+
   const byTipo = useMemo(() => {
-    const acc: Record<TipoMovimiento, MovimientoUnificado[]> = { entrada: [], salida: [], merma: [], transferencia: [] };
+    const acc: Record<TipoMovimiento, MovimientoUnificado[]> = { entrada: [], salida: [], merma: [], transferencia: [], apartado: [], liberado: [] };
     for (const m of movimientos) acc[m.tipo]?.push(m);
     return acc;
   }, [movimientos]);
@@ -1471,10 +1528,21 @@ function ZebraView() {
     { id: 'salida',       label: '↑ Salidas' },
     { id: 'merma',        label: '🗑 Mermas' },
     { id: 'transferencia',label: '↔ Traslados' },
+    { id: 'apartado',     label: '🛒 Apartados' },
   ];
 
   return (
     <div>
+      {notif && (
+        <div className={cn(
+          'fixed top-4 right-4 z-[300] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-2 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error'
+        )}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
       {/* Stock por ubicación TC52 */}
       <Tc52StockPanel />
 
@@ -1584,6 +1652,8 @@ function ZebraView() {
                   const areaOrigen  = m.area_origen  ? pretty(m.area_origen)  : null;
                   const areaDestino = m.area_destino ? pretty(m.area_destino) : null;
                   const ticketRef   = parseTicketRef(m.notas);
+                  const webRef      = parsePedidoWebRef(m.notas);
+                  const webNum      = webRef ? (webRef.numero.startsWith('#') ? webRef.numero : `#${webRef.numero}`) : null;
                   return (
                     <tr key={m.uid} className="hover:bg-background transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap">
@@ -1591,9 +1661,19 @@ function ZebraView() {
                           {meta.label}
                         </span>
                         {m.motivo && (
-                          <p className="text-[9px] font-label text-stone-400 mt-0.5">{m.motivo}</p>
+                          <p className="text-[9px] font-label text-stone-400 mt-0.5">{motivoLabel(m.motivo)}</p>
                         )}
-                        {ticketRef ? (
+                        {webRef ? (
+                          <button
+                            onClick={() => abrirPedidoWeb(webRef.numero)}
+                            disabled={buscandoPedido === webNum}
+                            className={cn('mt-0.5 flex items-center gap-0.5 text-[10px] font-label text-primary hover:underline', buscandoPedido === webNum && 'opacity-50')}
+                            title="Ver el pedido de la página web"
+                          >
+                            <Icon name="shopping_cart" className="text-[12px]" />
+                            Pedido web {webNum}
+                          </button>
+                        ) : ticketRef ? (
                           <button
                             onClick={() => setTicketModal(ticketRef)}
                             className="mt-0.5 flex items-center gap-0.5 text-[10px] font-label text-primary hover:underline"
@@ -1663,6 +1743,7 @@ function ZebraView() {
       )}
 
       {ticketModal && <TicketDetalleModal tk={ticketModal} onClose={() => setTicketModal(null)} />}
+      {pedidoWebModal != null && <PedidoWebDetalle pedidoId={pedidoWebModal} onClose={() => setPedidoWebModal(null)} onChange={fetchMovimientos} />}
     </div>
   );
 }

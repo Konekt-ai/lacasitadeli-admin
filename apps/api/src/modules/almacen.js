@@ -541,8 +541,54 @@ router.get('/movimientos/todos', async (req, res) => {
       });
     } catch (e) { console.error('movimientos TC52:', e.message); }
 
-    // Unir TC52 (MSSQL) + admin (SQLite), ordenar y limitar
-    let resultado = [...tc52Rows, ...rows]
+    // ── Apartados / liberaciones de PEDIDOS WEB (reservas_bodega). No están en
+    // movimientos_bodega (ese ledger es solo físico); aquí se muestran como filas
+    // virtuales para que se vea "se apartó / se liberó" junto con la salida real.
+    let webRows = [];
+    try {
+      const r = await mssql.query(`
+        IF OBJECT_ID('[compucaja].[dbo].[reservas_bodega]') IS NOT NULL
+        SELECT x.uid, x.tipo, x.codigo, x.nombre, x.cantidad, x.ubicacion, x.notas, x.fecha FROM (
+          SELECT CONCAT('web-ap-', r.id) AS uid, 'apartado' AS tipo, r.codigo_barras AS codigo,
+                 COALESCE(NULLIF(a.Art_Descripcion, ''), NULLIF(ib.nombre, ''), l.titulo) AS nombre,
+                 r.cantidad, r.ubicacion,
+                 CONCAT('Pedido web ', p.numero, ' | shopify:', p.shopify_order_id) AS notas,
+                 CONVERT(varchar(19), r.creado, 120) AS fecha
+          FROM [compucaja].[dbo].[reservas_bodega] r WITH (NOLOCK)
+          JOIN [compucaja].[dbo].[pedidos_web] p WITH (NOLOCK) ON p.id = r.pedido_id
+          LEFT JOIN [compucaja].[dbo].[pedidos_web_lineas] l WITH (NOLOCK) ON l.id = r.linea_id
+          LEFT JOIN [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK) ON ib.codigo_barras = r.codigo_barras AND ib.ubicacion = r.ubicacion
+          OUTER APPLY (SELECT TOP 1 a2.Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados] a2 WITH (NOLOCK) WHERE a2.Art_Codigo = r.codigo_barras) a
+          WHERE CAST(r.creado AS DATE) BETWEEN '${esc(desde)}' AND '${esc(hasta)}'
+          UNION ALL
+          SELECT CONCAT('web-lib-', r.id), 'liberado', r.codigo_barras,
+                 COALESCE(NULLIF(a.Art_Descripcion, ''), NULLIF(ib.nombre, ''), l.titulo),
+                 r.cantidad, r.ubicacion,
+                 CONCAT('Pedido web ', p.numero, ' | shopify:', p.shopify_order_id, ' | cancelado'),
+                 CONVERT(varchar(19), r.liberado, 120)
+          FROM [compucaja].[dbo].[reservas_bodega] r WITH (NOLOCK)
+          JOIN [compucaja].[dbo].[pedidos_web] p WITH (NOLOCK) ON p.id = r.pedido_id
+          LEFT JOIN [compucaja].[dbo].[pedidos_web_lineas] l WITH (NOLOCK) ON l.id = r.linea_id
+          LEFT JOIN [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK) ON ib.codigo_barras = r.codigo_barras AND ib.ubicacion = r.ubicacion
+          OUTER APPLY (SELECT TOP 1 a2.Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados] a2 WITH (NOLOCK) WHERE a2.Art_Codigo = r.codigo_barras) a
+          WHERE r.activa = 0 AND r.motivo_liberacion = 'cancelado' AND r.liberado IS NOT NULL
+            AND CAST(r.liberado AS DATE) BETWEEN '${esc(desde)}' AND '${esc(hasta)}'
+        ) x
+        OPTION (MAXDOP 1)
+      `);
+      webRows = (r.recordset || []).map(m => {
+        const areaKey = String(m.ubicacion || 'Bodega').toLowerCase().replace(/\s+/g, '_');
+        return {
+          uid: m.uid, tipo: m.tipo, codigo: m.codigo, nombre: m.nombre || null, cantidad: m.cantidad,
+          area_origen: areaKey, area_destino: null, stock_antes: null, stock_despues: null,
+          motivo: m.tipo === 'apartado' ? 'pedido_web' : 'cancelado_web', notas: m.notas || null,
+          usuario: 'Página web', fecha: m.fecha,
+        };
+      });
+    } catch (e) { console.error('movimientos pedidos web:', e.message); }
+
+    // Unir TC52 (MSSQL) + pedidos web + admin (SQLite), ordenar y limitar
+    let resultado = [...tc52Rows, ...webRows, ...rows]
       .sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)))
       .slice(0, cap);
     if (tipo && tipo !== 'todos') resultado = resultado.filter(r => r.tipo === tipo);

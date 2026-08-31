@@ -76,6 +76,8 @@ export interface AreaCount  { area: Area; total: number; }
 
 export interface AreaProduct {
   id: string; name: string; stock: number; category: string | null; notas?: string | null;
+  // Piezas apartadas para pedidos de la página web en ESTA área (disponible = stock - apartado)
+  apartado?: number;
 }
 
 export interface ExpiryRecord {
@@ -280,7 +282,9 @@ export interface ResumenUbicacion {
   unidades:  number;
 }
 
-export type TipoMovimiento = 'entrada' | 'salida' | 'merma' | 'transferencia';
+// 'apartado' / 'liberado' = filas virtuales de los pedidos de la página web
+// (reservas_bodega). No mueven el físico, por eso vienen sin stock_antes/despues.
+export type TipoMovimiento = 'entrada' | 'salida' | 'merma' | 'transferencia' | 'apartado' | 'liberado';
 
 export interface MovimientoUnificado {
   uid:           string;
