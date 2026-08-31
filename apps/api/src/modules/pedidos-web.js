@@ -27,7 +27,7 @@ const mssql   = require('../db/mssql');
 const shopify = require('./shopify-api');
 
 const { sql } = mssql;
-const { apiUrl, shopifyFetch, configurado } = shopify;
+const { apiUrl, shopifyFetch, configurado, LOCATION_ID } = shopify;
 const router = express.Router();
 
 const T = {
@@ -285,11 +285,52 @@ async function evento(pedidoId, tipo, { de = null, a = null, usuario = null, det
 }
 
 // ── Mapeo de un pedido de Shopify a nuestras columnas ──────────────────────────
-function tipoEntregaDe(o) {
+// Nombre de la sucursal (para reconocer los "recoger en tienda": Shopify manda el
+// nombre de la ubicación como shipping_line). Se pide una vez y se guarda.
+let nombreSucursal = null;
+async function getNombreSucursal() {
+  if (nombreSucursal !== null) return nombreSucursal;
+  try {
+    const res = await shopifyFetch(apiUrl(`locations/${LOCATION_ID}.json?fields=id,name`));
+    const b = res.ok ? await res.json() : null;
+    nombreSucursal = (b && b.location && b.location.name) ? b.location.name.toLowerCase() : '';
+  } catch { nombreSucursal = ''; }
+  return nombreSucursal;
+}
+
+// Tipo de entrega SEGÚN SHOPIFY (lo confiable): delivery_method de la orden de
+// preparación. PICK_UP = recoger en tienda, LOCAL = entrega local, resto = envío.
+// Requiere el permiso read_merchant_managed_fulfillment_orders; si no está,
+// devuelve null y se usa la heurística.
+async function tipoEntregaShopify(orderId) {
+  try {
+    const res = await shopifyFetch(apiUrl(`orders/${orderId}/fulfillment_orders.json`));
+    if (!res.ok) return null;
+    const b = await res.json();
+    const tipos = (b.fulfillment_orders || [])
+      .map(f => (f.delivery_method && f.delivery_method.method_type) || '')
+      .filter(Boolean).map(t => String(t).toUpperCase());
+    if (!tipos.length) return null;
+    if (tipos.some(t => t.includes('PICK'))) return 'recoger';
+    if (tipos.some(t => t.includes('LOCAL'))) return 'local';
+    if (tipos.some(t => t.includes('SHIPPING') || t.includes('RETAIL'))) return 'envio';
+    return null;
+  } catch { return null; }
+}
+
+// Heurística de respaldo. OJO: en los "recoger en tienda" Shopify manda como
+// shipping_line el NOMBRE DE LA SUCURSAL ("La Casita Delicatessen - Prados
+// Providencia"), no la palabra "pickup"; y nunca traen dirección de envío.
+function tipoEntregaDe(o, sucursal = '') {
   const lineas = (o.shipping_lines || []).map(s => `${s.code || ''} ${s.title || ''}`.toLowerCase()).join(' | ');
-  if (/pick ?up|recoger|recolec|tienda|sucursal|en local/.test(lineas)) return 'recoger';
+  if (/pick ?up|recoger|recolec|en tienda|sucursal|store pickup/.test(lineas)) return 'recoger';
   if (/local delivery|entrega local|reparto/.test(lineas)) return 'local';
-  if (!(o.shipping_lines || []).length && !o.shipping_address) return 'recoger';
+  if (sucursal && lineas.includes(sucursal)) return 'recoger';
+  // Sin dirección de envío no se puede mandar a ningún lado => se recoge.
+  if (!o.shipping_address) return 'recoger';
+  // Último recurso: productos marcados "(Pickup)" en su nombre.
+  const titulos = (o.line_items || []).map(li => `${li.title || ''} ${li.variant_title || ''}`.toLowerCase()).join(' | ');
+  if (/\(pickup\)|\(recoger\)/.test(titulos)) return 'recoger';
   return 'envio';
 }
 function nombreCliente(o) {
@@ -306,7 +347,7 @@ function direccionDe(o) {
   if (!s) return null;
   return [s.address1, s.address2, s.city, s.province, s.zip, s.country].filter(Boolean).join(', ');
 }
-function mapOrder(o) {
+function mapOrder(o, entrega = null, sucursal = '') {
   const envioSet = o.total_shipping_price_set && o.total_shipping_price_set.shop_money;
   const gateways = Array.isArray(o.payment_gateway_names) && o.payment_gateway_names.length
     ? o.payment_gateway_names.join(', ') : (o.gateway || null);
@@ -320,7 +361,7 @@ function mapOrder(o) {
     cliente_email: o.email || (o.customer && o.customer.email) || null,
     cliente_telefono: o.phone || (o.shipping_address && o.shipping_address.phone) || (o.customer && o.customer.phone) || null,
     direccion: direccionDe(o),
-    tipo_entrega: tipoEntregaDe(o),
+    tipo_entrega: entrega || tipoEntregaDe(o, sucursal),
     entrega_detalle: (o.shipping_lines || []).map(s => s.title).filter(Boolean).join(', ') || null,
     metodo_pago: gateways,
     estado_pago: o.financial_status || null,
@@ -379,9 +420,33 @@ async function codigoBase(codigo) {
   return { base: c, unidades: 1 };
 }
 
+// Escribe el código de barras en la variante de Shopify, SOLO si está vacía
+// (no se pisa lo que ya tenga). Best-effort: si falla, solo se anota.
+async function guardarBarcodeEnShopify(variantId, codigo, pedidoId, usuario) {
+  const actual = await shopifyFetch(apiUrl(`variants/${variantId}.json?fields=id,barcode`));
+  if (!actual.ok) return false;
+  const body = await actual.json();
+  const ya = body.variant && body.variant.barcode ? String(body.variant.barcode).trim() : '';
+  if (ya) return false; // ya tiene código: no se toca
+  const res = await shopifyFetch(apiUrl(`variants/${variantId}.json`), {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ variant: { id: Number(variantId), barcode: String(codigo) } }),
+  });
+  if (res.ok) {
+    variantCache.set(Number(variantId), String(codigo));
+    await evento(pedidoId, 'shopify', { usuario, detalle: `Se guardó el código ${codigo} en la página (antes no tenía): ese producto ya se sincroniza solo` });
+  }
+  return res.ok;
+}
+
 // ── Ingesta (idempotente) de un pedido de Shopify ──────────────────────────────
 async function ingerirOrder(o, cfg, stats) {
-  const d = mapOrder(o);
+  // El tipo de entrega se pregunta a Shopify (delivery_method) y si no se puede,
+  // se deduce. Solo hace falta para pedidos NUEVOS: si ya existe, respetamos lo
+  // que tenga (el panel permite corregirlo a mano).
+  const yaExiste = (await q(`SELECT TOP 1 1 AS x FROM ${T.pedidos} WHERE shopify_order_id = @id`, { id: big(o.id) })).length > 0;
+  const entrega = yaExiste ? null : await tipoEntregaShopify(o.id);
+  const d = mapOrder(o, entrega, yaExiste ? '' : await getNombreSucursal());
   const canceladoEnShopify = !!o.cancelled_at || PAGO_MALO.has(o.financial_status);
   const pagoOk = PAGO_OK.has(o.financial_status);
 
@@ -1101,6 +1166,12 @@ router.put('/pedidos/:id/lineas/:lid', wrap(async (req, res) => {
   if (!sets.length) return res.status(400).json({ error: 'Nada que cambiar' });
   await q(`UPDATE ${T.lineas} SET ${sets.join(', ')} WHERE id = @l`, params);
   await evento(id, 'linea', { usuario: usuarioDe(req), detalle: recorta(`${l.titulo}: ${cambios.join(', ')}`, 400) });
+  // Si se le puso código a un producto que en la página no tenía, se guarda TAMBIÉN
+  // en Shopify: así el siguiente pedido ya lo trae solo y el inventario de ese
+  // producto empieza a sincronizarse. Nunca se pisa un código ya existente.
+  if (b.codigo_barras !== undefined && params.c && params.c.value && l.variant_id) {
+    guardarBarcodeEnShopify(l.variant_id, params.c.value, id, usuarioDe(req)).catch(e => console.error('[pedidos-web] barcode a Shopify:', e.message));
+  }
   const r = p.estado !== 'cancelado' ? await conCandado(`pedido:${id}`, () => reservarPedido(id, { usuario: usuarioDe(req), motivo: 'reasignado' })) : { ok: true };
   res.json({ ...r, pedido: await detallePedido(id) });
 }));
@@ -1182,4 +1253,5 @@ router.get('/pendientes', wrap(async (req, res) => {
 module.exports = {
   router, startScheduler, migrar, sincronizar, ingerirOrder, reservarPedido, surtirPedido, cancelarPedido,
   cambiarEstado, escanear, detallePedido, listarPedidos, ventas, contadores, getConfig, permisos, PAGO_OK, ESTADOS,
+  tipoEntregaShopify, tipoEntregaDe, getNombreSucursal, mapOrder,
 };
