@@ -260,6 +260,10 @@ async function permisos(forzar = false) {
   if (!configurado()) return { ...permisosCache, error: 'Faltan credenciales de Shopify en .env' };
   if (!forzar && Date.now() - permisosCache.fecha < 10 * 60 * 1000) return permisosCache;
   try {
+    // Los permisos van PEGADOS al token (dura 24 h). Si acaban de aprobarse en la
+    // tienda, el token viejo sigue trayendo los de antes: al re-checar a propósito
+    // ("Volver a checar") se pide un token nuevo para ver los permisos de verdad.
+    if (forzar) await shopify.getToken(true);
     const res = await shopifyFetch(`https://${shopify.SHOP}.myshopify.com/admin/oauth/access_scopes.json`);
     const body = await res.json().catch(() => ({}));
     const scopes = (body.access_scopes || []).map(s => s.handle);
@@ -855,11 +859,21 @@ async function contadores() {
 // ── Sincronización con Shopify ─────────────────────────────────────────────────
 let sincronizando = false;
 let ultimoResultado = null;
+let reintentoToken403 = 0;
 async function listarOrders(params) {
   const out = [];
   let url = apiUrl(`orders.json?limit=250&fields=${FIELDS}&${params}`);
   while (url) {
-    const res = await shopifyFetch(url);
+    let res = await shopifyFetch(url);
+    // 403 = el token no trae read_orders. Como los permisos van pegados al token
+    // (dura 24 h), si acaban de aprobarse en la tienda hay que pedir uno nuevo:
+    // se reintenta con token fresco, a lo más una vez cada 5 min.
+    if (res.status === 403 && Date.now() - reintentoToken403 > 5 * 60 * 1000) {
+      reintentoToken403 = Date.now();
+      await shopify.getToken(true);
+      permisosCache = { ...permisosCache, fecha: 0 };
+      res = await shopifyFetch(url);
+    }
     if (res.status === 403) {
       const err = new Error('La app de Shopify no tiene el permiso read_orders (falta aprobarlo en la tienda)');
       err.code = 'SIN_PERMISO';
