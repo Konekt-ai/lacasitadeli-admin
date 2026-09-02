@@ -240,7 +240,8 @@ function startScheduler() {
       console.error('[shopify-sync] Error en ciclo:', e.message);
     }
   }, INTERVAL_MIN * 60 * 1000);
-  console.log(`[shopify-sync] Scheduler listo (cada ${INTERVAL_MIN} min, áreas: ${AREAS.join(' + ')}).`);
+  getAreas().then(a => console.log(`[shopify-sync] Scheduler listo (cada ${INTERVAL_MIN} min, áreas: ${a.join(' + ')}).`))
+    .catch(() => console.log(`[shopify-sync] Scheduler listo (cada ${INTERVAL_MIN} min).`));
 }
 
 // ── Endpoints ──────────────────────────────────────────────────────────────────
