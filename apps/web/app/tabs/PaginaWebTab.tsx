@@ -47,6 +47,46 @@ const CHIP_STATUS: Record<string, string> = {
 };
 const TXT_STATUS: Record<string, string> = { active: 'Publicado', draft: 'Borrador', archived: 'Archivado' };
 
+// ── Fotos, áreas y "¿por qué no muestra stock?" ──────────────────────────────
+interface FotosEstado {
+  con_foto: number; ultima_sync: string | null; ultimo_resumen: string | null;
+  corriendo: boolean; cada_horas: number;
+}
+interface AreaTC52 { nombre: string; color?: string | null; orden?: number | null }
+interface SinSeguimiento { codigo_barras: string; motivo_bloqueo: string | null }
+interface SyncEstado {
+  activo: boolean; areas: string[]; areas_env: string[];
+  sin_seguimiento: number; sin_seguimiento_lista: SinSeguimiento[]; ultimo_resumen: string | null;
+}
+interface UbicacionDiag { ubicacion: string; cantidad: number }
+interface Diagnostico {
+  causa: 'sin_codigo' | 'no_contado' | 'area_no_incluida' | 'sin_seguimiento' | 'ok';
+  titulo: string; texto: string;
+  accion: 'ligar' | 'contar' | 'areas' | 'shopify' | null;
+  accion_texto: string | null;
+  barcode: string | null; areas_web: string[]; ubicaciones: UbicacionDiag[];
+  en_novacaja: { codigo: string; nombre: string } | null;
+}
+interface ResultadoInv { codigo: string; nombre: string; stock: number }
+
+// Color del bloque "Existencia" según por qué el producto muestra (o no) stock.
+const CAUSA_ESTILO: Record<string, { caja: string; titulo: string; icon: string }> = {
+  ok:               { caja: 'bg-emerald-50 border-emerald-200', titulo: 'text-emerald-700', icon: 'check_circle' },
+  sin_codigo:       { caja: 'bg-amber-50 border-amber-200',     titulo: 'text-amber-800',   icon: 'qr_code_2' },
+  no_contado:       { caja: 'bg-amber-50 border-amber-200',     titulo: 'text-amber-800',   icon: 'inventory_2' },
+  area_no_incluida: { caja: 'bg-blue-50 border-blue-200',       titulo: 'text-blue-800',    icon: 'place' },
+  sin_seguimiento:  { caja: 'bg-error/10 border-error/30',      titulo: 'text-error',       icon: 'report_problem' },
+};
+
+const n0 = (v: number | null | undefined) => (v == null ? 0 : v).toLocaleString('es-MX');
+/** Fecha que viene del backend → texto para la dueña (es-MX). */
+const fmtFecha = (v: string | null | undefined) => {
+  if (!v) return 'nunca';
+  const s = String(v);
+  const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
+  return isNaN(d.getTime()) ? s : d.toLocaleString('es-MX');
+};
+
 export default function PaginaWebTab() {
   const [resumen,  setResumen]  = useState<Resumen | null>(null);
   const [vista,    setVista]    = useState<'en_pagina' | 'falta_pagina'>('en_pagina');
@@ -73,6 +113,26 @@ export default function PaginaWebTab() {
   const [subiendo, setSubiendo] = useState(false);
   const [cargandoPanel, setCargandoPanel] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Fotos de la página → inventario
+  const [fotos,     setFotos]     = useState<FotosEstado | null>(null);
+  const [fotosSync, setFotosSync] = useState(false);
+
+  // Áreas que cuentan para la página (bloque plegable de ajustes)
+  const [areasTodas,   setAreasTodas]   = useState<AreaTC52[]>([]);
+  const [syncEstado,   setSyncEstado]   = useState<SyncEstado | null>(null);
+  const [areasSel,     setAreasSel]     = useState<string[]>([]);
+  const [areasAbierto, setAreasAbierto] = useState(false);
+  const [areasSaving,  setAreasSaving]  = useState(false);
+  const areasRef = useRef<HTMLDivElement>(null);
+
+  // Diagnóstico de existencia del producto abierto + buscador para ligarlo
+  const [diag,         setDiag]         = useState<Diagnostico | null>(null);
+  const [cargandoDiag, setCargandoDiag] = useState(false);
+  const [ligarQ,       setLigarQ]       = useState('');
+  const [ligarRes,     setLigarRes]     = useState<ResultadoInv[]>([]);
+  const [ligarBuscando, setLigarBuscando] = useState(false);
+  const [ligando,      setLigando]      = useState<string | null>(null);
 
   const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
   const notify = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -124,6 +184,78 @@ export default function PaginaWebTab() {
 
   useEffect(() => { fetchResumen(); fetchProductos(1); }, [fetchResumen, fetchProductos]);
 
+  // ── Fotos que ya están en la página → inventario ─────────────────────────────
+  const fetchFotos = useCallback(async () => {
+    try {
+      const res = await fetch('/api/shopify-web/fotos/estado');
+      const data = await res.json();
+      if (!res.ok || data.error) return;
+      setFotos(data);
+    } catch { /* el aviso de conexión ya lo da el resumen */ }
+  }, []);
+
+  const traerFotos = async () => {
+    setFotosSync(true);
+    try {
+      // Tarda entre 30 s y 1 min: recorre todo el catálogo de la página.
+      const res = await fetch('/api/shopify-web/fotos/sincronizar', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data.error) { notify(data.error || 'No se pudieron traer las fotos', 'error'); return; }
+      if (data.skip) notify('Las fotos ya se están copiando en este momento; espera a que termine.');
+      else notify(data.resumen || `Listo: ${n0(data.pegadas)} foto(s) nueva(s) en el inventario.`);
+    } catch { notify('Error de conexión con la API', 'error'); }
+    finally { setFotosSync(false); fetchFotos(); }
+  };
+
+  // ── Áreas que cuentan para la página ─────────────────────────────────────────
+  const fetchAreas = useCallback(async () => {
+    try {
+      const res = await fetch('/api/almacen/tc52/ubicaciones');
+      const data = await res.json();
+      if (Array.isArray(data)) setAreasTodas(data);
+    } catch { /* sin áreas: el bloque muestra el aviso de vacío */ }
+  }, []);
+
+  const fetchSyncEstado = useCallback(async () => {
+    try {
+      const res = await fetch('/api/shopify-sync/estado');
+      const data = await res.json();
+      if (!res.ok || data.error) return;
+      setSyncEstado(data);
+      setAreasSel(Array.isArray(data.areas) ? data.areas : []);
+    } catch { /* el aviso de conexión ya lo da el resumen */ }
+  }, []);
+
+  useEffect(() => { fetchFotos(); fetchAreas(); fetchSyncEstado(); }, [fetchFotos, fetchAreas, fetchSyncEstado]);
+
+  const toggleArea = (nombre: string) =>
+    setAreasSel(prev => (prev.includes(nombre) ? prev.filter(a => a !== nombre) : [...prev, nombre]));
+
+  const guardarAreas = async () => {
+    if (!areasSel.length) return; // el botón ya está deshabilitado
+    setAreasSaving(true);
+    try {
+      const res = await fetch('/api/shopify-sync/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ areas: areasSel }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { notify(data.error || 'No se pudieron guardar las áreas', 'error'); return; }
+      notify(`Áreas guardadas: ${(data.areas || areasSel).join(' + ')}`);
+      fetchSyncEstado();
+      if (panelProd) cargarDiagnostico(panelProd.id); // el diagnóstico abierto cambia con las áreas
+    } catch { notify('Error de conexión con la API', 'error'); }
+    finally { setAreasSaving(false); }
+  };
+
+  // Abre el bloque de áreas y lo deja a la vista (desde el drawer).
+  const irAAreas = () => {
+    cerrarPanel();
+    setAreasAbierto(true);
+    setTimeout(() => areasRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+
   // Debounce al buscar/filtrar/cambiar vista. loading se prende DESDE YA para
   // no mostrar un "sin productos" fantasma durante los 300 ms de espera.
   const primerRender = useRef(true);
@@ -138,10 +270,25 @@ export default function PaginaWebTab() {
   const irPagina = (pg: number) => { setPage(pg); fetchProductos(pg); };
 
   // ── Panel de edición ─────────────────────────────────────────────────────────
+  // "¿Por qué muestra (o no) el stock de la tienda?" — se pide al abrir el drawer.
+  const cargarDiagnostico = useCallback(async (id: number) => {
+    setCargandoDiag(true);
+    setDiag(null);
+    try {
+      const res = await fetch(`/api/shopify-web/producto/${id}/diagnostico`);
+      const data = await res.json();
+      if (!res.ok || data.error) { setDiag(null); return; }
+      setDiag(data);
+    } catch { setDiag(null); }
+    finally { setCargandoDiag(false); }
+  }, []);
+
   const abrirPanel = async (p: ProdWeb) => {
     setPanelProd(p);
     setCargandoPanel(true);
     setPanel(null);
+    setLigarQ(''); setLigarRes([]); setLigando(null);
+    cargarDiagnostico(p.id); // va en paralelo con el detalle
     try {
       const res = await fetch(`/api/shopify-web/producto/${p.id}`);
       const data = await res.json();
@@ -156,7 +303,69 @@ export default function PaginaWebTab() {
     } catch { notify('Error de conexión con la API', 'error'); setPanelProd(null); }
     finally { setCargandoPanel(false); }
   };
-  const cerrarPanel = () => { setPanel(null); setPanelProd(null); };
+  const cerrarPanel = () => {
+    setPanel(null); setPanelProd(null);
+    setDiag(null); setCargandoDiag(false);
+    setLigarQ(''); setLigarRes([]); setLigando(null);
+  };
+
+  // ── Ligar un producto de la página con uno del inventario ────────────────────
+  // Buscador con espera de 350 ms (para no golpear la caja en cada tecla) y corte
+  // a los 15 s: la búsqueda del inventario a veces tarda.
+  useEffect(() => {
+    const q = ligarQ.trim();
+    if (q.length < 2) { setLigarRes([]); setLigarBuscando(false); return; }
+    let vivo = true;
+    setLigarBuscando(true);
+    const t = setTimeout(async () => {
+      const ctrl = new AbortController();
+      const corte = setTimeout(() => ctrl.abort(), 15000);
+      try {
+        const res = await fetch(`/api/almacen/buscar?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+        const data = await res.json();
+        if (!vivo) return;
+        setLigarRes(Array.isArray(data) ? data : []);
+      } catch {
+        if (vivo) { setLigarRes([]); notify('No se pudo buscar en el inventario', 'error'); }
+      } finally {
+        clearTimeout(corte);
+        if (vivo) setLigarBuscando(false);
+      }
+    }, 350);
+    return () => { vivo = false; clearTimeout(t); };
+  }, [ligarQ]);
+
+  const recargarDetalle = async (id: number) => {
+    try {
+      const res = await fetch(`/api/shopify-web/producto/${id}`);
+      const data = await res.json();
+      if (res.ok && !data.error) setPanel(data);
+    } catch { /* el aviso ya salió al ligar */ }
+  };
+
+  const ligarCodigo = async (r: ResultadoInv) => {
+    if (!panelProd) return;
+    if (!window.confirm(`Se guardará el código ${r.codigo} en este producto de la página y su stock se sincronizará. ¿Continuar?`)) return;
+    const id = panelProd.id;
+    setLigando(r.codigo);
+    try {
+      const res = await fetch(`/api/shopify-web/producto/${id}/ligar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codigo: r.codigo }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) { notify(data.error || 'No se pudo ligar el producto', 'error'); return; }
+      notify('Listo: ahora este producto muestra el stock de la tienda');
+      setPanelProd(prev => prev ? { ...prev, barcode: data.codigo ?? r.codigo, stock_bodega: data.stock ?? prev.stock_bodega } : prev);
+      setLigarQ(''); setLigarRes([]);
+      cargarDiagnostico(id);
+      recargarDetalle(id);
+      fetchResumen();
+      fetchProductos(page);
+    } catch { notify('Error de conexión con la API', 'error'); }
+    finally { setLigando(null); }
+  };
 
   const guardarPanel = async (nuevoStatus?: string) => {
     if (!panel) return;
@@ -249,6 +458,8 @@ export default function PaginaWebTab() {
   };
 
   // ── Render ───────────────────────────────────────────────────────────────────
+  const estiloDiag = (diag && CAUSA_ESTILO[diag.causa]) || CAUSA_ESTILO.ok;
+  const fotosOcupado = fotosSync || !!fotos?.corriendo;
   const money = (v: number | string | null) =>
     v == null || v === '' || Number(v) === 0 ? '—' : `$${Number(v).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
 
@@ -284,6 +495,12 @@ export default function PaginaWebTab() {
         </div>
       )}
 
+      {/* Ayuda de una línea: va justo debajo del título "Página web" del encabezado */}
+      <p className="text-[11px] text-stone-400 mb-4 flex items-start gap-1.5">
+        <Icon name="info" className="text-sm text-stone-300 flex-shrink-0" />
+        <span>Los productos sin código de barras no muestran stock de la tienda ni se sincronizan: ábrelos y lígalos con tu inventario.</span>
+      </p>
+
       {/* KPI cards */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
         {kpis.map(k => (
@@ -296,6 +513,111 @@ export default function PaginaWebTab() {
             <p className="font-label text-[10px] uppercase tracking-widest text-stone-500 mt-1">{k.label}</p>
           </button>
         ))}
+      </div>
+
+      {/* ── Fotos: traer al inventario las que ya están en la página ─────────── */}
+      {fotos && (
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow p-4 mb-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="flex items-start gap-3 flex-1 min-w-0">
+            <Icon name="photo_library" className="text-2xl text-stone-400 flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-on-surface">Fotos en el inventario: {n0(fotos.con_foto)} productos</p>
+              <p className="text-[11px] text-stone-400">
+                Última vez: {fmtFecha(fotos.ultima_sync)}{fotos.ultimo_resumen ? ` · ${fotos.ultimo_resumen}` : ''}
+              </p>
+              <p className="text-[11px] text-stone-400">Copia al Inventario las fotos que ya tienen los productos en la página; no borra las que subiste a mano.</p>
+            </div>
+          </div>
+          <button onClick={traerFotos} disabled={fotosOcupado}
+            className={cn('px-4 py-2.5 rounded-xl font-label text-[10px] font-bold uppercase tracking-widest inline-flex items-center justify-center gap-1.5 flex-shrink-0',
+              fotosOcupado ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-primary text-on-primary hover:opacity-90')}>
+            {fotosOcupado
+              ? <span className="w-3 h-3 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />
+              : <Icon name="cloud_download" className="text-sm" />}
+            {fotosOcupado ? 'Trayendo fotos...' : 'Traer fotos de la página'}
+          </button>
+        </div>
+      )}
+
+      {/* ── Ajustes: áreas que cuentan para la página ────────────────────────── */}
+      <div ref={areasRef} className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow mb-4 overflow-hidden">
+        <button onClick={() => setAreasAbierto(v => !v)} className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-surface-container-low/40">
+          <Icon name="tune" className="text-xl text-stone-400 flex-shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-on-surface">Áreas que cuentan para la página</p>
+            <p className="text-[11px] text-stone-400 truncate">
+              {!syncEstado ? 'Cargando...' : syncEstado.areas.length ? syncEstado.areas.join(' + ') : 'Sin áreas configuradas'}
+            </p>
+          </div>
+          {!!syncEstado && syncEstado.sin_seguimiento > 0 && (
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-wide bg-amber-100 text-amber-800 flex-shrink-0">
+              {n0(syncEstado.sin_seguimiento)} sin control
+            </span>
+          )}
+          <Icon name={areasAbierto ? 'expand_less' : 'expand_more'} className="text-xl text-stone-400 flex-shrink-0" />
+        </button>
+
+        {areasAbierto && (
+          <div className="px-4 pb-4 pt-4 border-t border-outline-variant/10 space-y-4">
+            <p className="text-[12px] text-stone-500 leading-relaxed">
+              Solo el stock guardado en estas áreas se ofrece en la página. Si un producto vive en Refrigerador o Cocina y no las incluyes, la página no sabrá que hay existencia.
+            </p>
+
+            {areasTodas.length === 0 ? (
+              <p className="text-[11px] text-stone-400">No se pudieron cargar las áreas del negocio.</p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {areasTodas.map(a => (
+                  <label key={a.nombre} className="flex items-center gap-2.5 bg-surface-container-low rounded-xl px-3 py-2 cursor-pointer hover:bg-stone-100">
+                    <input type="checkbox" checked={areasSel.includes(a.nombre)} onChange={() => toggleArea(a.nombre)}
+                      className="w-4 h-4 accent-primary rounded flex-shrink-0" />
+                    <span className="text-sm text-on-surface truncate">{a.nombre}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {areasSel.length === 0 && (
+              <p className="text-[11px] text-error">Marca al menos un área: sin áreas, la página no mostraría existencia de nada.</p>
+            )}
+
+            {!!syncEstado && syncEstado.sin_seguimiento > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-start gap-2">
+                  <Icon name="report_problem" className="text-lg text-amber-700 flex-shrink-0" />
+                  <p className="text-[12px] text-amber-900 leading-relaxed">
+                    {n0(syncEstado.sin_seguimiento)} productos no aceptan stock desde el sistema porque en Shopify tienen apagado el control de inventario (Track quantity).
+                  </p>
+                </div>
+                <div className="mt-2 max-h-32 overflow-y-auto space-y-0.5 pl-7">
+                  {(syncEstado.sin_seguimiento_lista || []).slice(0, 10).map(s => (
+                    <p key={s.codigo_barras} className="text-[11px] text-amber-800 font-mono truncate">
+                      {s.codigo_barras}{s.motivo_bloqueo ? ` — ${s.motivo_bloqueo}` : ''}
+                    </p>
+                  ))}
+                </div>
+                {(syncEstado.sin_seguimiento_lista || []).length > 10 && (
+                  <p className="text-[11px] text-amber-700 mt-1 pl-7">
+                    y {n0((syncEstado.sin_seguimiento_lista || []).length - 10)} más.
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1 border-t border-outline-variant/10">
+              <button onClick={() => setAreasSel(syncEstado?.areas ?? [])} disabled={areasSaving}
+                className="px-5 py-2.5 rounded-xl font-label text-xs font-bold uppercase tracking-widest bg-surface-container-low text-stone-500 hover:bg-stone-200 disabled:opacity-50">
+                Deshacer
+              </button>
+              <button onClick={guardarAreas} disabled={areasSaving || areasSel.length === 0}
+                className={cn('px-5 py-2.5 rounded-xl font-label text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2',
+                  (areasSaving || areasSel.length === 0) ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-primary text-on-primary hover:opacity-90')}>
+                {areasSaving && <span className="w-3.5 h-3.5 border-2 border-stone-400/30 border-t-stone-400 rounded-full animate-spin" />}
+                Guardar áreas
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Barra de búsqueda + filtros */}
@@ -313,6 +635,7 @@ export default function PaginaWebTab() {
             <option value="publicado">Publicados</option>
             <option value="sin_foto">Sin foto</option>
             <option value="sin_precio">Sin precio</option>
+            <option value="sin_codigo">Sin código de barras</option>
             <option value="borrador">Borradores</option>
             <option value="archivado">Archivados</option>
             <option value="con_stock">Con stock aquí</option>
@@ -550,12 +873,117 @@ export default function PaginaWebTab() {
 
                   {/* Datos de referencia */}
                   <div className="bg-surface-container-low/60 rounded-xl p-4 space-y-1.5 text-sm">
-                    <div className="flex justify-between"><span className="text-stone-500">Código de barras</span><span className="font-mono text-xs">{panelProd.barcode || '—'}</span></div>
+                    <div className="flex justify-between"><span className="text-stone-500">Código de barras</span>
+                      <span className={cn('font-mono text-xs', panelProd.barcode ? '' : 'text-error font-bold')}>{panelProd.barcode || 'sin código'}</span>
+                    </div>
                     <div className="flex justify-between"><span className="text-stone-500">Stock en tienda</span><span>{panelProd.stock_bodega ?? '—'}</span></div>
                     <div className="flex justify-between"><span className="text-stone-500">Stock en la web</span><span>{panelProd.qtyShopify ?? '—'}</span></div>
                     <div className="flex justify-between"><span className="text-stone-500">Estado</span>
                       <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase', CHIP_STATUS[panel.status])}>{TXT_STATUS[panel.status] || panel.status}</span>
                     </div>
+                  </div>
+
+                  {/* Existencia: por qué muestra (o no) el stock de la tienda */}
+                  <div>
+                    <p className="text-[10px] font-label font-bold text-stone-500 uppercase tracking-widest mb-2">Existencia</p>
+                    {cargandoDiag ? (
+                      <div className="py-6 flex justify-center">
+                        <div className="w-6 h-6 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+                      </div>
+                    ) : !diag ? (
+                      <p className="text-[11px] text-stone-400">No se pudo revisar la existencia de este producto.</p>
+                    ) : (
+                      <div className={cn('rounded-xl border p-4 space-y-3', estiloDiag.caja)}>
+                        <div className="flex items-start gap-2">
+                          <Icon name={estiloDiag.icon} className={cn('text-xl flex-shrink-0', estiloDiag.titulo)} />
+                          <p className={cn('text-sm font-bold', estiloDiag.titulo)}>{diag.titulo}</p>
+                        </div>
+                        <p className="text-[12px] text-stone-600 leading-relaxed">{diag.texto}</p>
+
+                        {diag.ubicaciones.length > 0 && (
+                          <div className="bg-surface rounded-lg border border-outline-variant/10 overflow-hidden">
+                            <table className="w-full text-xs">
+                              <thead className="bg-surface-container-low/60 text-stone-500 font-label uppercase text-[9px] tracking-widest">
+                                <tr>
+                                  <th className="px-3 py-1.5 text-left">Área</th>
+                                  <th className="px-3 py-1.5 text-right">Piezas</th>
+                                  <th className="px-3 py-1.5 text-right">Cuenta para la web</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-surface-container">
+                                {diag.ubicaciones.map(u => (
+                                  <tr key={u.ubicacion}>
+                                    <td className="px-3 py-1.5">{u.ubicacion}</td>
+                                    <td className="px-3 py-1.5 text-right font-medium">{n0(u.cantidad)}</td>
+                                    <td className="px-3 py-1.5 text-right">
+                                      <span className={cn('px-2 py-0.5 rounded-full text-[9px] font-label font-bold uppercase tracking-wide',
+                                        diag.areas_web.includes(u.ubicacion) ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-200 text-stone-500')}>
+                                        {diag.areas_web.includes(u.ubicacion) ? 'Sí' : 'No'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {diag.accion_texto && (
+                          <p className="text-[12px] text-stone-600 leading-relaxed">
+                            <span className="font-bold">Qué hacer: </span>{diag.accion_texto}
+                          </p>
+                        )}
+
+                        {diag.accion === 'areas' && (
+                          <button onClick={irAAreas}
+                            className="px-3 py-1.5 rounded-lg font-label text-[10px] font-bold uppercase tracking-widest inline-flex items-center gap-1.5 bg-blue-600 text-white hover:opacity-90">
+                            <Icon name="tune" className="text-sm" /> Ajustar áreas
+                          </button>
+                        )}
+
+                        {/* Sin código: lo ligamos con un producto del inventario */}
+                        {diag.causa === 'sin_codigo' && (
+                          <div className="pt-3 border-t border-amber-200">
+                            <p className="text-[10px] font-label font-bold text-stone-500 uppercase tracking-widest mb-1">Ligar con un producto de tu inventario</p>
+                            <div className="relative">
+                              <Icon name="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 text-lg" />
+                              <input value={ligarQ} onChange={e => setLigarQ(e.target.value)}
+                                placeholder="Escribe el nombre o el código..."
+                                className="w-full pl-9 pr-3 py-2 bg-surface border border-outline-variant/20 rounded-xl outline-none focus:ring-1 focus:ring-primary font-body text-sm" />
+                            </div>
+                            {ligarQ.trim().length > 0 && ligarQ.trim().length < 2 && (
+                              <p className="text-[11px] text-stone-400 mt-1">Escribe al menos 2 letras.</p>
+                            )}
+                            {ligarBuscando && (
+                              <div className="mt-2 flex items-center gap-2 text-[11px] text-stone-400">
+                                <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                                Buscando en el inventario...
+                              </div>
+                            )}
+                            {!ligarBuscando && ligarQ.trim().length >= 2 && ligarRes.length === 0 && (
+                              <p className="text-[11px] text-stone-400 mt-2">No se encontró nada con ese nombre o código.</p>
+                            )}
+                            {ligarRes.length > 0 && (
+                              <div className="mt-2 max-h-56 overflow-y-auto rounded-xl border border-outline-variant/10 bg-surface divide-y divide-surface-container">
+                                {ligarRes.map(r => (
+                                  <button key={r.codigo} onClick={() => ligarCodigo(r)} disabled={ligando !== null}
+                                    className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-surface-container-low/60 disabled:opacity-50">
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm text-on-surface truncate">{r.nombre || '(sin nombre)'}</p>
+                                      <p className="text-[11px] text-stone-400 font-mono">{r.codigo}</p>
+                                    </div>
+                                    <span className="text-xs text-stone-500 flex-shrink-0">{n0(r.stock)} pza</span>
+                                    {ligando === r.codigo
+                                      ? <span className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+                                      : <Icon name="link" className="text-base text-primary flex-shrink-0" />}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 

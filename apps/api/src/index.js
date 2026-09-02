@@ -49,7 +49,8 @@ const ventasSync = require('./modules/ventas-sync');
 app.use('/api/ventas-sync', ventasSync.router);
 const shopifySync = require('./modules/shopify-sync');
 app.use('/api/shopify-sync', shopifySync.router);
-app.use('/api/shopify-web', require('./modules/shopify-web').router);
+const shopifyWeb = require('./modules/shopify-web');
+app.use('/api/shopify-web', shopifyWeb.router);
 const pedidosWeb = require('./modules/pedidos-web');
 app.use('/api/pedidos-web', pedidosWeb.router);
 setupRecepcionRoutes(app);
@@ -101,6 +102,9 @@ shopifySync.startScheduler();
 // Pedidos de la página web (Shopify -> apartado -> salida física). Requiere el
 // permiso read_orders en la app de Shopify; si falta, lo reporta en /estado.
 pedidosWeb.startScheduler();
+
+// Copia las fotos de la página al Inventario del panel (cada 12 h por defecto).
+shopifyWeb.startFotosScheduler();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);

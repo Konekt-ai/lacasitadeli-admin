@@ -24,7 +24,7 @@ const router = express.Router();
 const { LOCATION_ID, apiUrl, shopifyFetch, configurado } = shopify;
 const INTERVAL_MIN  = Math.max(1, parseInt(process.env.SHOPIFY_SYNC_INTERVAL_MIN || '5'));
 const REFRESH_HORAS = Math.max(1, parseInt(process.env.SHOPIFY_SYNC_REFRESH_HORAS || '6'));
-const AREAS = (process.env.SHOPIFY_SYNC_AREAS || 'Casita 1,Casita 2,Bodega')
+const AREAS_ENV = (process.env.SHOPIFY_SYNC_AREAS || 'Casita 1,Casita 2,Bodega')
   .split(',').map(s => s.trim()).filter(Boolean);
 
 // ── Migración ligera: tablas de config y estado ────────────────────────────────
@@ -43,6 +43,15 @@ async function migrar() {
         ultima_qty INT NOT NULL,
         actualizado DATETIME NOT NULL DEFAULT GETDATE()
       );
+    -- Áreas que cuentan para la página web (antes solo se podían cambiar en el .env)
+    IF COL_LENGTH('[compucaja].[dbo].[shopify_sync_config]', 'areas') IS NULL
+      ALTER TABLE [compucaja].[dbo].[shopify_sync_config] ADD areas VARCHAR(300) NULL;
+    -- Productos que Shopify RECHAZA (422 = esa variante no lleva control de
+    -- inventario). Se marcan para no reintentar cada ciclo y poder avisarlo.
+    IF COL_LENGTH('[compucaja].[dbo].[shopify_sync_estado]', 'bloqueado_hasta') IS NULL
+      ALTER TABLE [compucaja].[dbo].[shopify_sync_estado] ADD bloqueado_hasta DATETIME NULL;
+    IF COL_LENGTH('[compucaja].[dbo].[shopify_sync_estado]', 'motivo_bloqueo') IS NULL
+      ALTER TABLE [compucaja].[dbo].[shopify_sync_estado] ADD motivo_bloqueo VARCHAR(200) NULL;
   `);
 }
 
@@ -50,6 +59,25 @@ async function getConfig() {
   const r = await mssql.query(`SELECT TOP 1 * FROM [compucaja].[dbo].[shopify_sync_config] WHERE id = 1`);
   return r.recordset && r.recordset[0] ? r.recordset[0] : null;
 }
+
+// Áreas cuyo stock cuenta para la página web. Vive en la config (editable desde
+// el panel); el .env es solo el valor inicial. Cache corto: lo consulta cada
+// ciclo del sync y también el panel "Página web".
+let areasCache = { fecha: 0, areas: AREAS_ENV };
+async function getAreas() {
+  if (Date.now() - areasCache.fecha < 60 * 1000) return areasCache.areas;
+  let areas = AREAS_ENV;
+  try {
+    const cfg = await getConfig();
+    if (cfg && cfg.areas) {
+      const lista = String(cfg.areas).split(',').map(s => s.trim()).filter(Boolean);
+      if (lista.length) areas = lista;
+    }
+  } catch { /* sin BD: se queda con el .env */ }
+  areasCache = { fecha: Date.now(), areas };
+  return areas;
+}
+const invalidarAreas = () => { areasCache.fecha = 0; };
 
 // ── Mapa barcode -> { inventory_item_id, qty en Shopify } ─────────────────────
 let mapa = null;          // Map(barcode -> {itemId, qty})
@@ -84,7 +112,8 @@ async function barcodeDeVariante(variantId) {
 // pedido en línea, y no "regresa" el stock cuando Shopify lo descuenta solo.
 let hayReservas = false; // se vuelve true en cuanto exista la tabla (la crea pedidos-web)
 async function stockBodega() {
-  const enList = AREAS.map(a => `'${a.replace(/'/g, "''")}'`).join(',');
+  const areas = await getAreas();
+  const enList = areas.map(a => `'${a.replace(/'/g, "''")}'`).join(',');
   if (!hayReservas) {
     // SQL Server enlaza TODAS las tablas al compilar: no sirve un CASE/WHERE con
     // OBJECT_ID. Se pregunta primero y se arma la consulta según exista o no.
@@ -124,19 +153,30 @@ async function correrSync({ reconciliar = false } = {}) {
     const esRefresh = forzarMapa; // en refresh comparamos contra la qty REAL de Shopify (reconcilia)
     const [vMapa, objetivo] = [await cargarMapa(forzarMapa), await stockBodega()];
 
-    const estadoR = await mssql.query(`SELECT codigo_barras, ultima_qty FROM [compucaja].[dbo].[shopify_sync_estado]`);
-    const estado = new Map((estadoR.recordset || []).map(r => [r.codigo_barras.trim(), r.ultima_qty]));
+    const estadoR = await mssql.query(`
+      SELECT codigo_barras, ultima_qty,
+             CASE WHEN bloqueado_hasta IS NOT NULL AND bloqueado_hasta > GETDATE() THEN 1 ELSE 0 END AS bloqueado
+      FROM [compucaja].[dbo].[shopify_sync_estado]`);
+    const estado = new Map();
+    const bloqueados = new Set();
+    for (const r of estadoR.recordset || []) {
+      const c = r.codigo_barras.trim();
+      estado.set(c, r.ultima_qty);
+      if (r.bloqueado) bloqueados.add(c);
+    }
 
     // Qué empujar: variantes de Shopify cuyo barcode tiene registro en bodega y cambió
     const pendientes = [];
+    let saltados = 0;
     for (const [bc, target] of objetivo) {
       const v = vMapa.get(bc);
       if (!v) continue; // ese código no existe (aún) en Shopify
+      if (bloqueados.has(bc)) { saltados++; continue; } // Shopify lo rechaza: se reintenta cada 24 h
       const referencia = esRefresh ? v.qty : (estado.has(bc) ? estado.get(bc) : null);
       if (referencia === null || referencia !== target) pendientes.push({ bc, itemId: v.itemId, target });
     }
 
-    let ok = 0, fallos = 0;
+    let ok = 0, fallos = 0, nuevosBloqueos = 0;
     for (const p of pendientes) {
       const res = await shopifyFetch(apiUrl('inventory_levels/set.json'), {
         method: 'POST',
@@ -148,22 +188,35 @@ async function correrSync({ reconciliar = false } = {}) {
         await mssql.query(`
           MERGE [compucaja].[dbo].[shopify_sync_estado] AS e
           USING (SELECT @codigo AS codigo) AS s ON e.codigo_barras = s.codigo
-          WHEN MATCHED THEN UPDATE SET ultima_qty = @qty, actualizado = GETDATE()
+          WHEN MATCHED THEN UPDATE SET ultima_qty = @qty, actualizado = GETDATE(), bloqueado_hasta = NULL, motivo_bloqueo = NULL
           WHEN NOT MATCHED THEN INSERT (codigo_barras, ultima_qty) VALUES (@codigo, @qty);
         `, { codigo: p.bc, qty: p.target });
       } else {
         fallos++;
-        if (fallos <= 3) console.error(`[shopify-sync] Falló ${p.bc} -> ${p.target}: HTTP ${res.status}`);
+        // 422 = la variante NO lleva control de inventario en Shopify ("Track
+        // quantity" apagado): por más que se reintente, nunca va a aceptar el
+        // número. Se marca 24 h para no gastar llamadas ni ensuciar el log, y el
+        // panel lo reporta como "sin seguimiento en la página".
+        if (res.status === 422) {
+          nuevosBloqueos++;
+          await mssql.query(`
+            MERGE [compucaja].[dbo].[shopify_sync_estado] AS e
+            USING (SELECT @codigo AS codigo) AS s ON e.codigo_barras = s.codigo
+            WHEN MATCHED THEN UPDATE SET bloqueado_hasta = DATEADD(HOUR, 24, GETDATE()), motivo_bloqueo = @motivo, actualizado = GETDATE()
+            WHEN NOT MATCHED THEN INSERT (codigo_barras, ultima_qty, bloqueado_hasta, motivo_bloqueo)
+              VALUES (@codigo, -1, DATEADD(HOUR, 24, GETDATE()), @motivo);
+          `, { codigo: p.bc, motivo: 'La variante no lleva control de inventario en Shopify (Track quantity apagado)' });
+        } else if (fallos <= 3) console.error(`[shopify-sync] Falló ${p.bc} -> ${p.target}: HTTP ${res.status}`);
       }
       await new Promise(r => setTimeout(r, 550)); // < 2 req/s
     }
 
-    const resumen = `${pendientes.length} cambios (${ok} ok, ${fallos} fallos) | bodega: ${objetivo.size} códigos | ${Math.round((Date.now() - inicio) / 1000)}s${esRefresh ? ' | reconciliado' : ''}`;
+    const resumen = `${pendientes.length} cambios (${ok} ok, ${fallos} fallos) | bodega: ${objetivo.size} códigos${saltados ? ` | ${saltados} sin seguimiento` : ''}${nuevosBloqueos ? ` | ${nuevosBloqueos} nuevos sin seguimiento` : ''} | ${Math.round((Date.now() - inicio) / 1000)}s${esRefresh ? ' | reconciliado' : ''}`;
     await mssql.query(
       `UPDATE [compucaja].[dbo].[shopify_sync_config] SET ultimo_run = GETDATE(), ultimo_resumen = @resumen WHERE id = 1`,
       { resumen }
     );
-    ultimoResultado = { fecha: new Date().toISOString(), pendientes: pendientes.length, ok, fallos, resumen };
+    ultimoResultado = { fecha: new Date().toISOString(), pendientes: pendientes.length, ok, fallos, saltados, nuevosBloqueos, resumen };
     if (pendientes.length) console.log(`[shopify-sync] ${resumen}`);
     return ultimoResultado;
   } finally {
@@ -194,11 +247,25 @@ function startScheduler() {
 router.get('/estado', async (req, res) => {
   try {
     const cfg = configurado() ? await getConfig() : null;
+    let sinSeguimiento = [];
+    if (configurado()) {
+      try {
+        const r = await mssql.query(`
+          SELECT TOP 100 codigo_barras, motivo_bloqueo, bloqueado_hasta
+          FROM [compucaja].[dbo].[shopify_sync_estado] WITH (NOLOCK)
+          WHERE bloqueado_hasta IS NOT NULL AND bloqueado_hasta > GETDATE()
+          ORDER BY actualizado DESC`);
+        sinSeguimiento = r.recordset || [];
+      } catch { /* aún sin migrar */ }
+    }
     res.json({
       configurado: configurado(),
       activo: !!(cfg && cfg.activo),
       intervalo_min: INTERVAL_MIN,
-      areas: AREAS,
+      areas: await getAreas(),
+      areas_env: AREAS_ENV,
+      sin_seguimiento: sinSeguimiento.length,
+      sin_seguimiento_lista: sinSeguimiento,
       ultimo_run: cfg ? cfg.ultimo_run : null,
       ultimo_resumen: cfg ? cfg.ultimo_resumen : null,
       ultimo_resultado: ultimoResultado,
@@ -212,6 +279,24 @@ router.post('/activar', async (req, res) => {
     await migrar();
     await mssql.query(`UPDATE [compucaja].[dbo].[shopify_sync_config] SET activo = @activo WHERE id = 1`, { activo });
     res.json({ ok: true, activo: !!activo });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Áreas cuyo stock cuenta para la página web (Casita 1, Casita 2, Bodega...).
+// Cambiarlas hace que productos guardados en Refrigerador/Cocina/USA empiecen
+// (o dejen) de ofrecerse en línea, así que se reconcilia en la siguiente corrida.
+router.put('/config', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!Array.isArray(b.areas) || !b.areas.length) return res.status(400).json({ error: 'Manda "areas" como lista con al menos un área' });
+    const validas = await mssql.query(`SELECT nombre FROM [compucaja].[dbo].[ubicaciones_bodega] WHERE activa = 1`);
+    const nombres = new Set((validas.recordset || []).map(r => String(r.nombre).trim()));
+    const areas = b.areas.map(a => String(a).trim()).filter(a => nombres.has(a));
+    if (!areas.length) return res.status(400).json({ error: 'Ninguna de esas áreas existe' });
+    await migrar();
+    await mssql.query(`UPDATE [compucaja].[dbo].[shopify_sync_config] SET areas = @areas WHERE id = 1`, { areas: areas.join(',') });
+    invalidarAreas();
+    res.json({ ok: true, areas });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -233,4 +318,4 @@ async function correrSiActivo() {
   return correrSync();
 }
 
-module.exports = { router, startScheduler, correrSync, correrSiActivo, barcodeDeVariante };
+module.exports = { router, startScheduler, correrSync, correrSiActivo, barcodeDeVariante, getAreas, invalidarAreas };

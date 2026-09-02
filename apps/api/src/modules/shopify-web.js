@@ -19,13 +19,16 @@ const { invalidateProductsCache } = require('./products');
 const router = express.Router();
 const { LOCATION_ID, apiUrl, shopifyFetch, configurado } = shopify;
 
-const AREAS = (process.env.SHOPIFY_SYNC_AREAS || 'Casita 1,Casita 2,Bodega')
-  .split(',').map(s => s.trim()).filter(Boolean);
+// Las áreas que cuentan para la web las manda shopify-sync (config editable).
+const { getAreas } = require('./shopify-sync');
 const CACHE_MIN = Math.max(1, parseInt(process.env.SHOPIFY_WEB_CACHE_MIN || '10'));
+const FOTOS_HORAS = Math.max(1, parseInt(process.env.SHOPIFY_FOTOS_HORAS || '12'));
 
 // ── Caché del catálogo Shopify ────────────────────────────────────────────────
 let catalogo = null;      // [{id, title, handle, status, image, price, barcode, variantId, inventoryItemId, qtyShopify, variantes}]
 let barcodesShopify = new Set(); // TODOS los barcodes (incluidas variantes 2+), para no crear duplicados
+let fotoPorBarcode = new Map();  // barcode -> foto del producto (sirve para TODAS sus variantes)
+let sinFotoEnPagina = 0;         // variantes con código pero cuyo producto no tiene foto
 let catalogoFecha = 0;
 let cargando = null;      // promesa en vuelo para no duplicar descargas
 
@@ -38,11 +41,16 @@ async function getCatalogo(forzar = false) {
     try {
       const crudos = await shopify.listarProductos('id,title,handle,status,image,variants');
       const bcs = new Set();
+      const fotos = new Map();
+      let sinFoto = 0;
       catalogo = crudos.map(p => {
         const v = (p.variants || [])[0] || {};
+        const foto = p.image ? p.image.src : null;
         for (const vv of p.variants || []) {
           const b = (vv.barcode || '').trim();
-          if (b) bcs.add(b);
+          if (!b) continue;
+          bcs.add(b);
+          if (foto) fotos.set(b, foto); else sinFoto++;
         }
         return {
           id: p.id,
@@ -59,6 +67,8 @@ async function getCatalogo(forzar = false) {
         };
       });
       barcodesShopify = bcs;
+      fotoPorBarcode = fotos;
+      sinFotoEnPagina = sinFoto;
       catalogoFecha = Date.now();
       return catalogo;
     } finally {
@@ -81,7 +91,8 @@ function parcharCache(id, cambios) {
 let stockMemo = { fecha: 0, mapa: null };
 async function getStockBodega() {
   if (stockMemo.mapa && Date.now() - stockMemo.fecha < 60 * 1000) return stockMemo.mapa;
-  const enList = AREAS.map(a => `'${a.replace(/'/g, "''")}'`).join(',');
+  const areas = await getAreas();
+  const enList = areas.map(a => `'${a.replace(/'/g, "''")}'`).join(',');
   const r = await mssql.query(`
     SELECT codigo_barras AS codigo, MAX(nombre) AS nombre, SUM(cantidad) AS qty
     FROM [compucaja].[dbo].[inventario_bodega] WITH (NOLOCK)
@@ -382,4 +393,287 @@ router.post('/refrescar', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-module.exports = { router };
+// ============================================================================
+// FOTOS: las imágenes que ya están en la página se copian al Inventario del
+// panel (product_overrides.image_url por art_codigo), para no volver a
+// capturarlas. La foto vive en el CDN de Shopify; aquí solo se guarda la liga.
+// Respeta las fotos puestas a mano: solo pisa las vacías o las que ya venían
+// del propio Shopify.
+// ============================================================================
+function migrarFotos() {
+  getDb().exec(`
+    CREATE TABLE IF NOT EXISTS fotos_sync_estado (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      ultima_sync TEXT, resumen TEXT, pegadas INTEGER DEFAULT 0
+    );
+    INSERT OR IGNORE INTO fotos_sync_estado (id) VALUES (1);
+  `);
+}
+
+// barcode -> Art_Codigo real del catálogo (los overrides van por Art_Codigo).
+// OJO: la tabla temporal lleva COLLATE DATABASE_DEFAULT porque tempdb usa otra
+// colación (SQL_Latin1) que la base (Modern_Spanish) y el JOIN truena sin eso.
+// En esta instalación el barcode ES el Art_Codigo casi siempre; para los demás
+// se resuelve por GTIN/código alterno con una tabla temporal (rápido y liviano).
+// DOS FASES a propósito: el OR sobre GTIN/CodAlt/PLU recorre la vista de 59 mil
+// artículos y tarda MINUTOS (le pega duro a la caja). En esta tienda el código de
+// barras ES el Art_Codigo en casi todos, así que primero se resuelve con un JOIN
+// directo (búsqueda por índice, segundos) y el OR se corre SOLO con los pocos que
+// sobran. Pasó de ~250 s a unos cuantos.
+// Se resuelve TODO en UN solo batch (una conexión, una pasada por la vista). Antes
+// iba en lotes y cada lote volvía a evaluar los 59 mil artículos: 94 s. Y lo ya
+// resuelto se guarda en memoria, así las corridas siguientes casi no tocan la caja.
+const artCache = new Map(); // barcode -> Art_Codigo (o el mismo código si no está en NovaCaja)
+async function resolverArtCodigos(codigos) {
+  const mapa = new Map();
+  const faltan = [];
+  for (const c of codigos) {
+    const cache = artCache.get(c);
+    if (cache !== undefined) { if (cache) mapa.set(c, cache); }
+    else faltan.push(c);
+  }
+  if (!faltan.length) return mapa;
+
+  // INSERT ... VALUES admite máximo 1000 renglones: se parte en varios INSERT,
+  // pero el JOIN corre UNA sola vez (chunkear el JOIN costaba 20 s por lote).
+  const insertsDe = lista => {
+    const out = [];
+    for (let i = 0; i < lista.length; i += 900) {
+      out.push(`INSERT INTO #cods (codigo) VALUES ${lista.slice(i, i + 900).map(c => `('${String(c).replace(/'/g, "''")}')`).join(',')};`);
+    }
+    return out.join('\n    ');
+  };
+  // El OR sobre GTIN/alterno recorre los 59 mil artículos y se pasa del minuto:
+  // por eso el batch lleva su propio timeout amplio.
+  const correr = async (lista, joinOn) => {
+    const pool = await mssql.getPool();
+    const req = pool.request();
+    req.timeout = 240000;
+    const r = await req.batch(`
+      SET NOCOUNT ON;
+      IF OBJECT_ID('tempdb..#cods') IS NOT NULL DROP TABLE #cods;
+      CREATE TABLE #cods (codigo VARCHAR(50) COLLATE DATABASE_DEFAULT PRIMARY KEY);
+      ${insertsDe(lista)}
+      SELECT c.codigo, MIN(a.Art_Codigo) AS art
+      FROM #cods c
+      JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON ${joinOn}
+      GROUP BY c.codigo
+      OPTION (MAXDOP 1);
+      DROP TABLE #cods;`);
+    const rows = (r.recordsets && r.recordsets.length ? r.recordsets[r.recordsets.length - 1] : r.recordset) || [];
+    const vistos = new Set();
+    for (const row of rows) {
+      if (!row.art) continue;
+      const c = String(row.codigo).trim(), art = String(row.art).trim();
+      mapa.set(c, art); artCache.set(c, art); vistos.add(c);
+    }
+    return lista.filter(c => !vistos.has(c));
+  };
+
+  // Fase 1: por Art_Codigo (búsqueda por índice). Aquí cae casi todo.
+  const sobran = await correr(faltan, 'a.Art_Codigo = c.codigo');
+  // Fase 2: solo los que sobraron, por código alterno/GTIN (caro, pero son pocos)
+  if (sobran.length && sobran.length <= 1500) {
+    console.log(`[shopify-web] Fotos: ${sobran.length} códigos se buscan por código alterno`);
+    const nada = await correr(sobran, '(a.Art_GTIN = c.codigo OR a.CodAlt_Codigo = c.codigo)');
+    for (const c of nada) artCache.set(c, null); // no existe en NovaCaja: no volver a buscarlo
+  } else if (sobran.length) {
+    console.log(`[shopify-web] Fotos: ${sobran.length} códigos sin match directo (se omite la búsqueda alterna por ser demasiados)`);
+  }
+  return mapa;
+}
+
+let fotosCorriendo = false;
+async function sincronizarFotos() {
+  if (fotosCorriendo) return { skip: 'ya hay una sincronización de fotos corriendo' };
+  fotosCorriendo = true;
+  const inicio = Date.now();
+  try {
+    migrarFotos();
+    // Reusa el catálogo que el panel ya tiene en memoria (getCatalogo arma el mapa
+    // barcode -> foto al cargarlo). Así esto NO vuelve a descargar 6 mil productos
+    // ni gasta llamadas al API: con el caché caliente tarda segundos.
+    await getCatalogo();
+    const porCodigo = new Map(fotoPorBarcode); // barcode -> url de la foto
+    const sinFoto = sinFotoEnPagina;
+    // barcode -> Art_Codigo (para los que no son idénticos)
+    const artPorCodigo = await resolverArtCodigos([...porCodigo.keys()]);
+
+    const db = getDb();
+    const previos = new Map(db.prepare(`SELECT art_codigo, image_url FROM product_overrides`).all()
+      .map(r => [String(r.art_codigo).trim(), r.image_url || '']));
+    const upsert = db.prepare(`
+      INSERT INTO product_overrides (art_codigo, image_url, updated_at) VALUES (?, ?, datetime('now'))
+      ON CONFLICT(art_codigo) DO UPDATE SET image_url = excluded.image_url, updated_at = datetime('now')
+    `);
+    let pegadas = 0, respetadas = 0, igual = 0;
+    const escribir = db.transaction((filas) => {
+      for (const [codigo, url] of filas) {
+        const previo = previos.get(codigo);
+        if (previo === url) { igual++; continue; }
+        // No se pisa una foto puesta a mano (la que NO viene del CDN de Shopify)
+        if (previo && !/cdn\.shopify\.com|shopify/i.test(previo)) { respetadas++; continue; }
+        upsert.run(codigo, url);
+        pegadas++;
+      }
+    });
+    const filas = [];
+    for (const [bc, url] of porCodigo) filas.push([artPorCodigo.get(bc) || bc, url]);
+    escribir(filas);
+    if (pegadas) invalidateProductsCache();
+
+    const resumen = `${pegadas} fotos nuevas · ${igual} ya estaban · ${respetadas} respetadas (puestas a mano) · ${porCodigo.size} códigos con foto en la página · ${Math.round((Date.now() - inicio) / 1000)}s`;
+    db.prepare(`UPDATE fotos_sync_estado SET ultima_sync = datetime('now'), resumen = ?, pegadas = ? WHERE id = 1`).run(resumen, pegadas);
+    console.log(`[shopify-web] Fotos: ${resumen}`);
+    return { ok: true, pegadas, igual, respetadas, sin_foto: sinFoto, con_foto: porCodigo.size, resumen };
+  } finally {
+    fotosCorriendo = false;
+  }
+}
+
+router.get('/fotos/estado', async (req, res) => {
+  try {
+    migrarFotos();
+    const db = getDb();
+    const st = db.prepare(`SELECT ultima_sync, resumen, pegadas FROM fotos_sync_estado WHERE id = 1`).get() || {};
+    const con = db.prepare(`SELECT COUNT(*) AS n FROM product_overrides WHERE image_url IS NOT NULL AND image_url <> ''`).get();
+    res.json({
+      con_foto: con ? con.n : 0,
+      ultima_sync: st.ultima_sync || null,
+      ultimo_resumen: st.resumen || null,
+      corriendo: fotosCorriendo,
+      cada_horas: FOTOS_HORAS,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/fotos/sincronizar', async (req, res) => {
+  try { res.json(await sincronizarFotos()); }
+  catch (e) { console.error('[shopify-web] fotos:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Cada FOTOS_HORAS (y una vez al arrancar) se copian las fotos nuevas.
+function startFotosScheduler() {
+  if (!configurado()) return;
+  const correr = () => sincronizarFotos().catch(e => console.error('[shopify-web] fotos:', e.message));
+  setTimeout(correr, 3 * 60 * 1000);                 // 3 min tras arrancar (deja que la caja respire)
+  setInterval(correr, FOTOS_HORAS * 3600 * 1000);
+  console.log(`[shopify-web] Sincronización de fotos lista (cada ${FOTOS_HORAS} h).`);
+}
+
+// ============================================================================
+// "¿Por qué tiene stock en la web y no aquí?" — diagnóstico de un producto.
+// ============================================================================
+router.get('/producto/:id/diagnostico', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const cat = await getCatalogo();
+    const p = cat.find(x => x.id === id);
+    if (!p) return res.status(404).json({ error: 'Ese producto no está en el catálogo' });
+    const areas = await getAreas();
+    const barcode = (p.barcode || '').trim();
+
+    if (!barcode) {
+      return res.json({
+        causa: 'sin_codigo', barcode: null, areas_web: areas, ubicaciones: [], en_novacaja: null,
+        titulo: 'Sin código de barras',
+        texto: 'Este producto no tiene código de barras en la página, y el código es lo único que lo liga con tu inventario. Por eso no muestra existencia de la tienda y su stock nunca se sincroniza: lo que ves en la web es un número escrito a mano en Shopify.',
+        accion: 'ligar', accion_texto: 'Búscalo en tu inventario y lígalo: el código se guarda en la página y a partir de ahí el stock se sincroniza solo.',
+      });
+    }
+
+    const r = await mssql.query(`
+      SELECT ib.ubicacion, ib.cantidad
+      FROM [compucaja].[dbo].[inventario_bodega] ib WITH (NOLOCK)
+      WHERE ib.codigo_barras = @c AND ib.cantidad <> 0
+      ORDER BY ib.cantidad DESC
+      OPTION (MAXDOP 1)`, { c: barcode });
+    const ubicaciones = r.recordset || [];
+    const nova = await mssql.query(`
+      SELECT TOP 1 Art_Codigo, Art_Descripcion FROM [compucaja].[dbo].[VArticulosUnificados] WITH (NOLOCK)
+      WHERE Art_Codigo = @c OR Art_GTIN = @c OR CodAlt_Codigo = @c OPTION (MAXDOP 1)`, { c: barcode });
+    const enNova = (nova.recordset || [])[0] || null;
+    const bloq = await mssql.query(`
+      SELECT TOP 1 motivo_bloqueo FROM [compucaja].[dbo].[shopify_sync_estado] WITH (NOLOCK)
+      WHERE codigo_barras = @c AND bloqueado_hasta IS NOT NULL AND bloqueado_hasta > GETDATE()`, { c: barcode })
+      .catch(() => ({ recordset: [] }));
+    const sinSeguimiento = (bloq.recordset || [])[0] || null;
+
+    const enAreasWeb = ubicaciones.filter(u => areas.includes(u.ubicacion));
+    const fuera = ubicaciones.filter(u => !areas.includes(u.ubicacion));
+    const base = { barcode, areas_web: areas, ubicaciones, en_novacaja: enNova ? { codigo: enNova.Art_Codigo, nombre: enNova.Art_Descripcion } : null };
+
+    if (sinSeguimiento) return res.json({ ...base, causa: 'sin_seguimiento',
+      titulo: 'Sin control de inventario en la página',
+      texto: `Shopify rechaza el stock de este producto: su variante tiene apagado el control de inventario ("Track quantity"). Mientras siga así, la página lo vende sin descontar y el sistema no puede corregir el número.`,
+      accion: 'shopify', accion_texto: 'En Shopify, edita el producto y activa "Track quantity" en su inventario.' });
+
+    if (!ubicaciones.length) return res.json({ ...base, causa: 'no_contado',
+      titulo: 'Nunca se ha contado aquí',
+      texto: enNova
+        ? `El producto sí existe en NovaCaja (${enNova.Art_Descripcion || enNova.Art_Codigo}), pero no tiene ni una pieza registrada en bodega. El stock del sistema sale de lo que se cuenta con la TC52; si nadie lo ha contado, aquí sale vacío aunque la página diga que hay.`
+        : 'Este código no está contado en bodega ni existe en NovaCaja. El número de la página se escribió a mano en Shopify.',
+      accion: 'contar', accion_texto: 'Cuéntalo con la TC52 (Recepción o Entrada) en el área donde esté. A los pocos minutos la página mostrará esa misma cantidad.' });
+
+    if (!enAreasWeb.length && fuera.length) return res.json({ ...base, causa: 'area_no_incluida',
+      titulo: 'Está guardado en un área que no cuenta para la página',
+      texto: `Sí hay existencia (${fuera.map(u => `${u.cantidad} en ${u.ubicacion}`).join(', ')}), pero la página solo toma en cuenta ${areas.join(' + ')}. Por eso aquí aparece sin stock para la web y su número en línea no se actualiza.`,
+      accion: 'areas', accion_texto: `Si ese producto se vende en línea, agrega ${fuera.map(u => u.ubicacion).join(' / ')} a las áreas de la página; si no, mueve la mercancía al área que sí cuenta.` });
+
+    const total = enAreasWeb.reduce((s, u) => s + u.cantidad, 0);
+    return res.json({ ...base, causa: 'ok',
+      titulo: 'Todo en orden',
+      texto: `Hay ${total} pza(s) en ${enAreasWeb.map(u => u.ubicacion).join(' + ')} y la página se sincroniza cada pocos minutos. Si el número de la web no coincide, puede haber un apartado de un pedido en línea o el sync no ha corrido todavía.`,
+      accion: null, accion_texto: null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Ligar un producto de la página con un código del inventario ───────────────
+// Escribe el código de barras en la variante de Shopify: a partir de ahí el
+// producto queda emparejado y su stock se sincroniza solo.
+router.post('/producto/:id/ligar', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const codigo = String((req.body || {}).codigo || '').trim();
+    if (!codigo) return res.status(400).json({ error: 'Falta el código' });
+    const cat = await getCatalogo();
+    const p = cat.find(x => x.id === id);
+    if (!p) return res.status(404).json({ error: 'Ese producto no está en el catálogo' });
+    if (p.barcode) return res.status(409).json({ error: `Ese producto ya tiene el código ${p.barcode}` });
+    if (!p.variantId) return res.status(400).json({ error: 'El producto no tiene variante que actualizar' });
+    if (barcodesShopify.has(codigo) || await shopify.existeBarcode(codigo)) {
+      return res.status(409).json({ error: 'Ese código ya lo usa otro producto de la página' });
+    }
+    const r = await shopifyFetch(apiUrl(`variants/${p.variantId}.json`), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ variant: { id: p.variantId, barcode: codigo } }),
+    });
+    if (!r.ok) return res.status(r.status).json({ error: `Shopify contestó ${r.status}` });
+    barcodesShopify.add(codigo);
+    parcharCache(id, { barcode: codigo });
+    stockMemo = { fecha: 0, mapa: null };
+
+    // Empuja de una vez el stock real para que la página deje de mentir
+    const stock = await getStockBodega();
+    const s = stock.get(codigo);
+    if (p.inventoryItemId && s) {
+      await shopifyFetch(apiUrl('inventory_levels/set.json'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ location_id: parseInt(LOCATION_ID), inventory_item_id: p.inventoryItemId, available: s.qty }),
+      }).catch(() => {});
+    }
+    // Y la foto de la página pasa al inventario
+    try {
+      if (p.image) {
+        getDb().prepare(`
+          INSERT INTO product_overrides (art_codigo, image_url, updated_at) VALUES (?, ?, datetime('now'))
+          ON CONFLICT(art_codigo) DO UPDATE SET image_url = excluded.image_url, updated_at = datetime('now')
+        `).run(codigo, p.image);
+        invalidateProductsCache();
+      }
+    } catch (e) { console.error('[shopify-web] foto al ligar:', e.message); }
+    res.json({ ok: true, codigo, stock: s ? s.qty : null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+module.exports = { router, sincronizarFotos, startFotosScheduler };
