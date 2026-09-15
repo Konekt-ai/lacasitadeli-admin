@@ -4,6 +4,7 @@ export interface Product {
   image: string | null; active: boolean; visibleWeb: boolean;
   category: string | null; categoryId: number | null; createdAt: string;
   brand?: string | null; tipo?: string | null;
+  descontinuado?: boolean; descontinuadoDesde?: string | null;
 }
 
 export interface Category { id: string | number; name: string; description?: string | null; }

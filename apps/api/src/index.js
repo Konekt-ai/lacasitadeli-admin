@@ -53,6 +53,10 @@ const shopifyWeb = require('./modules/shopify-web');
 app.use('/api/shopify-web', shopifyWeb.router);
 const pedidosWeb = require('./modules/pedidos-web');
 app.use('/api/pedidos-web', pedidosWeb.router);
+// Solicitudes de resurtido (Bodega -> Casita X): las crea el panel o la app de
+// inventario y las ejecuta físicamente la TC52 (traslado). Acción real, no de adorno.
+const resurtido = require('./modules/resurtido');
+app.use('/api/resurtido', resurtido.router);
 setupRecepcionRoutes(app);
 
 app.get('/api/health', async (req, res) => {
@@ -105,6 +109,9 @@ pedidosWeb.startScheduler();
 
 // Copia las fotos de la página al Inventario del panel (cada 12 h por defecto).
 shopifyWeb.startFotosScheduler();
+
+// Cierra solas las solicitudes de resurtido cuyo traslado ya registró la TC52.
+resurtido.startScheduler();
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`La Casita Admin — API en http://0.0.0.0:${PORT}`);

@@ -307,6 +307,7 @@ lacasitadeli-admin/
 | Sub-módulo | Función |
 |---|---|
 | **Stock & Surtido** | Stock por área (fuente única: SQL Server `inventario_bodega`) + transferencias |
+| **Resurtido** | Solicitudes de resurtido (Bodega → Casita X) creadas con el botón "Resurtir" del Inventario o desde la app de resurtido; las ejecuta la TC52 con un traslado escaneado y se cierran solas (`solicitudes_resurtido`, módulo `resurtido.js`) |
 | **Recepción** | Órdenes esperadas **en cajas** → el TC52 confirma → **conversión caja→pieza**, sube stock real, discrepancias y semáforo de caducidad |
 | **Áreas** | Áreas/ubicaciones unificadas (Bodega, Casita 1/2, USA, Cocina, Refrigerador) leídas de SQL Server `ubicaciones_bodega`; asignación producto→área |
 | **Merma / Caducidad** | Registro de bajas con motivo y área |

@@ -519,6 +519,7 @@ router.get('/movimientos/todos', async (req, res) => {
           m.stock_despues                          AS stock_despues,
           m.motivo                                 AS motivo,
           m.notas                                  AS notas,
+          m.area                                   AS area_origen_raw,
           CONVERT(varchar(19), m.fecha, 120)       AS fecha
         FROM [compucaja].[dbo].[movimientos_bodega] m WITH (NOLOCK)
         LEFT JOIN [compucaja].[dbo].[VArticulosUnificados] a WITH (NOLOCK) ON a.Art_Codigo = m.codigo_barras
@@ -529,11 +530,16 @@ router.get('/movimientos/todos', async (req, res) => {
       tc52Rows = (r.recordset || []).map(m => {
         const areaKey = String(m.ubicacion || 'Bodega').toLowerCase().replace(/\s+/g, '_');
         const esEntrada = m.tipo === 'entrada';
+        // Un TRASLADO de la TC52 guarda ubicacion = DESTINO y area = ORIGEN. Antes se
+        // mandaba como tipo 'traslado' (que el panel no conoce) y con el destino en
+        // area_origen, así que los resurtidos hechos con la pistola no se veían.
+        const esTraslado = m.tipo === 'traslado';
+        const origenKey  = esTraslado ? String(m.area_origen_raw || 'Bodega').toLowerCase().replace(/\s+/g, '_') : null;
         return {
-          uid: m.uid, tipo: m.tipo, codigo: m.codigo, nombre: m.nombre || null,
+          uid: m.uid, tipo: esTraslado ? 'transferencia' : m.tipo, codigo: m.codigo, nombre: m.nombre || null,
           cantidad: m.cantidad,
-          area_origen:  esEntrada ? null : areaKey,
-          area_destino: esEntrada ? areaKey : null,
+          area_origen:  esTraslado ? origenKey : (esEntrada ? null : areaKey),
+          area_destino: esTraslado ? areaKey   : (esEntrada ? areaKey : null),
           stock_antes: m.stock_antes, stock_despues: m.stock_despues,
           motivo: m.motivo || null, notas: m.notas || null, usuario: 'TC52',
           fecha: m.fecha,

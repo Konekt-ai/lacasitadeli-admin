@@ -15,9 +15,10 @@ import type {
 } from '../lib/types';
 
 // ── Sub-view config ────────────────────────────────────────────────────────────
-type SubView = 'recepcion' | 'gestion-areas' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
+type SubView = 'recepcion' | 'resurtido' | 'gestion-areas' | 'merma' | 'discrepancias' | 'facturas' | 'zebra';
 const SUB_VIEWS: { id: SubView; label: string; icon: string; dev?: boolean }[] = [
   { id: 'recepcion',      label: 'Recepción',          icon: 'local_shipping' },
+  { id: 'resurtido',      label: 'Resurtido',          icon: 'move_down'      },
   { id: 'gestion-areas',  label: 'Áreas',              icon: 'warehouse'      },
   { id: 'merma',          label: 'Merma',              icon: 'event_busy'     },
   { id: 'discrepancias',  label: 'Discrepancias',      icon: 'difference'     },
@@ -4007,6 +4008,291 @@ function GestionAreasView() {
   );
 }
 
+// ── Resurtido: solicitudes Bodega -> anaquel que ejecuta la TC52 ───────────────
+// Aquí NO se mueve stock. Una solicitud nace en Inventario (botón Resurtir) o en la
+// app de resurtido; el de bodega la ve en la TC52, mueve las piezas y registra el
+// traslado escaneando; en ese momento la solicitud pasa sola a "hecha".
+type EstadoSolicitud = 'pendiente' | 'hecha' | 'cancelada';
+interface SolicitudResurtido {
+  id: number; codigo_barras: string; codigo_pedido: string | null; nombre: string | null; nombre_mostrar: string;
+  de_ubicacion: string; a_ubicacion: string; cantidad: number; cantidad_hecha: number | null;
+  estado: EstadoSolicitud; prioridad: number; origen: string; nota: string | null;
+  solicitado_por: string | null; hecha_por: string | null; movimiento_id: number | null;
+  stock_origen: number; stock_destino: number | null;
+  creado: string; hecha_en: string | null; cancelada_en: string | null; motivo_cancelacion: string | null;
+}
+interface EventoSolicitud { id: number; fecha: string; tipo: string; de: string | null; a: string | null; usuario: string | null; detalle: string | null }
+type FiltroSolicitud = EstadoSolicitud | 'todas';
+
+// DATETIME de MSSQL: llega como ISO con "Z" pero ES hora CDMX -> formatear en UTC.
+const fmtFechaCDMX = (x: string | null | undefined) =>
+  x ? new Date(x).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short', timeZone: 'UTC' }) : '—';
+const claveArea = (nombre: string) => String(nombre || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, '_');
+const CHIP_SOLICITUD: Record<EstadoSolicitud, { texto: string; clase: string }> = {
+  pendiente: { texto: 'Pendiente', clase: 'bg-amber-100 text-amber-800' },
+  hecha:     { texto: 'Hecha',     clase: 'bg-emerald-100 text-emerald-800' },
+  cancelada: { texto: 'Cancelada', clase: 'bg-stone-200 text-stone-500' },
+};
+const ORIGEN_SOLICITUD: Record<string, string> = { panel: 'Panel', invetory: 'App resurtido', tc52: 'TC52' };
+
+function ResurtidoView() {
+  const { areaMap } = useAreasCtx();
+  const [filtro,      setFiltro]      = useState<FiltroSolicitud>('pendiente');
+  const [solicitudes, setSolicitudes] = useState<SolicitudResurtido[]>([]);
+  const [conteo,      setConteo]      = useState<Record<EstadoSolicitud, number>>({ pendiente: 0, hecha: 0, cancelada: 0 });
+  const [loading,     setLoading]     = useState(true);
+  const [detalle,     setDetalle]     = useState<(SolicitudResurtido & { eventos: EventoSolicitud[] }) | null>(null);
+  const [detalleId,   setDetalleId]   = useState<number | null>(null);
+  const [cancelando,  setCancelando]  = useState<number | null>(null);
+  const [notif, setNotif] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const notify = (msg: string, type: 'success' | 'error' = 'success') => {
+    setNotif({ msg, type });
+    setTimeout(() => setNotif(null), 3500);
+  };
+
+  const fetchLista = useCallback(async (silencioso = false) => {
+    if (!silencioso) setLoading(true);
+    try {
+      const data = await fetch(`/api/resurtido?estado=${filtro}&limit=300`).then(r => r.json());
+      if (data && Array.isArray(data.solicitudes)) {
+        setSolicitudes(data.solicitudes);
+        if (data.conteo) setConteo({ pendiente: 0, hecha: 0, cancelada: 0, ...data.conteo });
+      }
+    } catch { /* silent */ }
+    finally { if (!silencioso) setLoading(false); }
+  }, [filtro]);
+
+  // Carga + refresco cada 60 s (solo con la pestaña visible): las hechas por la TC52 aparecen solas.
+  useEffect(() => {
+    fetchLista();
+    const tick  = () => { if (!document.hidden) fetchLista(true); };
+    const id    = setInterval(tick, 60_000);
+    const onVis = () => { if (!document.hidden) fetchLista(true); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, [fetchLista]);
+
+  // Detalle con historial
+  useEffect(() => {
+    if (detalleId == null) { setDetalle(null); return; }
+    let vivo = true;
+    fetch(`/api/resurtido/${detalleId}`).then(r => r.json())
+      .then(d => { if (vivo && d && d.id) setDetalle(d); })
+      .catch(() => { if (vivo) notify('No se pudo cargar el detalle', 'error'); });
+    return () => { vivo = false; };
+  }, [detalleId]);
+
+  const cancelar = async (s: SolicitudResurtido) => {
+    const motivo = window.prompt(`Cancelar la solicitud #${s.id} (${s.cantidad} pzas de ${s.de_ubicacion} a ${s.a_ubicacion}).\n¿Por qué?`);
+    if (motivo === null) return;
+    setCancelando(s.id);
+    try {
+      const res  = await fetch(`/api/resurtido/${s.id}/cancelar`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo: motivo.trim() || null, usuario: 'panel' }),
+      });
+      const data = await res.json();
+      if (res.ok) { notify(`Solicitud #${s.id} cancelada`); fetchLista(true); if (detalleId === s.id) setDetalleId(null); }
+      else notify(data.error || 'No se pudo cancelar', 'error');
+    } catch { notify('Error de conexión', 'error'); }
+    finally { setCancelando(null); }
+  };
+
+  const AreaChip = ({ nombre }: { nombre: string }) => {
+    const meta = areaMap[claveArea(nombre)];
+    return (
+      <span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase tracking-wider whitespace-nowrap',
+        meta ? `${meta.bg} ${meta.color}` : 'bg-stone-100 text-stone-600')}>
+        {meta?.label || nombre}
+      </span>
+    );
+  };
+
+  const TABS: { id: FiltroSolicitud; label: string }[] = [
+    { id: 'pendiente', label: `Pendientes · ${conteo.pendiente}` },
+    { id: 'hecha',     label: `Hechas · ${conteo.hecha}` },
+    { id: 'cancelada', label: `Canceladas · ${conteo.cancelada}` },
+    { id: 'todas',     label: 'Todas' },
+  ];
+
+  return (
+    <div>
+      {notif && (
+        <div className={cn('fixed top-6 right-6 z-[300] px-5 py-3 rounded-xl shadow-2xl flex items-center gap-3 text-sm font-label font-bold',
+          notif.type === 'success' ? 'bg-primary text-on-primary' : 'bg-error text-on-error')}>
+          <Icon name={notif.type === 'success' ? 'check_circle' : 'error'} className="text-lg" />
+          {notif.msg}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex gap-1 bg-surface-container-low p-1 rounded-xl">
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setFiltro(t.id)}
+              className={cn('px-3 sm:px-4 py-2 rounded-lg text-[10px] sm:text-[11px] font-label font-bold uppercase tracking-widest transition-all whitespace-nowrap',
+                filtro === t.id ? 'bg-surface text-primary shadow-sm' : 'text-stone-400 hover:text-stone-600')}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => fetchLista()}
+          className="px-3 py-2 rounded-lg text-[11px] font-label font-bold uppercase tracking-widest bg-background text-stone-500 border border-outline-variant/20 hover:text-primary flex items-center gap-1.5">
+          <Icon name="refresh" className="text-base" /> Actualizar
+        </button>
+      </div>
+
+      <p className="text-[11px] font-body text-stone-500 mb-4 flex items-start gap-2">
+        <Icon name="info" className="text-sm text-stone-400 flex-shrink-0 mt-0.5" />
+        <span>Una solicitud es una tarea para bodega: se crea desde <b>Inventario → Resurtir</b> (o desde la app de resurtido) y se cierra sola cuando la TC52 registra el traslado. <b>Aquí no se mueve stock.</b> Solo se puede cancelar.</span>
+      </p>
+
+      <div className="bg-surface-container-lowest rounded-xl border border-outline-variant/10 shadow overflow-hidden">
+        {loading ? (
+          <div className="py-16 flex flex-col items-center">
+            <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-3" />
+            <p className="font-serif italic text-primary">Cargando...</p>
+          </div>
+        ) : solicitudes.length === 0 ? (
+          <div className="py-16 flex flex-col items-center text-stone-300">
+            <Icon name="move_down" className="text-6xl opacity-20 mb-3" />
+            <p className="text-sm font-label uppercase tracking-widest">
+              {filtro === 'pendiente' ? 'Sin solicitudes pendientes' : 'Sin solicitudes'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface-container-low/50 text-stone-500 font-label uppercase text-[10px] tracking-widest">
+                <tr>
+                  <th className="px-4 py-3 text-left">Producto</th>
+                  <th className="px-4 py-3 text-left">Ruta</th>
+                  <th className="px-4 py-3 text-center">Piezas</th>
+                  <th className="px-4 py-3 text-left hidden md:table-cell">Stock ahora</th>
+                  <th className="px-4 py-3 text-left hidden sm:table-cell">Quién / cuándo</th>
+                  <th className="px-4 py-3 text-left">Estado</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-surface-container">
+                {solicitudes.map(s => {
+                  const chip = CHIP_SOLICITUD[s.estado] || CHIP_SOLICITUD.pendiente;
+                  return (
+                    <tr key={s.id} onClick={() => setDetalleId(s.id)} className="hover:bg-surface-container-low/40 cursor-pointer">
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-on-surface truncate max-w-[240px]">{s.nombre_mostrar}</p>
+                        <p className="text-[11px] text-stone-400 font-mono">{s.codigo_barras}</p>
+                        {s.prioridad > 0 && s.estado === 'pendiente' && (
+                          <span className="inline-block mt-1 px-2 py-0.5 rounded-full bg-error/10 text-error text-[9px] font-label font-bold uppercase tracking-wider">Urgente</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          <AreaChip nombre={s.de_ubicacion} />
+                          <Icon name="arrow_forward" className="text-sm text-stone-400" />
+                          <AreaChip nombre={s.a_ubicacion} />
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="font-serif font-bold text-lg text-on-surface">
+                          {s.estado === 'hecha' && s.cantidad_hecha != null && s.cantidad_hecha !== s.cantidad
+                            ? `${s.cantidad_hecha} de ${s.cantidad}`
+                            : s.cantidad.toLocaleString('es-MX')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 hidden md:table-cell text-xs font-body text-stone-500 whitespace-nowrap">
+                        {s.de_ubicacion}: <b className={cn(s.stock_origen < s.cantidad && s.estado === 'pendiente' ? 'text-error' : 'text-on-surface')}>{s.stock_origen}</b>
+                        {' · '}
+                        {s.a_ubicacion}: <b className="text-on-surface">{s.stock_destino == null ? 'sin conteo' : s.stock_destino}</b>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell text-xs font-body text-stone-500 whitespace-nowrap">
+                        <p>{s.solicitado_por || '—'} <span className="ml-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[9px] font-label font-bold">{ORIGEN_SOLICITUD[s.origen] || s.origen}</span></p>
+                        <p className="text-stone-400">{fmtFechaCDMX(s.creado)}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-label font-bold uppercase tracking-widest whitespace-nowrap', chip.clase)}>{chip.texto}</span>
+                        {s.estado === 'hecha' && <p className="text-[10px] text-stone-400 mt-1 whitespace-nowrap">{fmtFechaCDMX(s.hecha_en)} · {s.hecha_por || 'TC52'}</p>}
+                        {s.estado === 'cancelada' && <p className="text-[10px] text-stone-400 mt-1 truncate max-w-[160px]" title={s.motivo_cancelacion || ''}>{fmtFechaCDMX(s.cancelada_en)}{s.motivo_cancelacion ? ` · ${s.motivo_cancelacion}` : ''}</p>}
+                      </td>
+                      <td className="px-2 py-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                        {s.estado === 'pendiente' && (
+                          <button onClick={() => cancelar(s)} disabled={cancelando === s.id}
+                            className="px-3 py-1.5 rounded-lg font-label text-[10px] font-bold uppercase tracking-widest bg-surface-container-low text-stone-500 hover:bg-stone-200 disabled:opacity-50">
+                            {cancelando === s.id ? '...' : 'Cancelar'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Detalle con historial */}
+      {detalleId != null && (
+        <div className="fixed inset-0 bg-black/50 z-[400] flex items-end sm:items-center justify-center p-0 sm:p-4"
+          onClick={e => e.target === e.currentTarget && setDetalleId(null)}>
+          <div className="bg-surface rounded-t-2xl sm:rounded-2xl w-full sm:max-w-xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-outline-variant/10 flex-shrink-0">
+              <div className="min-w-0">
+                <h3 className="font-serif text-xl text-primary">Solicitud #{detalleId}</h3>
+                <p className="text-[10px] font-label uppercase tracking-widest text-stone-400 truncate">{detalle ? detalle.nombre_mostrar : 'Cargando...'}</p>
+              </div>
+              <button onClick={() => setDetalleId(null)} className="p-2 hover:bg-stone-100 rounded-full text-stone-400 transition-colors">
+                <Icon name="close" className="text-xl" />
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1 p-6 space-y-5">
+              {!detalle ? (
+                <div className="flex justify-center py-8"><div className="w-8 h-8 border-4 border-primary/20 border-t-primary rounded-full animate-spin" /></div>
+              ) : (
+                <>
+                  <div className="bg-surface-container-low/60 rounded-xl p-4 space-y-1.5 text-sm">
+                    <div className="flex justify-between"><span className="text-stone-500">Ruta</span><span className="inline-flex items-center gap-1"><AreaChip nombre={detalle.de_ubicacion} /><Icon name="arrow_forward" className="text-sm text-stone-400" /><AreaChip nombre={detalle.a_ubicacion} /></span></div>
+                    <div className="flex justify-between"><span className="text-stone-500">Piezas pedidas</span><span className="font-bold">{detalle.cantidad}</span></div>
+                    {detalle.cantidad_hecha != null && <div className="flex justify-between"><span className="text-stone-500">Piezas movidas</span><span className="font-bold">{detalle.cantidad_hecha}</span></div>}
+                    <div className="flex justify-between"><span className="text-stone-500">Stock ahora</span><span>{detalle.de_ubicacion}: {detalle.stock_origen} · {detalle.a_ubicacion}: {detalle.stock_destino == null ? 'sin conteo' : detalle.stock_destino}</span></div>
+                    <div className="flex justify-between"><span className="text-stone-500">Estado</span><span className={cn('px-2 py-0.5 rounded-full text-[10px] font-label font-bold uppercase', CHIP_SOLICITUD[detalle.estado].clase)}>{CHIP_SOLICITUD[detalle.estado].texto}</span></div>
+                    <div className="flex justify-between"><span className="text-stone-500">Pidió</span><span>{detalle.solicitado_por || '—'} · {ORIGEN_SOLICITUD[detalle.origen] || detalle.origen} · {fmtFechaCDMX(detalle.creado)}</span></div>
+                    {detalle.movimiento_id && <div className="flex justify-between"><span className="text-stone-500">Traslado</span><span className="font-mono text-xs">#{detalle.movimiento_id}</span></div>}
+                    {detalle.nota && <div className="flex justify-between gap-4"><span className="text-stone-500">Nota</span><span className="italic text-right">{detalle.nota}</span></div>}
+                    {detalle.motivo_cancelacion && <div className="flex justify-between gap-4"><span className="text-stone-500">Motivo de cancelación</span><span className="text-right">{detalle.motivo_cancelacion}</span></div>}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-label font-bold text-stone-500 uppercase tracking-widest mb-2">Historial</p>
+                    <ul className="space-y-2">
+                      {(detalle.eventos || []).map(ev => (
+                        <li key={ev.id} className="flex gap-3 text-xs">
+                          <span className="text-stone-400 whitespace-nowrap">{fmtFechaCDMX(ev.fecha)}</span>
+                          <span className="min-w-0">
+                            <b className="text-on-surface">{ev.tipo}</b>{ev.a ? ` → ${ev.a}` : ''}{ev.usuario ? ` · ${ev.usuario}` : ''}
+                            {ev.detalle && <span className="block text-stone-500">{ev.detalle}</span>}
+                          </span>
+                        </li>
+                      ))}
+                      {(detalle.eventos || []).length === 0 && <li className="text-xs text-stone-400">Sin eventos</li>}
+                    </ul>
+                  </div>
+                </>
+              )}
+            </div>
+            {detalle && detalle.estado === 'pendiente' && (
+              <div className="p-4 border-t border-outline-variant/10 flex-shrink-0">
+                <button onClick={() => cancelar(detalle)} disabled={cancelando === detalle.id}
+                  className="w-full py-2.5 rounded-xl font-label text-xs font-bold uppercase tracking-widest bg-surface-container-low text-stone-500 hover:bg-stone-200 disabled:opacity-50">
+                  Cancelar solicitud
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main BodegaTab ─────────────────────────────────────────────────────────────
 export default function BodegaTab() {
   const [view,      setView]      = useState<SubView>('recepcion');
@@ -4073,6 +4359,7 @@ export default function BodegaTab() {
       {/* Content */}
       <div className="min-h-[400px]">
         {view === 'recepcion'      && <RecepcionYNuevosView />}
+        {view === 'resurtido'      && <ResurtidoView />}
         {view === 'gestion-areas'  && <GestionAreasView />}
         {view === 'merma'          && <MermaView />}
         {view === 'discrepancias'  && <DiscrepanciasView />}

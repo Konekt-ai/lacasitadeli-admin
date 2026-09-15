@@ -299,7 +299,11 @@ El menú tiene 10 secciones (Dashboard, Inventario, Análisis, Reportes, Alertas
 - Precio de venta
 - Stock mínimo (para alertas)
 - Imagen del producto (URL)
-- Si aparece visible en pedidos web
+- **Descontinuado** (interruptor): marca que ese producto **ya no se va a resurtir**. Sigue apareciendo en el inventario con sus existencias, pero deja de contar como alerta de stock bajo y la app de resurtido lo muestra como "Descontinuado". Ojo: que un producto lleve tiempo sin venderse **no** lo hace descontinuado; eso lo decides tú aquí.
+
+**Filtro "Descontinuados":** el chip negro de la barra de filtros muestra solo los productos marcados (con el conteo).
+
+**Botón "Resurtir"** (ícono de camión, junto al lápiz): **no mueve stock**. Crea una **solicitud de resurtido** (producto, de Bodega → a Casita 1 o 2, piezas) con una sugerencia calculada con lo que se vende en esa área y lo que hay. El de bodega la ve en la TC52 (pestaña *Resurtir*), mueve las piezas y las registra escaneando; en ese momento la solicitud se cierra sola y el inventario cambia. Las solicitudes se siguen en *Bodega → Resurtido*.
 
 **Nota:** El costo y el stock real vienen de NovaCaja y son solo lectura aquí.
 
@@ -490,27 +494,23 @@ Esta sección es el corazón del control interno. Tiene 9 sub-vistas accesibles 
 
 ---
 
-### 7.5 Surtido
+### 7.5 Resurtido
 
-**Para qué sirve:** Controlar qué materia prima o producto se manda de bodega a otra área (cocina, Casita 1, Casita 2, etc.) y registrar el consumo en cada área.
+**Para qué sirve:** Dar seguimiento a las **solicitudes de resurtido**: qué producto hay que mover de Bodega a un anaquel (Casita 1 o Casita 2), cuántas piezas, quién lo pidió y si ya se hizo.
 
-**Panel superior — Stock físico por área**
+**De dónde salen las solicitudes:**
+- Del botón **Resurtir** (camión) de cada producto en *Inventario*.
+- De la app de resurtido que usan los resurtidores desde el celular.
 
-Muestra cuántas unidades tiene actualmente cada área no-bodega, basado en todos los surtidos autorizados menos los consumos registrados.
+**Cómo funciona una solicitud:**
+1. Nace como **Pendiente**. Aquí no se mueve ni una pieza: es una tarea para bodega.
+2. El de bodega la ve en la TC52 (pestaña *Resurtir*), mueve las piezas y registra el traslado escaneando.
+3. En cuanto ese traslado queda registrado, la solicitud pasa sola a **Hecha** (con las piezas movidas y la hora). Si el traslado lo hicieron desde la pestaña *Salida* de la TC52 sin abrir la solicitud, también se cierra sola en menos de 2 minutos.
+4. Si ya no se necesita, se **cancela** aquí (pide el motivo). Solo la TC52 puede marcarla como hecha.
 
-- Tabs de colores: selecciona el área que quieres ver (Casita 1, Casita 2, Cocina, Refrigerador, USA)
-- Tabla con cada producto y sus unidades actuales en esa área
-- Botón **Registrar Consumo** (naranja): para cuando cocina usa ingredientes
+**Qué muestra:** pestañas Pendientes / Hechas / Canceladas / Todas; producto, ruta (de → a), piezas pedidas y movidas, stock actual en origen y destino, quién y cuándo, y el historial de cada solicitud al abrirla.
 
-**Historial de Surtidos (parte de abajo)**
-
-Log de todas las transferencias entre áreas, agrupadas por semana.
-
-**Registrar un nuevo surtido:**
-1. Clic en "Nuevo Surtido"
-2. Ingresa código del producto, cantidad, área de origen y área destino
-3. Clic en "Registrar" — queda como **pendiente de autorización**
-4. Cuando se confirme que salió de bodega: clic en "Autorizar"
+**Nota:** el "Surtido" antiguo del panel (registrar y autorizar transferencias a mano) ya no existe: los movimientos físicos los registra la TC52.
 
 ---
 

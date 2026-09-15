@@ -76,7 +76,7 @@ router.get('/', async (req, res) => {
   }
 
   try {
-    const overrides = getDb().prepare('SELECT art_codigo, image_url, min_stock, categoria, tipo FROM product_overrides').all();
+    const overrides = getDb().prepare('SELECT art_codigo, image_url, min_stock, categoria, tipo, descontinuado, descontinuado_desde FROM product_overrides').all();
     const overMap   = new Map(overrides.map(o => [String(o.art_codigo), o]));
 
     const toRow = r => {
@@ -99,6 +99,8 @@ router.get('/', async (req, res) => {
         lastPurchase: r.lastPurchase || null,
         lastSale:     r.lastSale     || null,
         image:        ov.image_url   || null,
+        descontinuado:      !!ov.descontinuado,               // estatus real (lo marca el dueño)
+        descontinuadoDesde: ov.descontinuado_desde || null,
       };
     };
 
@@ -106,11 +108,15 @@ router.get('/', async (req, res) => {
     // SQLite; traemos hasta 2000 (sin paginar, como el modo lowStock) desde MSSQL.
     const catLocal  = String(req.query.catLocal  || '').trim();
     const tipoLocal = String(req.query.tipoLocal || '').trim();
-    if (catLocal || tipoLocal) {
+    // "Descontinuados" es un estatus propio (SQLite), así que va por la misma vía de
+    // lista de códigos que categoría/tipo propios.
+    const soloDescontinuados = req.query.descontinuado === 'true';
+    if (catLocal || tipoLocal || soloDescontinuados) {
       let sq = 'SELECT art_codigo FROM product_overrides WHERE 1=1';
       const args = [];
       if (catLocal)  { sq += ' AND categoria = ?'; args.push(catLocal); }
       if (tipoLocal) { sq += ' AND tipo = ?';      args.push(tipoLocal); }
+      if (soloDescontinuados) sq += ' AND descontinuado = 1';
       const codes = getDb().prepare(sq).all(...args).map(x => String(x.art_codigo)).slice(0, 2000);
       if (!codes.length) return res.json({ data: [], total: 0, page: 1, pageSize: 2000, pages: 1 });
       const dataRes = await mssql.query(buildProductsQuery({ search: q, codes, offset: 0, pageSize: 2000 }) + '\n    OPTION (MAXDOP 1)');
@@ -133,7 +139,8 @@ router.get('/', async (req, res) => {
         buildProductsQuery({ search: q, category, offset: 0, pageSize: 2000, lowStockThreshold: DEFAULT_MIN_STOCK }) +
         '\n    OPTION (MAXDOP 1)'
       );
-      rows  = dedupById(dataRes.recordset.map(toRow));
+      // Un producto descontinuado ya no es "alerta de stock bajo": se decidió no resurtirlo.
+      rows  = dedupById(dataRes.recordset.map(toRow)).filter(r => !r.descontinuado);
       total = rows.length;
       if (lowKey) {
         const lowResult = { data: rows, total, page: 1, pageSize: 2000, pages: 1 };
@@ -178,7 +185,7 @@ router.get('/', async (req, res) => {
 // ── PUT /api/products/:id — updates MSSQL + SQLite, invalidates cache ─────────
 router.put('/:id', async (req, res) => {
   const artCodigo = String(req.params.id).replace(/'/g, "''");
-  const { stock, salePrice, image, categoria, tipo } = req.body;
+  const { stock, salePrice, image, categoria, tipo, descontinuado } = req.body;
 
   const updated = [];
 
@@ -226,6 +233,20 @@ router.put('/:id', async (req, res) => {
         ON CONFLICT(art_codigo) DO UPDATE SET tipo = excluded.tipo, updated_at = excluded.updated_at
       `).run(String(req.params.id), String(tipo || '').trim() || null);
       updated.push('tipo');
+    }
+
+    if (descontinuado !== undefined) {
+      const on = descontinuado === true || descontinuado === 1 || descontinuado === 'true';
+      // Al marcarlo se guarda desde cuándo; al quitarlo se limpia la fecha.
+      getDb().prepare(`
+        INSERT INTO product_overrides (art_codigo, descontinuado, descontinuado_desde, updated_at)
+        VALUES (?, ?, ?, datetime('now'))
+        ON CONFLICT(art_codigo) DO UPDATE SET
+          descontinuado = excluded.descontinuado,
+          descontinuado_desde = CASE WHEN excluded.descontinuado = 1 THEN COALESCE(product_overrides.descontinuado_desde, excluded.descontinuado_desde) ELSE NULL END,
+          updated_at = excluded.updated_at
+      `).run(String(req.params.id), on ? 1 : 0, on ? new Date().toISOString() : null);
+      updated.push(on ? 'marcado como descontinuado' : 'ya no está descontinuado');
     }
 
     if (updated.length === 0) {
@@ -313,7 +334,8 @@ router.get('/categorias-asignadas', (req, res) => {
   try {
     const cats  = getDb().prepare("SELECT DISTINCT categoria FROM product_overrides WHERE categoria IS NOT NULL AND categoria <> '' ORDER BY categoria").all().map(r => r.categoria);
     const tipos = getDb().prepare("SELECT DISTINCT tipo FROM product_overrides WHERE tipo IS NOT NULL AND tipo <> '' ORDER BY tipo").all().map(r => r.tipo);
-    res.json({ categorias: cats, tipos });
+    const descontinuados = getDb().prepare("SELECT COUNT(*) AS n FROM product_overrides WHERE descontinuado = 1").get().n;
+    res.json({ categorias: cats, tipos, descontinuados });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

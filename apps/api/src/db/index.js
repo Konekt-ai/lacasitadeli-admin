@@ -257,6 +257,11 @@ function getDb() {
   try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN categoria TEXT`); } catch (_) {}
   // Tipo propio del producto (cocina/tienda/etc.) — columna SEPARADA de la categoría.
   try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN tipo TEXT`); } catch (_) {}
+  // Estatus REAL de "Descontinuado": lo marca el dueño desde Inventario. Es distinto
+  // de "lleva tiempo sin venderse" (eso se calcula; esto se decide). Lo leen también
+  // el panel y la app de inventario de los resurtidores.
+  try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN descontinuado INTEGER DEFAULT 0`); } catch (_) {}
+  try { _db.exec(`ALTER TABLE product_overrides ADD COLUMN descontinuado_desde TEXT`); } catch (_) {}
 
   // Indexes — created once, skipped if already exist
   _db.exec(`
