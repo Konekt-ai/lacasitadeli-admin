@@ -62,9 +62,9 @@ module.exports = {
               "full": "9999px"
       },
       "fontFamily": {
-              "headline": ["Newsreader"],
-              "body": ["Plus Jakarta Sans"],
-              "label": ["Inter"]
+              "headline": ["Newsreader Variable", "Newsreader", "Georgia", "serif"],
+              "body": ["Plus Jakarta Sans Variable", "Plus Jakarta Sans", "system-ui", "sans-serif"],
+              "label": ["Inter Variable", "Inter", "system-ui", "sans-serif"]
       }
     },
   },

@@ -1,4 +1,12 @@
 import type { Metadata } from 'next'
+// Tipografías servidas por el propio panel (no por Google): en la tienda ya pasó
+// que un celular no llegaba a fonts.googleapis.com y todo salía con la fuente de
+// respaldo y los iconos como texto. Los iconos (Material Symbols) viven en
+// public/fonts/ (ver scripts/bajar-iconos.mjs) y se declaran en globals.css.
+import '@fontsource-variable/newsreader'
+import '@fontsource-variable/newsreader/wght-italic.css'
+import '@fontsource-variable/plus-jakarta-sans'
+import '@fontsource-variable/inter'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -18,8 +26,9 @@ export default function RootLayout({
   return (
     <html lang="es" className="light">
       <head>
-        <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,200..800;1,6..72,200..800&family=Plus+Jakarta+Sans:wght@200..800&family=Inter:wght@100..900&display=swap" rel="stylesheet" />
-        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+        {/* Los iconos se piden desde el arranque: sin esto, el nombre del icono se
+            alcanza a ver como texto un instante antes de que llegue la fuente. */}
+        <link rel="preload" href="/fonts/material-symbols-subset.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body className="bg-background text-on-surface antialiased flex min-h-screen">
         {children}

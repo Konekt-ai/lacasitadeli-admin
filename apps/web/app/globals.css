@@ -2,17 +2,44 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Iconos Material Symbols servidos por el propio panel (public/fonts/, ver
+   scripts/bajar-iconos.mjs). Dos fuentes con nombres distintos a propósito:
+   el navegador usa primero el subconjunto (los iconos del panel, ~50 KB) y solo
+   si un icono NO está ahí baja la fuente completa (4 MB), letra por letra. Así
+   un icono nuevo sigue saliendo aunque nadie haya vuelto a correr el script. */
+@font-face {
+  font-family: 'Material Symbols Subset';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/fonts/material-symbols-subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Material Symbols Outlined';
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  src: url('/fonts/material-symbols-outlined.woff2') format('woff2');
+}
+
 @layer base {
   body {
-    font-family: 'Plus Jakarta Sans', sans-serif;
+    /* 'Plus Jakarta Sans Variable' e 'Inter Variable' son los nombres que
+       registran los paquetes @fontsource-variable (importados en layout.tsx). */
+    font-family: 'Plus Jakarta Sans Variable', 'Plus Jakarta Sans', system-ui, sans-serif;
   }
 }
 
 .font-serif {
-  font-family: 'Newsreader', serif;
+  font-family: 'Newsreader Variable', 'Newsreader', Georgia, serif;
 }
 
 .material-symbols-outlined {
+  font-family: 'Material Symbols Subset', 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   display: inline-block;
   line-height: 1;
