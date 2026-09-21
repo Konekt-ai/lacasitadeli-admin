@@ -33,6 +33,21 @@ const TABS = [
   { id: 'AdminConsole',  label: 'Consola',    icon: 'terminal' },
 ] as const;
 
+type TabId = typeof TABS[number]['id'];
+
+// ── Barra inferior del celular: 4 grupos, cada uno abre sus pestañas ───────────
+// Con 9 iconos en 390 px no cabía nada. Se agrupa "por quién lo usa": el dueño
+// (Inicio, Tienda), bodega (Bodega) y la tienda en línea (Web). Solo cambia la
+// vista móvil; en escritorio el menú lateral sigue completo. Consola queda fuera
+// del celular, como antes.
+const GRUPOS_MOVIL: { id: string; label: string; icon: string; tabs: TabId[] }[] = [
+  { id: 'inicio', label: 'Inicio', icon: 'home',        tabs: ['Dashboard', 'Alertas'] },
+  { id: 'tienda', label: 'Tienda', icon: 'storefront',  tabs: ['Inventario', 'Ventas', 'Reportes'] },
+  { id: 'bodega', label: 'Bodega', icon: 'warehouse',   tabs: ['Bodega', 'Proveedores'] },
+  { id: 'web',    label: 'Web',    icon: 'language',    tabs: ['PaginaWeb', 'PedidosWeb'] },
+];
+const grupoDeTab = (tab: string) => GRUPOS_MOVIL.find(g => (g.tabs as string[]).includes(tab)) ?? null;
+
 const TabSpinner = () => (
   <div className="flex-1 flex flex-col items-center justify-center p-12">
     <div className="w-10 h-10 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
@@ -52,6 +67,13 @@ export default function Dashboard() {
   const [dashRefreshKey,   setDashRefreshKey]   = useState(0);
   // Pedidos web activos (nuevo + preparando + listo) para el globito del menú
   const [pedidosWebActivos, setPedidosWebActivos] = useState(0);
+  // Grupo desplegado en la barra inferior del celular (null = ninguno)
+  const [grupoAbierto, setGrupoAbierto] = useState<string | null>(null);
+
+  // Globitos por pestaña; en el celular suben al icono del grupo.
+  const globoDe = (tab: string) =>
+    tab === 'Alertas' ? lowStockProducts.length : tab === 'PedidosWeb' ? pedidosWebActivos : 0;
+  const globoDeGrupo = (tabs: readonly string[]) => tabs.reduce((s, t) => s + globoDe(t), 0);
 
   const notify = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -268,36 +290,68 @@ export default function Dashboard() {
 
       </main>
 
-      {/* ── Mobile bottom navigation ─────────────────────────────────────────── */}
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-20 bg-surface/95 backdrop-blur-md border-t border-stone-100 flex h-[68px] safe-area-inset-bottom">
-        {/* En teléfono ocultamos Consola (admin) para no amontonar los iconos */}
-        {TABS.filter(item => item.id !== 'AdminConsole').map(item => (
-          <button key={item.id}
-            onClick={() => setActiveTab(item.id)}
-            className={cn(
-              'flex-1 flex flex-col items-center justify-center gap-0.5 transition-all relative active:opacity-70',
-              activeTab === item.id ? 'text-primary' : 'text-stone-400'
-            )}>
-            {/* Active indicator line */}
-            {activeTab === item.id && (
-              <span className="absolute top-0 left-3 right-3 h-0.5 bg-primary rounded-b-full" />
-            )}
-            <div className="relative">
-              <Icon name={item.icon} className="text-[22px]" />
-              {item.id === 'Alertas' && lowStockProducts.length > 0 && (
-                <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">
-                  {lowStockProducts.length}
-                </span>
-              )}
-              {item.id === 'PedidosWeb' && pedidosWebActivos > 0 && (
-                <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">
-                  {pedidosWebActivos}
-                </span>
-              )}
-            </div>
-            <span className="text-[9px] font-label uppercase tracking-wide leading-none mt-0.5">{item.label}</span>
-          </button>
-        ))}
+      {/* ── Mobile bottom navigation: 4 grupos que despliegan sus pestañas ───── */}
+      {grupoAbierto && (
+        <>
+          {/* Tocar fuera cierra el desplegable */}
+          <div className="lg:hidden fixed inset-0 z-20 bg-black/30" onClick={() => setGrupoAbierto(null)} aria-hidden="true" />
+          <div
+            role="menu"
+            aria-label={GRUPOS_MOVIL.find(g => g.id === grupoAbierto)?.label}
+            className="lg:hidden fixed inset-x-3 bottom-[76px] z-30 bg-surface rounded-2xl shadow-2xl border border-outline-variant/20 p-2 grid gap-1"
+            style={{ gridTemplateColumns: `repeat(${GRUPOS_MOVIL.find(g => g.id === grupoAbierto)?.tabs.length ?? 2}, minmax(0, 1fr))` }}
+          >
+            {(GRUPOS_MOVIL.find(g => g.id === grupoAbierto)?.tabs ?? []).map(tabId => {
+              const item = TABS.find(t => t.id === tabId)!;
+              const activa = activeTab === item.id;
+              const globo = globoDe(item.id);
+              return (
+                <button key={item.id} role="menuitem"
+                  onClick={() => { setActiveTab(item.id); setGrupoAbierto(null); }}
+                  className={cn('flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 min-h-[72px] transition-all active:opacity-70',
+                    activa ? 'bg-primary text-on-primary' : 'bg-surface-container-low text-stone-600')}>
+                  <div className="relative">
+                    <Icon name={item.icon} className="text-[24px]" />
+                    {globo > 0 && (
+                      <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">{globo}</span>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-label font-bold uppercase tracking-wide leading-tight text-center">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-surface/95 backdrop-blur-md border-t border-stone-100 flex h-[68px] safe-area-inset-bottom" aria-label="Módulos">
+        {GRUPOS_MOVIL.map(grupo => {
+          const esActivo = grupoDeTab(activeTab)?.id === grupo.id;
+          const abierto = grupoAbierto === grupo.id;
+          const tabActiva = esActivo ? TABS.find(t => t.id === activeTab) : null;
+          const globo = globoDeGrupo(grupo.tabs);
+          return (
+            <button key={grupo.id}
+              onClick={() => setGrupoAbierto(abierto ? null : grupo.id)}
+              aria-expanded={abierto}
+              aria-haspopup="menu"
+              className={cn(
+                'flex-1 flex flex-col items-center justify-center gap-0.5 transition-all relative active:opacity-70',
+                esActivo || abierto ? 'text-primary' : 'text-stone-400'
+              )}>
+              {esActivo && <span className="absolute top-0 left-3 right-3 h-0.5 bg-primary rounded-b-full" />}
+              <div className="relative">
+                <Icon name={grupo.icon} className="text-[22px]" />
+                {globo > 0 && (
+                  <span className="absolute -top-1 -right-2 bg-error text-on-error text-[8px] font-bold px-1 py-px rounded-full leading-none min-w-[14px] text-center">{globo}</span>
+                )}
+              </div>
+              {/* Debajo va el grupo y, si estás en una de sus pestañas, cuál */}
+              <span className="text-[9px] font-label uppercase tracking-wide leading-none mt-0.5 truncate max-w-full px-1">
+                {tabActiva ? `${grupo.label} · ${tabActiva.label}` : grupo.label}
+              </span>
+            </button>
+          );
+        })}
       </nav>
     </div>
   );
