@@ -44,6 +44,7 @@ Desarrollado por **Konekt**.
 - **SQL Server 2014** con NovaCaja accesible en red local o VPN (Tailscale)
 - Credenciales de MSSQL disponibles
 - Carpeta `lacasitadeli-almacen/pwa-bodega` junto a este repo (misma carpeta padre)
+- Opcional: carpeta `lacasitadeli-invetory` junto a este repo (la app de inventario y resurtido para el celular; ver "Apps hermanas")
 
 ---
 
@@ -55,8 +56,9 @@ El directorio padre debe contener ambas carpetas:
 ```
 Desktop/
 ├── lacasitadeli-admin/        ← este repo
-└── lacasitadeli-almacen/
-    └── pwa-bodega/            ← app del Zebra TC52
+├── lacasitadeli-almacen/
+│   └── pwa-bodega/            ← app del Zebra TC52
+└── lacasitadeli-invetory/     ← app de inventario/resurtido para el celular (opcional, repo aparte)
 ```
 
 ### 2. Instalar dependencias
@@ -288,12 +290,23 @@ lacasitadeli-admin/
 | **Dashboard** | Ventas del día, KPIs, stock bajo, movimientos recientes de bodega |
 | **Inventario** | Búsqueda de productos NovaCaja, edición de precios y stock |
 | **Ventas** | Análisis por periodo, top productos, pólizas de venta |
-| **Bodega** | Control de áreas, merma/caducidad, surtido, discrepancias, conteos, TC52 |
+| **Bodega** | Control de áreas, merma/caducidad, **Resurtido** (solicitudes que ejecuta la TC52), discrepancias, conteos, TC52 |
 | **Alertas** | Productos por caducar, estancados (+30 días sin venta), sin ventas en el mes |
 | **Proveedores** | Rendimiento por proveedor, directorio, agregar/eliminar, reasignación |
 | **Reportes** | Pólizas diarias detalladas, exportación a Excel |
 | **Página web** | Catálogo de Shopify vs inventario: fotos, precios, publicar, crear borradores |
 | **Pedidos web** | Pedidos de la tienda en línea (Shopify): al pagar se **apartan** en bodega (baja el disponible, no el físico), se preparan escaneando con la TC52 y al **entregar/enviar** sale físicamente (`movimientos_bodega` motivo `venta_web`). Ventas en línea por periodo, apartados activos y configuración |
+
+### Apps hermanas
+
+| Repo | Qué es | Cómo se conecta con este |
+|---|---|---|
+| `lacasitadeli-almacen` (`pwa-bodega`, :3003) | PWA de la pistola Zebra TC52: recepción, traslados, merma, pedidos web y la pestaña **Resurtir** | Lee y escribe `inventario_bodega`/`movimientos_bodega`; proxea `/api/recepcion`, `/api/pedidos-web` y `/api/resurtido` a este API |
+| `lacasitadeli-invetory` (:3010, solo `127.0.0.1` + túnel de Cloudflare) | App para el celular del dueño y los resurtidores: inventario completo **sin dinero**, Resurtir, Movimiento y Alertas. Login propio, SQL con el login de solo lectura `inventory_ro` | Lee el SQLite de este repo (`apps/api/lacasita.db`, `product_overrides`: fotos, categoría propia y el estatus **Descontinuado**) en solo lectura, y su única escritura es `POST /api/resurtido` de este API (crea la solicitud que bodega ejecuta con la TC52) |
+
+- El estatus **Descontinuado** se decide aquí (Inventario → producto → Descontinuado) y las otras apps solo lo muestran.
+- Las **solicitudes de resurtido** (`apps/api/src/modules/resurtido.js`, tablas `solicitudes_resurtido*`) las crean el panel y la app invetory; la TC52 las cierra al registrar el traslado y el panel las ve en Bodega → Resurtido.
+- Al actualizar este repo con `actualizar-sistema.bat` se matan **todos** los `node.exe`; la app invetory sobrevive porque corre con `bin\invetory-node.exe` (ver su README).
 
 ### Pedidos web (Shopify → inventario)
 
